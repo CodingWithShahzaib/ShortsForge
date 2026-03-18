@@ -2,11 +2,11 @@
 Redis-backed job queue with reliable processing.
 
 Uses the BRPOPLPUSH pattern for at-least-once delivery:
-  - Jobs are pushed to `azanx:jobs` (pending list)
-  - Workers atomically pop from pending → `azanx:jobs:processing`
+  - Jobs are pushed to `shortsforge:jobs` (pending list)
+  - Workers atomically pop from pending → `shortsforge:jobs:processing`
   - On completion/failure, the job is removed from the processing list
 
-Progress events are broadcast via Redis Pub/Sub on `azanx:progress` so
+Progress events are broadcast via Redis Pub/Sub on `shortsforge:progress` so
 all connected API servers can forward them to WebSocket clients.
 """
 from __future__ import annotations
@@ -37,6 +37,7 @@ async def enqueue_job(
 
     from backend.config import get_settings
     settings = get_settings()
+    job_prefix = settings.redis_queue_name.replace(":jobs", ":job")
 
     payload = json.dumps({
         "job_id": job_id,
@@ -52,13 +53,13 @@ async def enqueue_job(
         else:
             await client.lpush(settings.redis_queue_name, payload)
 
-        await client.hset(f"azanx:job:{job_id}", mapping={
+        await client.hset(f"{job_prefix}:{job_id}", mapping={
             "status": "queued",
             "job_type": job_type,
             "enqueued_at": str(time.time()),
             "params": json.dumps(params),
         })
-        await client.expire(f"azanx:job:{job_id}", settings.redis_job_ttl)
+        await client.expire(f"{job_prefix}:{job_id}", settings.redis_job_ttl)
 
         logger.debug("Enqueued job %s (%s) to Redis", job_id, job_type)
         return True
@@ -80,6 +81,7 @@ async def dequeue_job(timeout: int = 5) -> dict[str, Any] | None:
     settings = get_settings()
     queue = settings.redis_queue_name
     processing = f"{queue}:processing"
+    job_prefix = settings.redis_queue_name.replace(":jobs", ":job")
 
     try:
         result = await client.brpoplpush(queue, processing, timeout=timeout)
@@ -88,7 +90,7 @@ async def dequeue_job(timeout: int = 5) -> dict[str, Any] | None:
 
         payload = json.loads(result)
 
-        await client.hset(f"azanx:job:{payload['job_id']}", mapping={
+        await client.hset(f"{job_prefix}:{payload['job_id']}", mapping={
             "status": "in_progress",
             "started_at": str(time.time()),
             "worker_id": _worker_id(),
@@ -130,8 +132,9 @@ async def ack_job(job_id: str, status: str = "completed", result: dict | None = 
         }
         if result:
             update["result"] = json.dumps(result)
-        await client.hset(f"azanx:job:{job_id}", mapping=update)
-        await client.expire(f"azanx:job:{job_id}", settings.redis_job_ttl)
+        job_prefix = settings.redis_queue_name.replace(":jobs", ":job")
+        await client.hset(f"{job_prefix}:{job_id}", mapping=update)
+        await client.expire(f"{job_prefix}:{job_id}", settings.redis_job_ttl)
     except Exception as exc:
         logger.error("Failed to ack job %s: %s", job_id, exc)
 
@@ -166,7 +169,8 @@ async def nack_job(job_id: str, error: str, retry: bool = False) -> None:
             except (json.JSONDecodeError, KeyError):
                 continue
 
-        await client.hset(f"azanx:job:{job_id}", mapping={
+        job_prefix = settings.redis_queue_name.replace(":jobs", ":job")
+        await client.hset(f"{job_prefix}:{job_id}", mapping={
             "status": "failed" if not retry else "retrying",
             "error": error,
             "failed_at": str(time.time()),
@@ -244,8 +248,12 @@ async def get_job_params(job_id: str) -> dict[str, Any] | None:
     if client is None:
         return None
 
+    from backend.config import get_settings
+    settings = get_settings()
+    job_prefix = settings.redis_queue_name.replace(":jobs", ":job")
+
     try:
-        raw = await client.hget(f"azanx:job:{job_id}", "params")
+        raw = await client.hget(f"{job_prefix}:{job_id}", "params")
         if raw:
             return json.loads(raw)
     except (json.JSONDecodeError, TypeError):

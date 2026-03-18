@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     # Database
-    database_url: str = "postgresql+asyncpg://azanx:azanx_password@localhost:5432/azanxstudio"
+    database_url: str = "postgresql+asyncpg://shortsforge:shortsforge_password@localhost:5432/shortsforge"
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
@@ -47,15 +47,15 @@ class Settings(BaseSettings):
     redis_url: str = ""
     redis_max_connections: int = 10
     redis_job_ttl: int = 86400  # 24 hours
-    redis_queue_name: str = "azanx:jobs"
-    redis_progress_channel: str = "azanx:progress"
+    redis_queue_name: str = "shortsforge:jobs"
+    redis_progress_channel: str = "shortsforge:progress"
 
     # Storage (local or S3/MinIO)
     storage_backend: str = "s3"  # local | s3
     s3_endpoint_url: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
-    s3_bucket: str = "azanxstudio"
+    s3_bucket: str = "shortsforge"
     s3_region: str = "us-east-1"
     s3_secure: bool = False
     s3_presign_expires: int = 3600

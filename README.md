@@ -1,4 +1,4 @@
-# ShortsForge (AzanxStudio)
+# ShortsForge
 
 **From script to reel in minutes.** AI-powered faceless video generation platform with OpenAI Sora integration.
 
@@ -65,8 +65,8 @@
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/azanxstudio.git
-cd azanxstudio
+git clone https://github.com/your-username/shortsforge.git
+cd shortsforge
 ```
 
 ### 2. Start infrastructure (PostgreSQL, Redis, MinIO)
@@ -152,23 +152,23 @@ npm run dev
 | `S3_ENDPOINT_URL` | MinIO/S3 endpoint | `http://localhost:9000` |
 | `S3_ACCESS_KEY` | S3 access key | `minioadmin` |
 | `S3_SECRET_KEY` | S3 secret key | `minioadmin` |
-| `S3_BUCKET` | S3 bucket name | `azanxstudio` |
+| `S3_BUCKET` | S3 bucket name | `shortsforge` |
 | `MEDIA_DIR` | Local media directory (when `STORAGE_BACKEND=local`) | `./media` |
 | `FFMPEG_PATH` | Path to FFmpeg executable | `ffmpeg` |
 | `CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `http://localhost:3000` |
 
 ### Database options
 
-- **PostgreSQL:** `postgresql+asyncpg://user:pass@localhost:5432/azanxstudio`
-- **SQLite:** `sqlite+aiosqlite:///./azanxstudio.db`
-- **MySQL:** `mysql+asyncmy://user:pass@localhost:3306/azanxstudio`
+- **PostgreSQL:** `postgresql+asyncpg://user:pass@localhost:5432/shortsforge`
+- **SQLite:** `sqlite+aiosqlite:///./shortsforge.db`
+- **MySQL:** `mysql+asyncmy://user:pass@localhost:3306/shortsforge`
 
 ---
 
 ## Project Structure
 
 ```
-AzanxStudio/
+ShortsForge/
 ├── backend/
 │   ├── main.py              # FastAPI entry point
 │   ├── config.py            # Settings (pydantic-settings)

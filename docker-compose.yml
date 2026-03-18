@@ -1,25 +1,25 @@
 services:
   postgres:
     image: postgres:16
-    container_name: azanx_postgres
+    container_name: shortsforge_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: azanxstudio
-      POSTGRES_USER: azanx
-      POSTGRES_PASSWORD: azanx_password
+      POSTGRES_DB: shortsforge
+      POSTGRES_USER: shortsforge
+      POSTGRES_PASSWORD: shortsforge_password
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U azanx -d azanxstudio"]
+      test: ["CMD-SHELL", "pg_isready -U shortsforge -d shortsforge"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
     image: redis:7
-    container_name: azanx_redis
+    container_name: shortsforge_redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -33,7 +33,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: azanx_minio
+    container_name: shortsforge_minio
     command: server /data --console-address ":9001"
     restart: unless-stopped
     environment:
@@ -52,14 +52,14 @@ services:
 
   minio-init:
     image: minio/mc:latest
-    container_name: azanx_minio_init
+    container_name: shortsforge_minio_init
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin &&
-      mc mb -p local/azanxstudio ||
+      mc mb -p local/shortsforge ||
       true
       "
 
