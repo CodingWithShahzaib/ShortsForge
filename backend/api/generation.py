@@ -20,14 +20,57 @@ from backend.core.task_manager import task_manager
 router = APIRouter()
 
 
+async def _requeue_failed_video_render(
+    job: Job,
+    project: Project,
+    db: AsyncSession,
+) -> Job:
+    """Reset a failed video_render job row, mark project generating, and enqueue the same job again."""
+    from backend.core import redis_queue
+
+    project.status = "generating"
+    job.status = "queued"
+    job.progress = 0
+    job.error = None
+    job.completed_at = None
+    job.result = None
+    job.started_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(job)
+
+    stored = await redis_queue.get_job_params(job.id)
+    if stored:
+        redis_params = {**stored, "job_id": job.id, "project_id": project.id}
+    else:
+        redis_params = {
+            "project_id": project.id,
+            "job_id": job.id,
+            "scenes": None,
+            "settings": None,
+            "prepare_only": False,
+            "storyboard_only": False,
+        }
+
+    async def _do_render():
+        from backend.core.job_registry import handle_video_render
+        return await handle_video_render(redis_params)
+
+    await task_manager.submit_to_redis(
+        job.id, "video_render", redis_params, fallback_coro=_do_render,
+    )
+    return job
+
+
 @router.post("/video", response_model=JobOut)
 async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(get_db)):
+    _settings_dump = req.model_dump(exclude={"scenes", "control_mode", "storyboard_only"})
     project = Project(
         title=req.title or "AI Video",
         story_type=req.story_type,
         script=req.custom_script or (("\n\n".join(s.narration for s in req.scenes)) if req.scenes else None),
         status="generating",
-        settings=req.model_dump(exclude={"scenes"}),
+        control_mode=req.control_mode,
+        settings=_settings_dump,
     )
     db.add(project)
     await db.flush()
@@ -47,7 +90,7 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
         scenes_payload = [
             {
                 "narration": s.narration,
-                "subtitle": s.subtitle or s.narration,
+                "subtitle": s.narration or s.subtitle,
                 "image_prompt": s.image_prompt,
                 "transition": s.transition,
                 "duration": s.duration,
@@ -58,8 +101,9 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
         "project_id": project.id,
         "job_id": job.id,
         "scenes": scenes_payload,
-        "settings": req.model_dump(exclude={"scenes"}),
+        "settings": _settings_dump,
         "prepare_only": req.prepare_only,
+        "storyboard_only": req.storyboard_only,
     }
 
     async def _do_render():
@@ -106,8 +150,59 @@ async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
     return job
 
 
+class IncrementalRenderRequest(BaseModel):
+    project_id: str
+    scene_ids: list[str]
+
+
 class CompileRequest(BaseModel):
     project_id: str
+
+
+@router.post("/incremental-render", response_model=JobOut)
+async def incremental_render_video(req: IncrementalRenderRequest, db: AsyncSession = Depends(get_db)):
+    """Re-render only listed scenes and rebuild the final video; other scenes reuse existing clips/audio."""
+    if not req.scene_ids:
+        raise HTTPException(400, "scene_ids must not be empty")
+    result = await db.execute(select(Project).where(Project.id == req.project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if project.status not in ("ready_for_edit", "completed"):
+        raise HTTPException(
+            400,
+            f"Project must be ready_for_edit or completed for incremental render (current: {project.status}).",
+        )
+
+    project.status = "generating"
+    job = Job(
+        project_id=project.id,
+        type="video_render",
+        status="queued",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    redis_params = {
+        "project_id": project.id,
+        "job_id": job.id,
+        "scenes": None,
+        "settings": None,
+        "prepare_only": False,
+        "storyboard_only": False,
+        "incremental_scene_ids": req.scene_ids,
+    }
+
+    async def _do_render():
+        from backend.core.job_registry import handle_video_render
+        return await handle_video_render(redis_params)
+
+    await task_manager.submit_to_redis(
+        job.id, "video_render", redis_params, fallback_coro=_do_render,
+    )
+    return job
 
 
 @router.post("/compile", response_model=JobOut)
@@ -142,6 +237,7 @@ async def compile_video(req: CompileRequest, db: AsyncSession = Depends(get_db))
         "scenes": None,
         "settings": None,
         "prepare_only": False,
+        "storyboard_only": False,
     }
 
     async def _do_render():
@@ -169,7 +265,20 @@ async def retry_project(project_id: str, db: AsyncSession = Depends(get_db)):
             f"Project is not failed (status: {project.status}). Only failed projects can be retried.",
         )
 
-    project.status = "generating"
+    rj = await db.execute(
+        select(Job)
+        .where(
+            Job.project_id == project_id,
+            Job.type == "video_render",
+            Job.status == "failed",
+        )
+        .order_by(Job.created_at.desc())
+        .limit(1)
+    )
+    existing = rj.scalar_one_or_none()
+    if existing:
+        return await _requeue_failed_video_render(existing, project, db)
+
     job = Job(
         project_id=project.id,
         type="video_render",
@@ -179,30 +288,12 @@ async def retry_project(project_id: str, db: AsyncSession = Depends(get_db)):
     db.add(job)
     await db.commit()
     await db.refresh(job)
-
-    project_id_val = project.id
-    job_id_val = job.id
-
-    redis_params = {
-        "project_id": project_id_val,
-        "job_id": job_id_val,
-        "scenes": None,
-        "settings": None,
-    }
-
-    async def _do_render():
-        from backend.core.job_registry import handle_video_render
-        return await handle_video_render(redis_params)
-
-    await task_manager.submit_to_redis(
-        job.id, "video_render", redis_params, fallback_coro=_do_render,
-    )
-    return job
+    return await _requeue_failed_video_render(job, project, db)
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobOut)
 async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
-    """Retry a failed job. For video_render uses project retry; for Sora jobs re-enqueues with stored params."""
+    """Retry a failed job. Reuses the same job row for video_render and Sora; re-enqueues with stored or default params."""
     result = await db.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
@@ -211,7 +302,16 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, f"Job is not failed (status: {job.status}). Only failed jobs can be retried.")
 
     if job.type == "video_render" and job.project_id:
-        return await retry_project(job.project_id, db)
+        result_p = await db.execute(select(Project).where(Project.id == job.project_id))
+        project = result_p.scalar_one_or_none()
+        if not project:
+            raise HTTPException(404, "Project not found")
+        if project.status != "failed":
+            raise HTTPException(
+                400,
+                f"Project is not failed (status: {project.status}). Only failed projects can be retried.",
+            )
+        return await _requeue_failed_video_render(job, project, db)
 
     # Sora jobs: get params from Redis and reuse the same job
     from backend.core import redis_queue

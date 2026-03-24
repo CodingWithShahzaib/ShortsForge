@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, String, Text
+from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -21,10 +21,12 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
     story_type: Mapped[str] = mapped_column(String(100), default="general")
     script: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="draft")
+    control_mode: Mapped[str] = mapped_column(String(20), default="autopilot")
+    version: Mapped[int] = mapped_column(Integer, default=1)
     settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -37,6 +39,9 @@ class Project(Base):
     )
     jobs: Mapped[list["Job"]] = relationship(
         "Job", back_populates="project", cascade="all, delete-orphan",
+    )
+    project_assets: Mapped[list["ProjectAsset"]] = relationship(
+        "ProjectAsset", back_populates="project", cascade="all, delete-orphan",
     )
 
 

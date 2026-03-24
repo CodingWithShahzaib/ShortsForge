@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -20,6 +20,12 @@ class Scene(Base):
     transition_type: Mapped[str] = mapped_column(String(50), default="fade")
     duration: Mapped[float] = mapped_column(Float, default=5.0)
     scene_type: Mapped[str] = mapped_column(String(20), default="image")
+    # Per-scene overrides for image generation (provider, style, negative_prompt, seed, etc.)
+    scene_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trim_start_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    trim_end_sec: Mapped[float] = mapped_column(Float, default=0.0)
 
     project: Mapped["Project"] = relationship("Project", back_populates="scenes")
     assets: Mapped[list["Asset"]] = relationship(

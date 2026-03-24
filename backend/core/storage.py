@@ -16,7 +16,8 @@ from backend.config import get_settings
 
 
 def _normalize_key(key: str) -> str:
-    return key.replace("\\", "/").lstrip("/")
+    key = (key or "").strip().replace("\\", "/").lstrip("/")
+    return key
 
 
 def build_key(category: str, filename: str) -> str:
@@ -108,6 +109,9 @@ class S3Storage(StorageBackend):
         self.endpoint_url = endpoint_url
         self.bucket = bucket
         self.presign_expires = presign_expires
+        # MinIO and most S3-compatible endpoints require path-style addressing;
+        # virtual-hosted style often yields 400 Bad Request on HeadObject/GetObject.
+        use_path_style = "amazonaws.com" not in (endpoint_url or "").lower()
         self.client = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
@@ -115,7 +119,10 @@ class S3Storage(StorageBackend):
             aws_secret_access_key=secret_key,
             region_name=region,
             use_ssl=secure,
-            config=Config(signature_version="s3v4"),
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path" if use_path_style else "virtual"},
+            ),
         )
 
     def _ensure_bucket(self) -> None:
@@ -170,6 +177,8 @@ class S3Storage(StorageBackend):
 
     async def exists(self, key: str) -> bool:
         key = _normalize_key(key)
+        if not key:
+            return False
         try:
             await self._run(self.client.head_object, Bucket=self.bucket, Key=key)
             return True
@@ -178,6 +187,8 @@ class S3Storage(StorageBackend):
 
     async def download_to_path(self, key: str, dest_path: str) -> str:
         key = _normalize_key(key)
+        if not key:
+            raise ValueError("S3 object key is empty")
         Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
         await self._run(self.client.download_file, self.bucket, key, dest_path)
         return dest_path

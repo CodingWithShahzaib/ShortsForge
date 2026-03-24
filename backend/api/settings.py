@@ -199,3 +199,8 @@ async def list_resolutions():
         {"id": "1024x1792", "name": "1024x1792 (9:16 Tall)", "category": "portrait"},
         {"id": "1792x1024", "name": "1792x1024 (16:9 Wide)", "category": "landscape"},
     ]
+
+
+@router.get("/transitions")
+async def list_transitions_endpoint():
+    return list_transitions()

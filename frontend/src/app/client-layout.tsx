@@ -9,6 +9,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { api } from "@/lib/api";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
+import { QueryProvider } from "@/providers/query-provider";
 import IsoLevelWarp from "@/components/ui/isometric-wave-grid-background";
 import type { WsMessage } from "@/lib/types";
 
@@ -61,6 +62,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
   }, [setProviders, setTransitions, setResolutions, setDefaults]);
 
   return (
+    <QueryProvider>
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden relative">
@@ -75,5 +77,6 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
       </div>
       <Toaster />
     </div>
+    </QueryProvider>
   );
 }

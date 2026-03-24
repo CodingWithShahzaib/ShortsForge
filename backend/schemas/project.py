@@ -13,6 +13,11 @@ class SceneBase(BaseModel):
     transition_type: str = "fade"
     duration: float = 5.0
     scene_type: str = "image"
+    scene_settings: dict[str, Any] | None = None
+    is_locked: bool = False
+    user_notes: str | None = None
+    trim_start_sec: float = 0.0
+    trim_end_sec: float = 0.0
 
 
 class SceneCreate(SceneBase):
@@ -27,6 +32,32 @@ class SceneUpdate(BaseModel):
     duration: float | None = None
     scene_type: str | None = None
     order_index: int | None = None
+    scene_settings: dict[str, Any] | None = None
+    is_locked: bool | None = None
+    user_notes: str | None = None
+    trim_start_sec: float | None = None
+    trim_end_sec: float | None = None
+    expected_version: int | None = Field(
+        default=None,
+        description="If set, must match project.version or 409 conflict",
+    )
+
+
+class ProjectAssetOut(BaseModel):
+    id: str
+    project_id: str
+    type: str
+    file_path: str
+    url: str | None = None
+    provider: str | None = None
+    source: str = "user_uploaded"
+    metadata_: dict[str, Any] | None = Field(
+        default=None,
+        serialization_alias="metadata",
+    )
+    created_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class AssetOut(BaseModel):
@@ -36,8 +67,14 @@ class AssetOut(BaseModel):
     file_path: str
     url: str | None = None
     provider: str | None = None
-    metadata_: dict[str, Any] | None = Field(None, alias="metadata")
+    metadata_: dict[str, Any] | None = Field(
+        default=None,
+        serialization_alias="metadata",
+    )
     created_at: datetime
+    source: str = "ai_generated"
+    parent_asset_id: str | None = None
+    is_active: bool = True
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -63,6 +100,7 @@ class ProjectBase(BaseModel):
     title: str
     story_type: str = "general"
     settings: dict[str, Any] | None = None
+    control_mode: str = "autopilot"
 
 
 class ProjectCreate(ProjectBase):
@@ -76,15 +114,23 @@ class ProjectUpdate(BaseModel):
     script: str | None = None
     status: str | None = None
     settings: dict[str, Any] | None = None
+    control_mode: str | None = None
+    expected_version: int | None = Field(
+        default=None,
+        description="If set, must match project.version or 409 conflict",
+    )
 
 
 class ProjectOut(ProjectBase):
     id: str
     script: str | None = None
     status: str
+    control_mode: str = "autopilot"
+    version: int = 1
     created_at: datetime
     updated_at: datetime
     scenes: list[SceneOut] = []
+    project_assets: list[ProjectAssetOut] = []
 
     model_config = {"from_attributes": True}
 

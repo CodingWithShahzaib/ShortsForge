@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -33,45 +34,95 @@ def _hex_to_ass_color(hex_color: str) -> str:
     return "&H00FFFFFF"
 
 
+def _effective_clip_duration(sc: dict[str, Any], base_duration: float) -> float:
+    """Shorten clip by optional trim metadata on the scene dict."""
+    ts = float(sc.get("trim_start_sec") or 0)
+    te = float(sc.get("trim_end_sec") or 0)
+    return max(0.5, float(base_duration) - ts - te)
+
+
 def _scene_to_dict(scene: Scene) -> dict[str, Any]:
     """Convert Scene model to dict for pipeline compatibility."""
+    ss = scene.scene_settings if isinstance(getattr(scene, "scene_settings", None), dict) else {}
     return {
         "id": scene.id,
         "narration": scene.narration or "",
-        "subtitle": scene.subtitle or scene.narration or "",
+        "subtitle": scene.narration or scene.subtitle or "",
         "image_prompt": scene.image_prompt or "",
         "transition": scene.transition_type,
         "transition_type": scene.transition_type,
         "scene_type": scene.scene_type,
         "duration": scene.duration,
+        "scene_settings": ss,
+        "trim_start_sec": float(getattr(scene, "trim_start_sec", 0) or 0),
+        "trim_end_sec": float(getattr(scene, "trim_end_sec", 0) or 0),
     }
 
 
 async def _asset_exists(path_or_key: str) -> bool:
-    local_path = local_path_for(path_or_key)
+    raw = (path_or_key or "").strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return True
+    local_path = local_path_for(raw)
     if local_path:
         return Path(local_path).exists()
     storage = get_storage()
-    return await storage.exists(path_or_key)
+    return await storage.exists(raw)
 
 
 async def _ensure_local_file(path_or_key: str, dest_dir: Path) -> str:
-    local_path = local_path_for(path_or_key)
+    raw = (path_or_key or "").strip()
+    local_path = local_path_for(raw)
     if local_path:
         return local_path
-    storage = get_storage()
     dest_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(path_or_key).name
-    dest_path = dest_dir / filename
-    await storage.download_to_path(path_or_key, str(dest_path))
+    # Legacy: UI used to persist presigned URLs instead of object keys — fetch over HTTP.
+    if raw.startswith("http://") or raw.startswith("https://"):
+        dest_path = dest_dir / f"dl_{uuid.uuid4().hex}{Path(raw.split('?', 1)[0]).suffix or '.bin'}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(raw, follow_redirects=True, timeout=120.0)
+            resp.raise_for_status()
+        dest_path.write_bytes(resp.content)
+        return str(dest_path)
+    storage = get_storage()
+    filename = Path(raw).name
+    dest_path = dest_dir / (filename or f"asset_{uuid.uuid4().hex}")
+    await storage.download_to_path(raw, str(dest_path))
     return str(dest_path)
 
 
 async def _get_asset_by_type(assets: list[Asset], atype: str) -> Asset | None:
-    for a in assets:
-        if a.type == atype and a.file_path and await _asset_exists(a.file_path):
+    """Prefer the newest active asset of a type (supports non-destructive image history)."""
+    candidates = [a for a in assets if a.type == atype and a.file_path and getattr(a, "is_active", True)]
+    candidates.sort(
+        key=lambda a: a.created_at.timestamp() if a.created_at else 0.0,
+        reverse=True,
+    )
+    for a in candidates:
+        if await _asset_exists(a.file_path):
             return a
     return None
+
+
+def _scene_image_generate_kwargs(
+    sc: dict[str, Any],
+    settings: dict[str, Any],
+    app_settings: Any,
+) -> tuple[str, str, dict[str, Any]]:
+    ov = sc.get("scene_settings") if isinstance(sc.get("scene_settings"), dict) else {}
+    prov = ov.get("image_provider") or settings.get("image_provider") or app_settings.default_image_provider
+    style = ov.get("image_style") or settings.get("image_style") or app_settings.default_image_style
+    extra: dict[str, Any] = {}
+    nprompt = ov.get("negative_prompt")
+    if isinstance(nprompt, str) and nprompt.strip():
+        extra["negative_prompt"] = nprompt.strip()
+    seed = ov.get("seed")
+    if seed is not None and seed != "":
+        try:
+            extra["seed"] = int(seed)
+        except (TypeError, ValueError):
+            extra["seed"] = seed
+    return prov, style, extra
 
 
 async def render_video(
@@ -81,6 +132,7 @@ async def render_video(
     scenes: list[dict[str, Any]] | None = None,
     settings: dict[str, Any] | None = None,
     stop_after_assets: bool = False,
+    regenerate_scene_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Full video rendering pipeline with progress persistence.
 
@@ -153,35 +205,122 @@ async def render_video(
         pct = min(int(step / total_steps * 100), 99)
         await ws_manager.send_progress(job_id, "video_render", pct, "in_progress", detail)
 
-    # --- Step 1 & 2: Generate visuals and audio (sequential for progress persistence) ---
+    # --- Step 1 & 2: Generate visuals and audio ---
     visual_paths: list[str] = []
     audio_paths: list[str] = []
     durations: list[float] = []
 
-    for idx, sc in enumerate(scenes):
+    if stop_after_assets:
+        for idx, sc in enumerate(scenes):
+            scene_model = scene_models.get(idx)
+            existing_assets = list(scene_model.assets) if scene_model else []
+
+            narration = sc.get("narration", "")
+            img_prompt = sc.get("image_prompt", "")
+            transition = sc.get("transition", sc.get("transition_type", "fade"))
+
+            audio_asset = await _get_asset_by_type(existing_assets, "audio")
+            if audio_asset:
+                audio_path = await _ensure_local_file(audio_asset.file_path, work_dir / "audio")
+                await _progress(f"Reusing audio for scene {idx + 1}")
+            else:
+                audio_key = await synthesize_speech(
+                    narration, tts_provider, tts_voice, save=True
+                )
+                await _progress(f"Audio for scene {idx + 1}")
+                if scene_model:
+                    asset = Asset(scene_id=scene_model.id, type="audio", file_path=audio_key)
+                    session.add(asset)
+                    await session.flush()
+                audio_path = await _ensure_local_file(audio_key, work_dir / "audio")
+
+            audio_dur = await ffmpeg.get_duration(audio_path)
+            match_scenes_to_audio = settings.get("match_scenes_to_audio", False)
+            if match_scenes_to_audio:
+                duration = max(audio_dur, 0.5)
+            else:
+                base_duration = sc.get("duration") or settings.get("scene_duration") or 5.0
+                try:
+                    base_duration = float(base_duration)
+                except (TypeError, ValueError):
+                    base_duration = 5.0
+                base_duration = max(base_duration, 1.0)
+                duration = max(audio_dur, base_duration)
+            duration = _effective_clip_duration(sc, duration)
+
+            image_asset = await _get_asset_by_type(existing_assets, "image")
+            if not image_asset and img_prompt:
+                ip, ist, iextra = _scene_image_generate_kwargs(sc, settings, app_settings)
+                img_path = await generate_image(
+                    img_prompt, ip, width, height, ist, **iextra
+                )
+                await _progress(f"Image for scene {idx + 1}")
+                if scene_model:
+                    asset = Asset(
+                        scene_id=scene_model.id,
+                        type="image",
+                        file_path=img_path,
+                        provider=ip,
+                        metadata_={
+                            "width": width,
+                            "height": height,
+                            "style": ist,
+                            **{k: iextra[k] for k in ("negative_prompt", "seed") if k in iextra},
+                        },
+                    )
+                    session.add(asset)
+                    await session.flush()
+            visual_paths.append("")
+            audio_paths.append(audio_path)
+            durations.append(duration)
+
+        return {"prepared": True, "project_id": project_id, "scenes": len(scenes)}
+
+    # TTS is capped; image generation + clip encode run fully in parallel (API-bound).
+    RENDER_AUDIO_CONCURRENCY = 4
+    audio_sem = asyncio.Semaphore(RENDER_AUDIO_CONCURRENCY)
+    db_lock = asyncio.Lock()
+
+    async def scene_audio(idx: int) -> tuple[str, float]:
+        sc = scenes[idx]
         scene_model = scene_models.get(idx)
         existing_assets = list(scene_model.assets) if scene_model else []
-
         narration = sc.get("narration", "")
-        img_prompt = sc.get("image_prompt", "")
-        transition = sc.get("transition", sc.get("transition_type", "fade"))
-        scene_type = sc.get("scene_type", "image")
+        sid = sc.get("id")
+        reg = regenerate_scene_ids
+        force_reuse = reg is not None and bool(sid) and sid not in reg
+        force_new = reg is not None and bool(sid) and sid in reg
 
-        # Reuse or generate audio
-        audio_asset = await _get_asset_by_type(existing_assets, "audio")
-        if audio_asset:
-            audio_path = await _ensure_local_file(audio_asset.file_path, work_dir / "audio")
-            await _progress(f"Reusing audio for scene {idx + 1}")
-        else:
-            audio_key = await synthesize_speech(
-                narration, tts_provider, tts_voice, save=True
-            )
-            await _progress(f"Audio for scene {idx + 1}")
-            if scene_model:
-                asset = Asset(scene_id=scene_model.id, type="audio", file_path=audio_key)
-                session.add(asset)
-                await session.flush()
-            audio_path = await _ensure_local_file(audio_key, work_dir / "audio")
+        async with audio_sem:
+            audio_asset = await _get_asset_by_type(existing_assets, "audio")
+
+            if force_reuse:
+                if not audio_asset:
+                    raise ValueError(
+                        f"Incremental render: scene {sid} has no audio asset to reuse"
+                    )
+                audio_path = await _ensure_local_file(audio_asset.file_path, work_dir / "audio")
+                await _progress(f"Reusing audio for scene {idx + 1}")
+            elif audio_asset and not force_new:
+                audio_path = await _ensure_local_file(audio_asset.file_path, work_dir / "audio")
+                await _progress(f"Reusing audio for scene {idx + 1}")
+            else:
+                audio_key = await synthesize_speech(
+                    narration, tts_provider, tts_voice, save=True
+                )
+                await _progress(f"Audio for scene {idx + 1}")
+                async with db_lock:
+                    if scene_model:
+                        session.add(
+                            Asset(
+                                scene_id=scene_model.id,
+                                type="audio",
+                                file_path=audio_key,
+                                source="ai_generated",
+                            )
+                        )
+                        await session.flush()
+                audio_path = await _ensure_local_file(audio_key, work_dir / "audio")
 
         audio_dur = await ffmpeg.get_duration(audio_path)
         match_scenes_to_audio = settings.get("match_scenes_to_audio", False)
@@ -195,33 +334,65 @@ async def render_video(
                 base_duration = 5.0
             base_duration = max(base_duration, 1.0)
             duration = max(audio_dur, base_duration)
+        duration = _effective_clip_duration(sc, duration)
+        return audio_path, duration
 
-        # Reuse or generate visual (image clip)
+    audio_packed = await asyncio.gather(*[scene_audio(i) for i in range(len(scenes))])
+    audio_paths = [p[0] for p in audio_packed]
+    durations = [p[1] for p in audio_packed]
+
+    async def scene_visual(idx: int) -> str:
+        sc = scenes[idx]
+        scene_model = scene_models.get(idx)
+        existing_assets = list(scene_model.assets) if scene_model else []
+        img_prompt = sc.get("image_prompt", "")
+        transition = sc.get("transition", sc.get("transition_type", "fade"))
+        duration = _effective_clip_duration(sc, durations[idx])
+
+        sid = sc.get("id")
+        reg = regenerate_scene_ids
+        force_reuse = reg is not None and bool(sid) and sid not in reg
+        force_new = reg is not None and bool(sid) and sid in reg
+
         video_asset = await _get_asset_by_type(existing_assets, "video")
         image_asset = await _get_asset_by_type(existing_assets, "image")
 
-        if stop_after_assets:
-            # Prepare-only mode: save audio and image only, skip clip creation
-            if not image_asset and img_prompt:
-                img_path = await generate_image(
-                    img_prompt, image_provider, width, height, image_style
+        if force_reuse:
+            if video_asset:
+                visual_path = await _ensure_local_file(video_asset.file_path, work_dir / "video")
+                await _progress(f"Reusing clip for scene {idx + 1}")
+                return visual_path
+            if image_asset:
+                clip_path = str(work_dir / f"clip_{idx:03d}.mp4")
+                local_image = await _ensure_local_file(image_asset.file_path, work_dir / "images")
+                visual_path = await ffmpeg.create_image_clip(
+                    local_image, duration, clip_path, width, height, transition
                 )
-                await _progress(f"Image for scene {idx + 1}")
+                await _progress(f"Clip for scene {idx + 1}")
                 if scene_model:
-                    asset = Asset(scene_id=scene_model.id, type="image", file_path=img_path)
-                    session.add(asset)
-                    await session.flush()
-            visual_paths.append("")  # placeholder, unused when stopping early
-            audio_paths.append(audio_path)
-            durations.append(duration)
-        elif video_asset:
-            visual_key = video_asset.file_path
-            visual_path = await _ensure_local_file(visual_key, work_dir / "video")
+                    clip_key = build_key("videos", f"{project_id}/{Path(visual_path).name}")
+                    await storage.save_file(clip_key, visual_path, guess_content_type(clip_key))
+                    async with db_lock:
+                        session.add(
+                            Asset(
+                                scene_id=scene_model.id,
+                                type="video",
+                                file_path=clip_key,
+                                source="ai_generated",
+                            )
+                        )
+                        await session.flush()
+                return visual_path
+            raise ValueError(
+                f"Incremental render: scene {sid} has no video or image to reuse"
+            )
+
+        if not force_new and video_asset:
+            visual_path = await _ensure_local_file(video_asset.file_path, work_dir / "video")
             await _progress(f"Reusing clip for scene {idx + 1}")
-            visual_paths.append(visual_path)
-            audio_paths.append(audio_path)
-            durations.append(duration)
-        elif image_asset:
+            return visual_path
+
+        if not force_new and image_asset:
             clip_path = str(work_dir / f"clip_{idx:03d}.mp4")
             local_image = await _ensure_local_file(image_asset.file_path, work_dir / "images")
             visual_path = await ffmpeg.create_image_clip(
@@ -231,46 +402,73 @@ async def render_video(
             if scene_model:
                 clip_key = build_key("videos", f"{project_id}/{Path(visual_path).name}")
                 await storage.save_file(clip_key, visual_path, guess_content_type(clip_key))
-                asset = Asset(scene_id=scene_model.id, type="video", file_path=clip_key)
-                session.add(asset)
-                await session.flush()
-            visual_paths.append(visual_path)
-            audio_paths.append(audio_path)
-            durations.append(duration)
-        else:
-            img_path = await generate_image(
-                img_prompt, image_provider, width, height, image_style
-            )
-            await _progress(f"Image for scene {idx + 1}")
-            if scene_model:
-                asset = Asset(scene_id=scene_model.id, type="image", file_path=img_path)
-                session.add(asset)
-                await session.flush()
-            clip_path = str(work_dir / f"clip_{idx:03d}.mp4")
-            local_image = await _ensure_local_file(img_path, work_dir / "images")
-            visual_path = await ffmpeg.create_image_clip(
-                local_image, duration, clip_path, width, height, transition
-            )
-            await _progress(f"Clip for scene {idx + 1}")
-            if scene_model:
-                clip_key = build_key("videos", f"{project_id}/{Path(visual_path).name}")
-                await storage.save_file(clip_key, visual_path, guess_content_type(clip_key))
-                clip_asset = Asset(scene_id=scene_model.id, type="video", file_path=clip_key)
-                session.add(clip_asset)
-                await session.flush()
-            visual_paths.append(visual_path)
-            audio_paths.append(audio_path)
-            durations.append(duration)
+                async with db_lock:
+                    session.add(
+                        Asset(
+                            scene_id=scene_model.id,
+                            type="video",
+                            file_path=clip_key,
+                            source="ai_generated",
+                        )
+                    )
+                    await session.flush()
+            return visual_path
 
-    # --- Early return for prepare-only mode ---
-    if stop_after_assets:
-        return {"prepared": True, "project_id": project_id, "scenes": len(scenes)}
+        ip, ist, iextra = _scene_image_generate_kwargs(sc, settings, app_settings)
+        img_path = await generate_image(
+            img_prompt, ip, width, height, ist, **iextra
+        )
+        await _progress(f"Image for scene {idx + 1}")
+        async with db_lock:
+            if scene_model:
+                session.add(
+                    Asset(
+                        scene_id=scene_model.id,
+                        type="image",
+                        file_path=img_path,
+                        provider=ip,
+                        source="ai_generated",
+                        metadata_={
+                            "width": width,
+                            "height": height,
+                            "style": ist,
+                            **{k: iextra[k] for k in ("negative_prompt", "seed") if k in iextra},
+                        },
+                    )
+                )
+                await session.flush()
+        clip_path = str(work_dir / f"clip_{idx:03d}.mp4")
+        local_image = await _ensure_local_file(img_path, work_dir / "images")
+        visual_path = await ffmpeg.create_image_clip(
+            local_image, duration, clip_path, width, height, transition
+        )
+        await _progress(f"Clip for scene {idx + 1}")
+        if scene_model:
+            clip_key = build_key("videos", f"{project_id}/{Path(visual_path).name}")
+            await storage.save_file(clip_key, visual_path, guess_content_type(clip_key))
+            async with db_lock:
+                session.add(
+                    Asset(
+                        scene_id=scene_model.id,
+                        type="video",
+                        file_path=clip_key,
+                        source="ai_generated",
+                    )
+                )
+                await session.flush()
+        return visual_path
 
-    # --- Step 3: Concat video clips with transitions ---
+    visual_paths = await asyncio.gather(*[scene_visual(i) for i in range(len(scenes))])
+
+    for idx in range(len(scenes)):
+        norm = str(work_dir / f"audio_norm_{idx:03d}.mp3")
+        await ffmpeg.pad_or_trim_audio(audio_paths[idx], durations[idx], norm)
+        audio_paths[idx] = norm
+
+    # --- Step 3: Concat video clips (no xfade overlap; matches padded audio timeline) ---
     await _progress("Concatenating video clips")
-    transitions = [s.get("transition", "fade") for s in scenes[1:]]
     concat_video = str(work_dir / "concat_video.mp4")
-    await ffmpeg.concat_with_transitions(visual_paths, transitions, concat_video)
+    await ffmpeg.concat_video_simple(visual_paths, concat_video)
 
     # --- Step 4: Concat audio ---
     await _progress("Concatenating audio")
@@ -280,7 +478,7 @@ async def render_video(
     # --- Step 5: Merge video + audio ---
     await _progress("Merging audio and video")
     merged = str(work_dir / "merged.mp4")
-    await ffmpeg.add_audio_to_video(concat_video, concat_audio, merged)
+    await ffmpeg.merge_audio_to_video_matched(concat_video, concat_audio, merged)
 
     # --- Step 6: Subtitles ---
     current = merged
@@ -290,11 +488,11 @@ async def render_video(
         hex_color = subtitle_settings["color"]
         ass_color = _hex_to_ass_color(hex_color) if hex_color.startswith("#") else "&H00FFFFFF"
         if subtitle_source == "llm":
-            # Use LLM-generated subtitle text per scene with computed durations
+            # Burn in full narration (matches TTS), not short LLM "subtitle" summaries
             scene_subtitle_data = [
                 {
-                    "subtitle": sc.get("subtitle") or sc.get("narration", ""),
                     "narration": sc.get("narration", ""),
+                    "subtitle": sc.get("narration") or sc.get("subtitle", ""),
                     "duration": durations[i] if i < len(durations) else 5.0,
                 }
                 for i, sc in enumerate(scenes)
@@ -341,10 +539,12 @@ async def render_video(
     final_key = build_key("videos", f"{project_id}/{final_name}")
     await storage.save_file(final_key, final_local, guess_content_type(final_name))
 
+    final_duration = await ffmpeg.get_duration(final_local)
+
     return {
         "video_path": final_key,
         "video_url": await storage.get_url(final_key),
-        "duration": sum(durations),
+        "duration": final_duration,
         "scenes": len(scenes),
         "resolution": resolution,
     }

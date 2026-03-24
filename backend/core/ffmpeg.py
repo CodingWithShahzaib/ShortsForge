@@ -59,6 +59,77 @@ async def get_duration(file_path: str) -> float:
     return await asyncio.to_thread(_get_duration_sync, file_path)
 
 
+async def pad_or_trim_audio(
+    audio_path: str,
+    target_seconds: float,
+    output_path: str,
+) -> str:
+    """Trim or pad audio to exactly target_seconds (silence pad if shorter)."""
+    if target_seconds <= 0:
+        target_seconds = 0.1
+    t = f"{target_seconds:.6f}"
+    # atrim then apad so total length matches target (speech sync with image clips)
+    af = f"atrim=0:{t},apad=whole_dur={t}"
+    args = [
+        "-i", audio_path,
+        "-af", af,
+        "-map", "0:a",
+        "-c:a", "libmp3lame", "-q:a", "2",
+        output_path,
+    ]
+    await run_ffmpeg(args)
+    return output_path
+
+
+async def concat_video_simple(clip_paths: list[str], output_path: str) -> str:
+    """Concatenate video clips back-to-back (no xfade overlap; lengths sum for A/V sync)."""
+    if len(clip_paths) == 1:
+        shutil.copy2(clip_paths[0], output_path)
+        return output_path
+
+    inputs: list[str] = []
+    for p in clip_paths:
+        inputs.extend(["-i", p])
+
+    n = len(clip_paths)
+    ins = "".join(f"[{i}:v]" for i in range(n))
+    filter_complex = f"{ins}concat=n={n}:v=1:a=0[outv]"
+    args = inputs + [
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        output_path,
+    ]
+    total_dur = sum(await asyncio.gather(*[get_duration(p) for p in clip_paths]))
+    await run_ffmpeg(args, None, total_dur)
+    return output_path
+
+
+async def merge_audio_to_video_matched(
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+) -> str:
+    """Mux audio to video; trim or pad audio to the video duration (no -shortest cut)."""
+    vd = await get_duration(video_path)
+    if vd <= 0:
+        vd = await get_duration(audio_path)
+    t = f"{max(vd, 0.01):.6f}"
+    args = [
+        "-i", video_path,
+        "-i", audio_path,
+        "-filter_complex", f"[1:a]atrim=0:{t},apad=whole_dur={t}[aout]",
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        output_path,
+    ]
+    await run_ffmpeg(args)
+    return output_path
+
+
 def _run_ffmpeg_sync(cmd: list[str]) -> tuple[int, str]:
     """Sync subprocess call - works on Windows without ProactorEventLoop."""
     result = subprocess.run(cmd, capture_output=True, text=True)

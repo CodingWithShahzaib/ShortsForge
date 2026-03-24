@@ -13,6 +13,7 @@ import { api } from "@/lib/api";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { Job } from "@/lib/types";
+import { STORY_TEMPLATE_IDS } from "@/app/generate/schema";
 
 export default function BatchGeneratePage() {
   const addJob = useProjectStore((s) => s.addJob);
@@ -26,6 +27,7 @@ export default function BatchGeneratePage() {
   const [baseSettings, setBaseSettings] = useState({
     title: "",
     story_type: "general",
+    story_template: "default" as const,
     llm_provider: defaults.llm_provider,
     llm_model: defaults.llm_model,
     image_provider: defaults.image_provider,
@@ -50,9 +52,11 @@ export default function BatchGeneratePage() {
   });
   const [generating, setGenerating] = useState(false);
   const [storyTypes, setStoryTypes] = useState<{ id: string; name: string }[]>([]);
+  const [storyTemplates, setStoryTemplates] = useState<{ id: string; name: string; description: string }[]>([]);
 
   useEffect(() => {
     api.listStoryTypes().then(setStoryTypes).catch(() => {});
+    api.listStoryTemplates().then(setStoryTemplates).catch(() => {});
   }, []);
 
   const hasSyncedDefaults = useRef(false);
@@ -122,7 +126,7 @@ export default function BatchGeneratePage() {
               <Input type="number" min={150} max={800} value={baseSettings.word_count} onChange={(e) => update("word_count", parseInt(e.target.value) || defaults.word_count || 400)} />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
               <label className="text-sm font-medium mb-1.5 block">Story Type</label>
               <Select value={baseSettings.story_type} onValueChange={(value) => update("story_type", value)}>
@@ -131,6 +135,29 @@ export default function BatchGeneratePage() {
                 </SelectTrigger>
                 <SelectContent>
                   {storyTypes.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Narrative structure</label>
+              <Select
+                value={baseSettings.story_template}
+                onValueChange={(value) => update("story_template", value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Structure" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(storyTemplates.length > 0
+                    ? storyTemplates
+                    : STORY_TEMPLATE_IDS.map((id) => ({
+                        id,
+                        name: id === "default" ? "Standard" : id.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+                        description: "",
+                      }))
+                  ).map((t) => (
                     <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
                   ))}
                 </SelectContent>

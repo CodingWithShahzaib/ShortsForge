@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from backend.services.ai_client import chat_completion
 
@@ -12,6 +13,115 @@ STORY_TYPES = [
     "fun_facts", "motivational", "science", "history", "general",
 ]
 
+STORY_TEMPLATES_META: list[dict[str, str]] = [
+    {
+        "id": "default",
+        "name": "Standard",
+        "description": "Balanced hook and pacing (classic ShortsForge behavior).",
+    },
+    {
+        "id": "political_commentary",
+        "name": "Political commentary",
+        "description": "Hook, pattern of examples, revelation, forward-looking close. Use responsibly and factually.",
+    },
+    {
+        "id": "corporate_expose",
+        "name": "Corporate exposé",
+        "description": "What’s hidden, who benefits, stakes for the viewer; professional analytical tone.",
+    },
+    {
+        "id": "historical_parallel",
+        "name": "Historical parallel",
+        "description": "Past pattern, echo in the present, lesson or warning—clear and grounded.",
+    },
+    {
+        "id": "satirical_irony",
+        "name": "Satirical irony",
+        "description": "Understated irony and contrast; witty, not cruel or personal attacks.",
+    },
+    {
+        "id": "urgent_warning",
+        "name": "Urgent warning",
+        "description": "Stakes, what could happen, what to watch—credible tone without fear-mongering.",
+    },
+]
+
+STORY_TEMPLATE_IDS: tuple[str, ...] = tuple(m["id"] for m in STORY_TEMPLATES_META)
+
+
+def validate_story_template_field(value: str) -> str:
+    if value not in STORY_TEMPLATE_IDS:
+        raise ValueError(
+            f"Invalid story_template '{value}'. Allowed: {', '.join(STORY_TEMPLATE_IDS)}"
+        )
+    return value
+
+STORY_TEMPLATE_SCRIPT_GUIDES: dict[str, str] = {
+    "political_commentary": (
+        "Structure the script in four beats (do NOT label them in the output): "
+        "(1) Open with one bold, specific hook that names the topic. "
+        "(2) Three or four short parallel examples showing a pattern, escalation, or contrast—use rhetorical questions where natural. "
+        "(3) Two sentences that reframe: motive, incentive, or strategy—stay analytical, avoid dehumanizing language. "
+        "(4) One closing line that points forward or leaves tension—no call for violence or harassment. "
+        "Tone: confident, clear; sentences mostly under 15 words. "
+        "Target length: about {word_count} words (±10%). Story tone category: {story_type}."
+    ),
+    "corporate_expose": (
+        "Structure: (1) Hook—what they don’t emphasize. (2) Pattern—2–4 concrete behaviors or moves. "
+        "(3) Revelation—who gains, who bears cost. (4) Close—what to watch next or verify. "
+        "Analytical, non-sensational; no fabricated quotes or statistics. "
+        "About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "historical_parallel": (
+        "Structure: (1) Hook—tie present to a recognizable past pattern. (2) Brief context from history. "
+        "(3) Parallel—how it rhymes with today. (4) Close—lesson or open question. "
+        "Be accurate; avoid false equivalences stated as fact. "
+        "About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "satirical_irony": (
+        "Structure: (1) Deadpan hook. (2) Escalating absurdities or contrasts. (3) Twist that lands the point. "
+        "(4) Short ironic kicker. No slurs; punch up systems and behaviors, not private individuals. "
+        "About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "urgent_warning": (
+        "Structure: (1) Stakes in one line. (2) What is changing and why it matters. "
+        "(3) Plausible outcomes—avoid panic rhetoric. (4) What the viewer can verify or do that is constructive. "
+        "About {word_count} words (±10%). Category: {story_type}."
+    ),
+}
+
+
+def list_story_templates() -> list[dict[str, str]]:
+    """Metadata for Create UI: id, name, description."""
+    return list(STORY_TEMPLATES_META)
+
+
+def _storyboard_arc_addon(scene_count: int, image_style: str) -> str:
+    """Extra instructions when using a non-default story_template."""
+    n = max(2, min(15, int(scene_count)))
+    lines = [
+        "",
+        "NARRATIVE ARC (non-default template):",
+        f"- Split the script into exactly {n} scenes. narration for each scene must be copied verbatim from the script in order—no paraphrase.",
+        f"- image_prompt: detailed, in {image_style} style; vary composition and mood per beat.",
+        "- Choose transition to match emotional shifts (e.g. dissolve or zoom_in for revelation; wipeleft/pan for pattern sequences).",
+        "- Scene roles:",
+        "- Scene 1: Hook—bold focal imagery, high clarity, symbolic or striking composition.",
+    ]
+    if n == 2:
+        lines.append(
+            "- Scene 2: Deliver pattern, revelation, and forward close in one continuous narration slice; strong lighting shift in imagery."
+        )
+    elif n == 3:
+        lines.append("- Scene 2: Pattern or escalation.")
+        lines.append("- Scene 3: Revelation and forward-looking close; shift mood in the image.")
+    else:
+        for i in range(2, n - 1):
+            lines.append(f"- Scene {i}: Pattern or escalation (build stakes).")
+        lines.append(f"- Scene {n - 1}: Revelation or turning point; shift lighting or tone in image_prompt.")
+        lines.append(f"- Scene {n}: Forward-looking close; tension or horizon—no text in image.")
+    return "\n".join(lines)
+
 
 async def generate_script(
     concept: str,
@@ -20,19 +130,45 @@ async def generate_script(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     temperature: float = 0.8,
+    story_template: str = "default",
 ) -> str:
-    system_prompt = (
-        f"You are a professional short-form video scriptwriter. "
-        f"Write a compelling, SUBSTANTIAL {story_type} script for a faceless video narration. "
-        f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
-        f"Expand on the concept with detail, examples, and engaging content. "
-        f"Write ONLY the narration text - no scene directions, no brackets, no stage directions. "
-        f"Make it engaging, with a strong hook in the first sentence. "
-        f"Use short, punchy sentences suitable for voice-over narration."
-    )
+    if story_template not in STORY_TEMPLATE_IDS:
+        story_template = "default"
+
+    if story_template == "default":
+        system_prompt = (
+            f"You are a professional short-form video scriptwriter. "
+            f"Write a compelling, SUBSTANTIAL {story_type} script for a faceless video narration. "
+            f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
+            f"Expand on the concept with detail, examples, and engaging content. "
+            f"Write ONLY the narration text - no scene directions, no brackets, no stage directions. "
+            f"Make it engaging, with a strong hook in the first sentence. "
+            f"Use short, punchy sentences suitable for voice-over narration."
+        )
+        user_content = f"Create a script about: {concept}"
+    else:
+        guide = STORY_TEMPLATE_SCRIPT_GUIDES.get(story_template)
+        if not guide:
+            return await generate_script(
+                concept, story_type, word_count, llm_provider, llm_model, temperature, "default"
+            )
+        system_prompt = (
+            f"You are a professional short-form video scriptwriter. "
+            f"Genre/tone category: {story_type}. "
+            f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
+            f"Write ONLY speakable narration: no beat labels (no HOOK:, PATTERN:, etc.), no markdown headings, "
+            f"no scene numbers, no stage directions, no brackets. "
+            f"Use short, punchy sentences suitable for voice-over. "
+            f"STRUCTURE AND STYLE:\n{guide.format(word_count=word_count, story_type=story_type)}"
+        )
+        user_content = (
+            f"Create a script about:\n{concept}\n\n"
+            "Follow the narrative structure in your instructions. Output plain narration only."
+        )
+
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Create a script about: {concept}"},
+        {"role": "user", "content": user_content},
     ]
     return await chat_completion(messages, llm_provider, llm_model, temperature)
 
@@ -48,35 +184,47 @@ async def generate_story_and_storyboard(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     temperature: float = 0.7,
+    story_template: str = "default",
 ) -> dict:
     """Generate a full storyboard with title, script, and per-scene breakdown."""
+    if story_template not in STORY_TEMPLATE_IDS:
+        story_template = "default"
+
     if not script and concept:
-        script = await generate_script(concept, story_type, word_count or 400, llm_provider, llm_model, temperature)
+        script = await generate_script(
+            concept,
+            story_type,
+            word_count or 400,
+            llm_provider,
+            llm_model,
+            temperature,
+            story_template,
+        )
     elif not script:
         raise ValueError("Either concept or script must be provided")
 
-    subtitle_instruction = ""
-    subtitle_field = ""
+    caption_note = ""
     if generate_subtitles:
-        subtitle_instruction = (
-            f"- subtitle: Optimized caption text for on-screen display. "
-            f"Keep it punchy and readable (shorter phrases, key words). "
-            f"Can differ slightly from narration for better viewer experience.\n"
+        caption_note = (
+            "On-screen captions will use each scene's narration verbatim (full spoken text), "
+            "so keep narration clear and well-punctuated for readability.\n"
         )
-        subtitle_field = ', "subtitle": "..."'
 
     system_prompt = (
         f"You are a video storyboard planner for faceless short-form videos. "
         f"Given a narration script, split it into exactly {scene_count} scenes. "
+        f"{caption_note}"
         f"For each scene, provide:\n"
-        f"- narration: The exact narration text for that scene\n"
-        f"{subtitle_instruction}"
+        f"- narration: The exact narration text for that scene (this is what is spoken and shown as captions)\n"
         f"- image_prompt: A detailed image generation prompt in {image_style} style. "
         f"  Describe the visual scene vividly: subject, composition, lighting, mood, colors.\n"
         f"- transition: One of: fade, dissolve, wipeleft, slideup, zoom_in, zoom_out, pan_left, pan_right\n\n"
         f"Return valid JSON with this structure:\n"
-        f'{{"title": "...", "scenes": [{{"narration": "...", "image_prompt": "...", "transition": "..."{subtitle_field}}}]}}'
+        f'{{"title": "...", "scenes": [{{"narration": "...", "image_prompt": "...", "transition": "..."}}]}}'
     )
+    if story_template != "default":
+        system_prompt += _storyboard_arc_addon(scene_count, image_style)
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"Script:\n{script}"},
@@ -99,10 +247,13 @@ async def generate_story_and_storyboard(
             raise ValueError("Failed to parse storyboard JSON from LLM response")
 
     storyboard["script"] = script
-    # Ensure each scene has subtitle; fallback to narration when not generated
+    # Subtitle field in DB/UI matches spoken line (full narration — used for captions on re-export)
     for sc in storyboard.get("scenes", []):
-        if not sc.get("subtitle") and sc.get("narration"):
-            sc["subtitle"] = sc["narration"]
+        nar = (sc.get("narration") or "").strip()
+        if generate_subtitles:
+            sc["subtitle"] = nar
+        elif not (sc.get("subtitle") or "").strip():
+            sc["subtitle"] = nar
     return storyboard
 
 
@@ -332,3 +483,20 @@ Generate timeline_entries that fit exactly within 0.0s to {total_duration}s. The
         "audio_design": result.get("audio_design", ""),
         "safety_rules": result.get("safety_rules", []),
     }
+
+
+_LOCKED_STORYBOARD_FIELDS = frozenset({
+    "narration", "subtitle", "image_prompt", "duration", "transition",
+    "transition_type",
+})
+
+
+def merge_storyboard_patch_respecting_locks(
+    existing_scene: Any,
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    """Drop protected keys from an incoming scene dict when the DB scene is user-locked."""
+    if not getattr(existing_scene, "is_locked", False):
+        return dict(incoming)
+    out = {k: v for k, v in incoming.items() if k not in _LOCKED_STORYBOARD_FIELDS}
+    return out

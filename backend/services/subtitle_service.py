@@ -101,7 +101,8 @@ def generate_ass_from_scene_texts(
     video_height: int = 1920,
 ) -> str:
     """Generate ASS subtitle content from pre-defined scene texts and durations.
-    Each scene's subtitle is shown for its full duration. Used when subtitle_source=llm."""
+    Each scene's caption uses narration (spoken text) when present, else subtitle.
+    Used when subtitle_source=llm."""
     alignment = "2" if position == "bottom" else "8" if position == "top" else "5"
     margin_v = "80" if position == "bottom" else "60" if position == "top" else "0"
 
@@ -126,7 +127,7 @@ def generate_ass_from_scene_texts(
     events = []
     current_time = 0.0
     for sc in scenes:
-        text = sc.get("subtitle") or sc.get("narration", "")
+        text = (sc.get("narration") or "").strip() or (sc.get("subtitle") or "").strip()
         duration = float(sc.get("duration", 5.0))
         if not text or duration <= 0:
             current_time += duration

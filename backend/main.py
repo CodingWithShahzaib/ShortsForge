@@ -9,8 +9,10 @@ if sys.platform == "win32":
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+import openai
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_settings
@@ -96,6 +98,47 @@ app = FastAPI(
     description="From script to reel in minutes. AI-powered faceless video generation platform.",
     lifespan=lifespan,
 )
+
+
+def _openai_status_detail(exc: openai.APIStatusError) -> str:
+    body = exc.body
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+    return exc.message or str(exc)
+
+
+def _openai_error_code(exc: openai.APIStatusError) -> str | None:
+    body = exc.body
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("code"):
+            return str(err["code"])
+    return None
+
+
+def _openai_http_status(exc: openai.APIStatusError) -> int:
+    """OpenAI uses 429 for quota and for rate limits; map quota to 402 for clearer logs and clients."""
+    if _openai_error_code(exc) == "insufficient_quota":
+        return 402
+    return exc.status_code
+
+
+@app.exception_handler(openai.APIStatusError)
+async def openai_api_status_handler(_request: Request, exc: openai.APIStatusError) -> JSONResponse:
+    detail = _openai_status_detail(exc)
+    err_code = _openai_error_code(exc)
+    payload: dict[str, str] = {"detail": detail}
+    if err_code:
+        payload["code"] = err_code
+    return JSONResponse(status_code=_openai_http_status(exc), content=payload)
+
+
+@app.exception_handler(openai.APIConnectionError)
+async def openai_connection_handler(_request: Request, exc: openai.APIConnectionError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": exc.message})
+
 
 settings = get_settings()
 

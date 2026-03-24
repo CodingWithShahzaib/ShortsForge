@@ -251,7 +251,9 @@ export default function ScriptsPage() {
           custom_script: videoProduction.scenes.map((s) => s.script).join("\n\n"),
           scenes: scenesPayload,
           scene_count: videoProduction.scenes.length,
-          prepare_only: true,
+          prepare_only: false,
+          storyboard_only: true,
+          control_mode: "co_pilot",
           ...subtitleSettings,
         }),
           30000,
@@ -259,7 +261,7 @@ export default function ScriptsPage() {
         addJob(job);
         if (job.project_id) {
           toast.success("Video generation started!");
-          router.push(`/projects/${job.project_id}`);
+          router.push(`/projects/${job.project_id}/editor`);
         }
       } catch (err: any) {
         toast.error(err?.message || "Failed to start video generation");
@@ -284,7 +286,9 @@ export default function ScriptsPage() {
           custom_script: fullScript,
           scenes: scenesPayload,
           scene_count: scenes.length,
-          prepare_only: true,
+          prepare_only: false,
+          storyboard_only: true,
+          control_mode: "co_pilot",
           ...subtitleSettings,
         }),
           30000,
@@ -292,7 +296,7 @@ export default function ScriptsPage() {
         addJob(job);
         if (job.project_id) {
           toast.success("Video generation started!");
-          router.push(`/projects/${job.project_id}`);
+          router.push(`/projects/${job.project_id}/editor`);
         }
       } catch (err: any) {
         toast.error(err?.message || "Failed to start video generation");

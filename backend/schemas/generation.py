@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+from backend.services.script_service import validate_story_template_field
+
+StoryTemplateField = Annotated[str, AfterValidator(validate_story_template_field)]
 
 
 class GenerateVideoSceneInput(BaseModel):
@@ -17,6 +21,7 @@ class GenerateVideoSceneInput(BaseModel):
 class GenerateVideoRequest(BaseModel):
     title: str = "AI Video"
     story_type: str = "general"
+    story_template: StoryTemplateField = "default"
     custom_script: str | None = None
     scenes: list[GenerateVideoSceneInput] | None = None
     llm_provider: str = "openai"
@@ -42,12 +47,20 @@ class GenerateVideoRequest(BaseModel):
     word_count: int = 400
     scene_duration: float = Field(5.0, ge=1.0, le=60.0)
     prepare_only: bool = False
+    """When True, stop after per-scene image+TTS assets (no final FFmpeg composite)."""
+    storyboard_only: bool = False
+    """When True, stop after LLM storyboard + Scene rows — no image/TTS generation."""
+    control_mode: str = Field(
+        default="autopilot",
+        description="autopilot | co_pilot | manual",
+    )
     extra_settings: dict[str, Any] | None = None
 
 
 class GenerateScriptRequest(BaseModel):
     concept: str
     story_type: str = "general"
+    story_template: StoryTemplateField = "default"
     word_count: int = 400
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"

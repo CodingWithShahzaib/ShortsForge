@@ -10,17 +10,27 @@ from backend.schemas import (
     GenerateScriptRequest,
     GenerateVideoProductionScriptRequest,
     DirectorBoardGenerateRequest,
+    StoryTemplateField,
 )
 from backend.services.script_service import (
     generate_script,
     generate_story_and_storyboard,
     generate_video_production_script,
     generate_director_board_sections,
+    list_story_templates,
     STORY_TYPES,
+    validate_story_template_field,
 )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _check_story_template(story_template: str) -> None:
+    try:
+        validate_story_template_field(story_template)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/generate")
@@ -32,6 +42,7 @@ async def generate_script_endpoint(req: GenerateScriptRequest):
         llm_provider=req.llm_provider,
         llm_model=req.llm_model,
         temperature=req.temperature,
+        story_template=req.story_template,
     )
     return {"script": script, "word_count": len(script.split())}
 
@@ -41,6 +52,7 @@ async def generate_storyboard_endpoint(
     concept: str = "",
     script: str = "",
     story_type: str = "general",
+    story_template: str = "default",
     scene_count: int = 5,
     image_style: str = "realistic",
     word_count: int = 400,
@@ -48,6 +60,7 @@ async def generate_storyboard_endpoint(
     llm_provider: str = "openai",
     llm_model: str | None = None,
 ):
+    _check_story_template(story_template)
     storyboard = await generate_story_and_storyboard(
         concept=concept or None,
         script=script or None,
@@ -58,6 +71,7 @@ async def generate_storyboard_endpoint(
         generate_subtitles=generate_subtitles,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        story_template=story_template,
     )
     return storyboard
 
@@ -104,10 +118,16 @@ async def list_story_types():
     return [{"id": t, "name": t.replace("_", " ").title()} for t in STORY_TYPES]
 
 
+@router.get("/story-templates")
+async def list_story_templates_endpoint():
+    return list_story_templates()
+
+
 class SplitScenesRequest(BaseModel):
     script: str
     scene_count: int = 5
     story_type: str = "general"
+    story_template: StoryTemplateField = "default"
     generate_subtitles: bool = True
     llm_provider: str = "openai"
     llm_model: str | None = None
@@ -127,6 +147,7 @@ async def split_script_to_scenes(req: SplitScenesRequest):
         generate_subtitles=req.generate_subtitles,
         llm_provider=req.llm_provider,
         llm_model=req.llm_model,
+        story_template=req.story_template,
     )
     return storyboard
 
@@ -134,6 +155,16 @@ async def split_script_to_scenes(req: SplitScenesRequest):
 class UrlToScriptRequest(BaseModel):
     url: str
     story_type: str = "general"
+    story_template: StoryTemplateField = "default"
+    word_count: int = 400
+    llm_provider: str = "openai"
+    llm_model: str | None = None
+
+
+class TextToScriptRequest(BaseModel):
+    text: str
+    story_type: str = "general"
+    story_template: StoryTemplateField = "default"
     word_count: int = 400
     llm_provider: str = "openai"
     llm_model: str | None = None
@@ -164,7 +195,7 @@ def _extract_text_sync(url: str) -> str:
         lines = [line.strip() for line in text.splitlines() if len(line.strip()) > 20]
         return "\n".join(lines[:200])
     except Exception as exc:
-        raise RuntimeError(f"Could not extract content from URL: {exc}")
+        raise RuntimeError(f"Could not extract content from URL: {exc}") from exc
 
 
 @router.post("/url-to-script")
@@ -172,13 +203,12 @@ async def url_to_script(req: UrlToScriptRequest):
     try:
         content = await asyncio.to_thread(_extract_text_sync, req.url)
     except RuntimeError as exc:
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, str(exc)) from exc
 
     if not content or len(content.strip()) < 50:
         raise HTTPException(400, "Could not extract enough content from this URL")
 
     summary = content[:3000]
-
     concept = f"Create a video script based on this content:\n\n{summary}"
     script = await generate_script(
         concept=concept,
@@ -186,11 +216,36 @@ async def url_to_script(req: UrlToScriptRequest):
         word_count=req.word_count,
         llm_provider=req.llm_provider,
         llm_model=req.llm_model,
+        story_template=req.story_template,
     )
 
     return {
         "script": script,
         "word_count": len(script.split()),
         "source_url": req.url,
+        "extracted_length": len(content),
+    }
+
+
+@router.post("/text-to-script")
+async def text_to_script(req: TextToScriptRequest):
+    content = req.text.strip()
+    if len(content) < 50:
+        raise HTTPException(400, "Paste at least 50 characters of source text")
+
+    summary = content[:3000]
+    concept = f"Create a video script based on this content:\n\n{summary}"
+    script = await generate_script(
+        concept=concept,
+        story_type=req.story_type,
+        word_count=req.word_count,
+        llm_provider=req.llm_provider,
+        llm_model=req.llm_model,
+        story_template=req.story_template,
+    )
+
+    return {
+        "script": script,
+        "word_count": len(script.split()),
         "extracted_length": len(content),
     }

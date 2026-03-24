@@ -90,6 +90,7 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                     generate_subtitles=settings.get("generate_subtitles", True),
                     llm_provider=settings.get("llm_provider") or app_settings.default_llm_provider,
                     llm_model=settings.get("llm_model") or app_settings.default_llm_model,
+                    story_template=settings.get("story_template", "default"),
                 )
 
                 project.title = storyboard.get("title", project.title)
@@ -140,7 +141,41 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                     job_id, "video_render", 0, "in_progress", "Scenes ready, rendering video"
                 )
 
+            storyboard_only = params.get("storyboard_only", False)
+            if storyboard_only:
+                r_pf = await session.execute(
+                    select(Project)
+                    .where(Project.id == project_id)
+                    .options(selectinload(Project.scenes))
+                )
+                proj_for_skip = r_pf.scalar_one()
+                if not proj_for_skip.scenes:
+                    raise ValueError(
+                        "storyboard_only requires at least one scene. "
+                        "Use a concept/custom script or pass pre-defined scenes."
+                    )
+                await ws_manager.send_progress(
+                    job_id, "video_render", 99, "in_progress",
+                    "Storyboard ready — generate assets per scene, then compile",
+                )
+                result = {
+                    "prepared": True,
+                    "storyboard_only": True,
+                    "scenes": len(proj_for_skip.scenes),
+                }
+                r = await session.execute(select(Job).where(Job.id == job_id))
+                j = r.scalar_one()
+                j.status = "completed"
+                j.progress = 100
+                j.result = result
+                j.completed_at = datetime.now(timezone.utc)
+                proj_for_skip.status = "ready_for_edit"
+                await session.commit()
+                return result
+
             prepare_only = params.get("prepare_only", False)
+            inc = params.get("incremental_scene_ids") or []
+            reg_set: set[str] | None = set(inc) if inc else None
             result = await render_video(
                 project_id=project_id,
                 job_id=job_id,
@@ -148,6 +183,7 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                 scenes=scenes,
                 settings=settings if settings else None,
                 stop_after_assets=prepare_only,
+                regenerate_scene_ids=reg_set,
             )
             r = await session.execute(select(Job).where(Job.id == job_id))
             j = r.scalar_one()
@@ -240,6 +276,196 @@ async def handle_sora_extend(params: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         await _mark_job_failed(job_id, str(exc))
         raise
+
+
+@register("asset_generate")
+async def handle_asset_generate(params: dict[str, Any]) -> dict[str, Any]:
+    """Generate a single scene asset (image or TTS) asynchronously."""
+    from backend.config import get_settings
+    from backend.database import async_session
+    from backend.models import Job, Project, Scene, Asset
+    from backend.services.image_service import generate_image
+    from backend.services.audio_service import synthesize_speech
+    from backend.core.websocket_manager import ws_manager
+
+    project_id = params["project_id"]
+    scene_id = params["scene_id"]
+    job_id = params["job_id"]
+    asset_type = params["asset_type"]
+    prompt_override = params.get("prompt_override")
+
+    app_settings = get_settings()
+
+    try:
+        return await _run_asset_generate(
+            project_id, scene_id, job_id, asset_type, prompt_override, app_settings,
+        )
+    except Exception as exc:
+        from backend.models import Job as JobModel
+
+        async with async_session() as session:
+            r = await session.execute(select(JobModel).where(JobModel.id == job_id))
+            j = r.scalar_one_or_none()
+            if j:
+                j.status = "failed"
+                j.error = {"message": str(exc)}
+                j.completed_at = datetime.now(timezone.utc)
+                await session.commit()
+        raise
+
+
+async def _run_asset_generate(
+    project_id: str,
+    scene_id: str,
+    job_id: str,
+    asset_type: str,
+    prompt_override: str | None,
+    app_settings: object,
+) -> dict[str, Any]:
+    from backend.database import async_session
+    from backend.models import Job, Project, Scene, Asset
+    from backend.services.image_service import generate_image
+    from backend.services.audio_service import synthesize_speech
+    from backend.core.websocket_manager import ws_manager
+
+    async with async_session() as session:
+        r_job = await session.execute(select(Job).where(Job.id == job_id))
+        j = r_job.scalar_one_or_none()
+        if j and j.status != "in_progress":
+            j.status = "in_progress"
+            j.started_at = j.started_at or datetime.now(timezone.utc)
+            j.progress = max(j.progress or 0, 5)
+            await session.commit()
+
+        await ws_manager.send_progress(
+            job_id, "asset_generate", 15, "in_progress", f"Generating {asset_type}"
+        )
+
+        r = await session.execute(
+            select(Scene)
+            .where(Scene.id == scene_id, Scene.project_id == project_id)
+            .options(selectinload(Scene.assets))
+        )
+        scene = r.scalar_one_or_none()
+        if not scene:
+            raise ValueError("Scene not found")
+
+        r_proj = await session.execute(select(Project).where(Project.id == project_id))
+        project = r_proj.scalar_one()
+        settings = project.settings or {}
+
+        if asset_type == "image":
+            for a in list(scene.assets):
+                if a.type == "video":
+                    await session.delete(a)
+            await session.flush()
+
+            img_prompt = (prompt_override or scene.image_prompt or "").strip()
+            if not img_prompt:
+                raise ValueError("Scene has no image prompt (set image_prompt or pass prompt_override)")
+
+            resolution = settings.get("resolution", "1080x1920")
+            width, height = map(int, resolution.split("x"))
+            ov = scene.scene_settings if isinstance(scene.scene_settings, dict) else {}
+            image_provider = ov.get("image_provider") or settings.get("image_provider", "replicate")
+            image_style = ov.get("image_style") or settings.get("image_style", "realistic")
+            gen_kwargs: dict = {}
+            nprompt = ov.get("negative_prompt")
+            if isinstance(nprompt, str) and nprompt.strip():
+                gen_kwargs["negative_prompt"] = nprompt.strip()
+            seed = ov.get("seed")
+            if seed is not None and seed != "":
+                try:
+                    gen_kwargs["seed"] = int(seed)
+                except (TypeError, ValueError):
+                    gen_kwargs["seed"] = seed
+
+            prev_id: str | None = None
+            imgs = [a for a in scene.assets if a.type == "image" and a.is_active]
+            if imgs:
+                imgs.sort(
+                    key=lambda x: x.created_at.timestamp() if x.created_at else 0.0,
+                    reverse=True,
+                )
+                prev_id = imgs[0].id
+            for a in scene.assets:
+                if a.type == "image":
+                    a.is_active = False
+            await session.flush()
+
+            img_path = await generate_image(
+                img_prompt, image_provider, width, height, image_style, **gen_kwargs
+            )
+            await ws_manager.send_progress(job_id, "asset_generate", 80, "in_progress", "Saving image")
+            new_asset = Asset(
+                scene_id=scene_id,
+                type="image",
+                file_path=img_path,
+                provider=image_provider,
+                source="ai_generated",
+                parent_asset_id=prev_id,
+                is_active=True,
+                metadata_={
+                    "width": width,
+                    "height": height,
+                    "style": image_style,
+                    **{k: gen_kwargs[k] for k in ("negative_prompt", "seed") if k in gen_kwargs},
+                },
+            )
+            session.add(new_asset)
+        elif asset_type == "audio":
+            for a in list(scene.assets):
+                if a.type == "video":
+                    await session.delete(a)
+            await session.flush()
+
+            narration = (prompt_override or scene.narration or "").strip()
+            if not narration:
+                raise ValueError("Scene has no narration for TTS")
+
+            tts_provider = settings.get("tts_provider") or app_settings.default_tts_provider
+            tts_voice = settings.get("tts_voice") or app_settings.default_tts_voice
+
+            audios = [a for a in scene.assets if a.type == "audio" and a.is_active]
+            prev_id = None
+            if audios:
+                audios.sort(
+                    key=lambda x: x.created_at.timestamp() if x.created_at else 0.0,
+                    reverse=True,
+                )
+                prev_id = audios[0].id
+            for a in scene.assets:
+                if a.type == "audio":
+                    a.is_active = False
+            await session.flush()
+
+            await ws_manager.send_progress(job_id, "asset_generate", 40, "in_progress", "Synthesizing speech")
+            audio_key = await synthesize_speech(narration, tts_provider, tts_voice, save=True)
+            new_asset = Asset(
+                scene_id=scene_id,
+                type="audio",
+                file_path=audio_key,
+                provider=tts_provider,
+                source="ai_generated",
+                parent_asset_id=prev_id,
+                is_active=True,
+                metadata_={"voice": tts_voice},
+            )
+            session.add(new_asset)
+        else:
+            raise ValueError(f"Unsupported asset_type: {asset_type}")
+
+        rj = await session.execute(select(Job).where(Job.id == job_id))
+        job_row = rj.scalar_one()
+        job_row.status = "completed"
+        job_row.progress = 100
+        result = {"scene_id": scene_id, "asset_type": asset_type, "ok": True}
+        job_row.result = result
+        job_row.completed_at = datetime.now(timezone.utc)
+
+        project.version = (project.version or 1) + 1
+        await session.commit()
+        return result
 
 
 @register("sora_remix")

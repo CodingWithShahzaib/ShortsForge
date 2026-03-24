@@ -28,9 +28,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     set({ jobs, activeJobIds: active });
   },
   addJob: (job) => set((state) => {
-    const jobs = [job, ...state.jobs];
-    const active = new Set(state.activeJobIds);
-    if (job.status === "queued" || job.status === "in_progress") active.add(job.id);
+    const idx = state.jobs.findIndex((j) => j.id === job.id);
+    const jobs =
+      idx >= 0
+        ? state.jobs.map((j) => (j.id === job.id ? { ...j, ...job } : j))
+        : [job, ...state.jobs];
+    const active = new Set(jobs.filter((j) => j.status === "queued" || j.status === "in_progress").map((j) => j.id));
     return { jobs, activeJobIds: active };
   }),
   updateJobFromWs: (msg) => set((state) => {
