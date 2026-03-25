@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeft, Play, GripVertical, Image, Volume2, Trash2, RefreshCw, Plus, RotateCcw, Download, Copy, Upload, Share, StopCircle, Pencil, Film, Type, ArrowDownToLine } from "lucide-react";
+import { ArrowLeft, Play, GripVertical, ImageIcon, Volume2, Trash2, RefreshCw, Plus, RotateCcw, Download, Copy, Upload, Share, StopCircle, Film, Type, ArrowDownToLine } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,9 @@ import { AICoPilot } from "@/components/editor/AICoPilot";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/stores/projectStore";
 import type { Project, Scene, Job, Asset, SceneSettings } from "@/lib/types";
+
+type ExportPreset = { id: string; label: string };
+type ExportPresets = { resolutions: ExportPreset[]; quality: ExportPreset[] };
 
 function pickLatestAsset(assets: Asset[] | undefined, type: string): Asset | undefined {
   if (!assets?.length) return undefined;
@@ -41,6 +44,23 @@ function formatAssetWhen(iso: string | undefined): string {
   }
 }
 
+function pickLatestProjectJob(jobs: Job[]): Job | null {
+  if (!jobs.length) return null;
+  const statusWeight: Record<string, number> = {
+    in_progress: 5,
+    queued: 4,
+    failed: 3,
+    completed: 2,
+    cancelled: 1,
+  };
+  return [...jobs].sort((a, b) => {
+    const wa = statusWeight[a.status] ?? 0;
+    const wb = statusWeight[b.status] ?? 0;
+    if (wa !== wb) return wb - wa;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  })[0];
+}
+
 export default function ProjectDetailPage() {
   const addJob = useProjectStore((s) => s.addJob);
   const pathname = usePathname();
@@ -48,14 +68,19 @@ export default function ProjectDetailPage() {
   const projectId = pathname.split("/").filter(Boolean).pop() || "";
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editingScene, setEditingScene] = useState<string | null>(null);
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
+  const [sceneEditorDirty, setSceneEditorDirty] = useState(false);
   const [latestJob, setLatestJob] = useState<Job | null>(null);
-  const [exportPresets, setExportPresets] = useState<{ resolutions: any[]; quality: any[] } | null>(null);
+  const [exportPresets, setExportPresets] = useState<ExportPresets | null>(null);
   const [exportRes, setExportRes] = useState("youtube_landscape");
   const [exportQual, setExportQual] = useState("medium");
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<{ url: string; resolution: string } | null>(null);
   const [compiling, setCompiling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+  const [addingScene, setAddingScene] = useState(false);
   const [regeneratingSceneId, setRegeneratingSceneId] = useState<string | null>(null);
   const [incrementingSceneId, setIncrementingSceneId] = useState<string | null>(null);
   const [subtitleConfig, setSubtitleConfig] = useState({
@@ -71,54 +96,78 @@ export default function ProjectDetailPage() {
   });
   const [matchScenesToAudio, setMatchScenesToAudio] = useState(false);
   const [syncingSubtitles, setSyncingSubtitles] = useState(false);
+  const [pendingDeleteSceneId, setPendingDeleteSceneId] = useState<string | null>(null);
+  const [armedAction, setArmedAction] = useState<string | null>(null);
+  const activePollersRef = useRef(new Set<string>());
+  const projectStatus = project?.status;
+
+  const requireConfirm = (key: string, message: string) => {
+    if (armedAction !== key) {
+      setArmedAction(key);
+      toast.message(message);
+      return false;
+    }
+    setArmedAction(null);
+    return true;
+  };
+
+  const refreshProject = useCallback(async () => {
+    const p = await api.getProject(projectId);
+    setProject(p);
+    if (p?.settings) {
+      setSubtitleConfig((prev) => ({
+        ...prev,
+        subtitle_enabled: p.settings.subtitle_enabled ?? prev.subtitle_enabled,
+        subtitle_source: p.settings.subtitle_source ?? prev.subtitle_source,
+        generate_subtitles: p.settings.generate_subtitles ?? prev.generate_subtitles,
+        transcription_provider: p.settings.transcription_provider ?? prev.transcription_provider,
+        transcription_language: p.settings.transcription_language ?? prev.transcription_language,
+        subtitle_font: p.settings.subtitle_font ?? prev.subtitle_font,
+        subtitle_size: p.settings.subtitle_size ?? prev.subtitle_size,
+        subtitle_color: p.settings.subtitle_color ?? prev.subtitle_color,
+        subtitle_position: p.settings.subtitle_position ?? prev.subtitle_position,
+      }));
+      setMatchScenesToAudio(p.settings.match_scenes_to_audio ?? false);
+    }
+    return p;
+  }, [projectId]);
+
+  const refreshLatestJob = useCallback(async () => {
+    const jobs = await api.listJobs({ limit: 100 });
+    const projectJobs = jobs.filter((j: Job) => j.project_id === projectId);
+    setLatestJob(pickLatestProjectJob(projectJobs));
+  }, [projectId]);
 
   useEffect(() => {
-    api.getProject(projectId)
+    refreshProject()
       .then((p) => {
-        setProject(p);
-        if (p?.settings) {
-          setSubtitleConfig((prev) => ({
-            ...prev,
-            subtitle_enabled: p.settings.subtitle_enabled ?? prev.subtitle_enabled,
-            subtitle_source: p.settings.subtitle_source ?? prev.subtitle_source,
-            generate_subtitles: p.settings.generate_subtitles ?? prev.generate_subtitles,
-            transcription_provider: p.settings.transcription_provider ?? prev.transcription_provider,
-            transcription_language: p.settings.transcription_language ?? prev.transcription_language,
-            subtitle_font: p.settings.subtitle_font ?? prev.subtitle_font,
-            subtitle_size: p.settings.subtitle_size ?? prev.subtitle_size,
-            subtitle_color: p.settings.subtitle_color ?? prev.subtitle_color,
-            subtitle_position: p.settings.subtitle_position ?? prev.subtitle_position,
-          }));
-          setMatchScenesToAudio(p.settings.match_scenes_to_audio ?? false);
-        }
+        if (p?.scenes?.length) setSelectedSceneId((prev) => prev || p.scenes[0].id);
       })
       .catch(() => router.push("/projects"))
       .finally(() => setLoading(false));
-    api.listJobs({ limit: 100 })
-      .then((jobs) => {
-        const projectJobs = jobs
-          .filter((j: Job) => j.project_id === projectId)
-          .sort((a: Job, b: Job) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        if (projectJobs.length > 0) setLatestJob(projectJobs[0]);
-      })
-      .catch(() => {});
-    api.listExportPresets().then(setExportPresets).catch(() => {});
-  }, [projectId, router]);
+    refreshLatestJob().catch(() => {});
+    api.listExportPresets().then((x) => setExportPresets(x as ExportPresets)).catch(() => {});
+  }, [projectId, refreshLatestJob, refreshProject, router]);
 
   // Poll project when generating so we pick up ready_for_edit status
   useEffect(() => {
-    if (!projectId || !project || project.status !== "generating") return;
+    if (!projectId || projectStatus !== "generating") return;
     const interval = setInterval(() => {
-      api.getProject(projectId).then(setProject).catch(() => {});
-      api.listJobs({ limit: 100 }).then((jobs) => {
-        const projectJobs = jobs
-          .filter((j: Job) => j.project_id === projectId)
-          .sort((a: Job, b: Job) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        if (projectJobs.length > 0) setLatestJob(projectJobs[0]);
-      }).catch(() => {});
+      refreshProject().catch(() => {});
+      refreshLatestJob().catch(() => {});
     }, 3000);
     return () => clearInterval(interval);
-  }, [projectId, project?.status]);
+  }, [projectId, projectStatus, refreshLatestJob, refreshProject]);
+
+  useEffect(() => {
+    if (!project?.scenes?.length) {
+      setSelectedSceneId(null);
+      return;
+    }
+    if (!selectedSceneId || !project.scenes.some((s) => s.id === selectedSceneId)) {
+      setSelectedSceneId(project.scenes[0].id);
+    }
+  }, [project, selectedSceneId]);
 
   const handleExport = async () => {
     if (!latestJob) return;
@@ -127,19 +176,22 @@ export default function ProjectDetailPage() {
     try {
       const result = await api.exportVideo({ job_id: latestJob.id, resolution: exportRes, quality: exportQual });
       setExportResult(result);
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Export failed");
     } finally {
       setExporting(false);
     }
   };
 
   const startPollJob = useCallback((jobId: string, onDone: () => void) => {
+    if (activePollersRef.current.has(jobId)) return;
+    activePollersRef.current.add(jobId);
     const iv = setInterval(async () => {
       try {
         const j = await api.getJob(jobId);
         if (j.status === "completed" || j.status === "failed") {
           clearInterval(iv);
+          activePollersRef.current.delete(jobId);
           onDone();
           if (j.status === "failed") {
             const msg =
@@ -151,6 +203,7 @@ export default function ProjectDetailPage() {
         }
       } catch {
         clearInterval(iv);
+        activePollersRef.current.delete(jobId);
       }
     }, 2000);
   }, []);
@@ -160,7 +213,8 @@ export default function ProjectDetailPage() {
       const job = await api.queueSceneAssetGenerate(projectId, sceneId, { asset_type });
       addJob(job);
       startPollJob(job.id, () => {
-        api.getProject(projectId).then(setProject);
+        refreshProject().catch(() => {});
+        refreshLatestJob().catch(() => {});
       });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not queue generation");
@@ -168,11 +222,7 @@ export default function ProjectDetailPage() {
   };
 
   const handleIncrementalScene = async (sceneId: string) => {
-    if (
-      !confirm(
-        "Re-build the final video while only regenerating clips for this scene? Other scenes keep their existing clips.",
-      )
-    ) {
+    if (!requireConfirm(`incremental-${sceneId}`, "Press incremental again to confirm scene-only render.")) {
       return;
     }
     setIncrementingSceneId(sceneId);
@@ -181,7 +231,8 @@ export default function ProjectDetailPage() {
       addJob(job);
       setProject((p) => (p ? { ...p, status: "generating" } : null));
       startPollJob(job.id, () => {
-        api.getProject(projectId).then(setProject);
+        refreshProject().catch(() => {});
+        refreshLatestJob().catch(() => {});
       });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Incremental render failed");
@@ -196,14 +247,14 @@ export default function ProjectDetailPage() {
         ...data,
         expected_version: project?.version,
       } as Record<string, unknown>);
-      const updated = await api.getProject(projectId);
-      setProject(updated);
-      setEditingScene(null);
+      const updated = await refreshProject();
+      setSelectedSceneId(updated.scenes.some((s) => s.id === sceneId) ? sceneId : updated.scenes[0]?.id || null);
+      setSceneEditorDirty(false);
     } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 409) {
         toast.error("Someone else saved changes first — refreshed the project.");
         try {
-          const updated = await api.getProject(projectId);
+          const updated = await refreshProject();
           setProject(updated);
         } catch {
           /* ignore */
@@ -215,26 +266,48 @@ export default function ProjectDetailPage() {
   };
 
   const handleDeleteScene = async (sceneId: string) => {
-    if (!confirm("Delete this scene?")) return;
-    await api.deleteScene(projectId, sceneId);
-    const updated = await api.getProject(projectId);
-    setProject(updated);
+    if (!requireConfirm(`delete-scene-${sceneId}`, "Press delete again to confirm scene deletion.")) return;
+    setPendingDeleteSceneId(sceneId);
+    try {
+      await api.deleteScene(projectId, sceneId);
+      const updated = await refreshProject();
+      setSelectedSceneId((prev) => {
+        if (prev !== sceneId) return prev;
+        return updated.scenes[0]?.id || null;
+      });
+      toast.success("Scene deleted");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setPendingDeleteSceneId(null);
+    }
   };
 
   const handleAddScene = async () => {
-    await api.addScene(projectId, { narration: "", subtitle: "", image_prompt: "", transition_type: "fade", duration: 5 });
-    const updated = await api.getProject(projectId);
-    setProject(updated);
+    setAddingScene(true);
+    try {
+      await api.addScene(projectId, { narration: "", subtitle: "", image_prompt: "", transition_type: "fade", duration: 5 });
+      const updated = await refreshProject();
+      const newest = updated.scenes[updated.scenes.length - 1];
+      if (newest) setSelectedSceneId(newest.id);
+    } finally {
+      setAddingScene(false);
+    }
   };
 
   const handleSyncAllSubtitlesFromNarration = async () => {
     if (!project?.scenes.length) return;
     setSyncingSubtitles(true);
+    const total = project.scenes.length;
+    if (!requireConfirm("sync-subtitles", `Press again to copy narration into subtitle for ${total} scenes.`)) {
+      setSyncingSubtitles(false);
+      return;
+    }
     try {
       await Promise.all(
         project.scenes.map((s) => api.updateScene(projectId, s.id, { subtitle: s.narration || "" })),
       );
-      const updated = await api.getProject(projectId);
+      const updated = await refreshProject();
       setProject(updated);
       toast.success("Subtitles updated to match narration for all scenes");
     } catch (e) {
@@ -245,26 +318,36 @@ export default function ProjectDetailPage() {
   };
 
   const handleRetry = async () => {
+    setRetrying(true);
     try {
       await api.retryProject(projectId);
       setProject((p) => (p ? { ...p, status: "generating" } : null));
+      refreshLatestJob().catch(() => {});
+      toast.success("Retry queued");
     } catch (e) {
-      alert((e as Error).message);
+      toast.error((e as Error).message);
+    } finally {
+      setRetrying(false);
     }
   };
 
   const handleCancel = async () => {
-    if (!confirm("Stop generating this video? You can retry later.")) return;
+    if (!requireConfirm("cancel-project", "Press stop again to confirm cancel.")) return;
+    setCancelling(true);
     try {
       await api.cancelProject(projectId);
       setProject((p) => (p ? { ...p, status: "failed" } : null));
+      toast.success("Generation stopped");
     } catch (e) {
-      alert((e as Error).message);
+      toast.error((e as Error).message);
+    } finally {
+      setCancelling(false);
     }
   };
 
   const handleDuplicate = async () => {
     if (!project) return;
+    setDuplicating(true);
     try {
       const newProject = await api.createProject({
         title: `${project.title} (Copy)`,
@@ -284,7 +367,9 @@ export default function ProjectDetailPage() {
       });
       router.push(`/projects/${newProject.id}`);
     } catch (e) {
-      alert((e as Error).message);
+      toast.error((e as Error).message);
+    } finally {
+      setDuplicating(false);
     }
   };
 
@@ -300,8 +385,14 @@ export default function ProjectDetailPage() {
     const newIdx = project.scenes.findIndex((s) => s.id === over.id);
     if (oldIdx === -1 || newIdx === -1) return;
     const reordered = arrayMove(project.scenes, oldIdx, newIdx);
+    const prevScenes = project.scenes;
     setProject({ ...project, scenes: reordered });
-    await api.reorderScenes(projectId, reordered.map((s) => s.id));
+    try {
+      await api.reorderScenes(projectId, reordered.map((s) => s.id));
+    } catch (e: unknown) {
+      setProject({ ...project, scenes: prevScenes });
+      toast.error(e instanceof Error ? e.message : "Could not reorder scenes");
+    }
   };
 
   if (loading) return <div className="flex justify-center py-20"><div className="h-8 w-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" /></div>;
@@ -311,10 +402,10 @@ export default function ProjectDetailPage() {
     setRegeneratingSceneId(sceneId);
     try {
       await api.regenerateSceneImage(projectId, sceneId);
-      const updated = await api.getProject(projectId);
+      const updated = await refreshProject();
       setProject(updated);
-    } catch (e: any) {
-      alert(e?.message || "Regenerate failed");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Regenerate failed");
     } finally {
       setRegeneratingSceneId(null);
     }
@@ -345,8 +436,8 @@ export default function ProjectDetailPage() {
       const job = await api.compileVideo(projectId);
       addJob(job);
       setProject((p) => (p ? { ...p, status: "generating", settings: mergedSettings } : null));
-    } catch (e: any) {
-      alert(e?.message || "Compile failed");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Compile failed");
     } finally {
       setCompiling(false);
     }
@@ -355,10 +446,11 @@ export default function ProjectDetailPage() {
   const videoPath = latestJob?.status === "completed"
     ? (latestJob.result?.video_url || latestJob.result?.video_path)
     : null;
+  const selectedScene = project.scenes.find((s) => s.id === selectedSceneId) || project.scenes[0] || null;
 
   return (
     <div className="space-y-6 w-full text-slate-900 dark:text-slate-100">
-      <div className="flex items-center gap-4">
+      <section className="flex items-center gap-4">
         <Button variant="ghost" size="icon" onClick={() => router.push("/projects")}><ArrowLeft className="h-5 w-5" /></Button>
         <div className="flex-1">
           <h1 className="text-2xl font-bold">{project.title}</h1>
@@ -373,21 +465,44 @@ export default function ProjectDetailPage() {
             </span>
           </div>
         </div>
-        <div className="flex gap-2">
-          {project.status === "ready_for_edit" && (
-            <Button variant="animated" onClick={handleCompile} disabled={compiling}>
-              {compiling ? <><div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Compiling...</> : <><Film className="h-4 w-4 mr-1" /> Compile Video</>}
+      </section>
+
+      <Card className="sticky top-2 z-20 border-cyan-500/20">
+        <CardContent className="py-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm text-muted-foreground">
+            Primary action:
+            <span className="ml-1 font-medium text-foreground">
+              {project.status === "ready_for_edit"
+                ? "Compile video"
+                : project.status === "generating"
+                  ? "Stop generation"
+                  : project.status === "failed"
+                    ? "Retry generation"
+                    : "Review output"}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {project.status === "ready_for_edit" && (
+              <Button variant="animated" onClick={handleCompile} loading={compiling} loadingLabel="Compiling...">
+                <Film className="h-4 w-4" /> Compile Video
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={handleDuplicate} loading={duplicating} loadingLabel="Cloning...">
+              <Copy className="h-4 w-4" /> Clone
             </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={handleDuplicate}><Copy className="h-4 w-4 mr-1" /> Clone</Button>
-          {project.status === "generating" && (
-            <Button variant="destructive" size="sm" onClick={handleCancel}><StopCircle className="h-4 w-4 mr-1" /> Stop</Button>
-          )}
-          {project.status === "failed" && (
-            <Button variant="animated" onClick={handleRetry}><RotateCcw className="h-4 w-4 mr-2" /> Retry</Button>
-          )}
-        </div>
-      </div>
+            {project.status === "generating" && (
+              <Button variant="destructive" size="sm" onClick={handleCancel} loading={cancelling} loadingLabel="Stopping...">
+                <StopCircle className="h-4 w-4" /> Stop
+              </Button>
+            )}
+            {project.status === "failed" && (
+              <Button variant="animated" onClick={handleRetry} loading={retrying} loadingLabel="Retrying...">
+                <RotateCcw className="h-4 w-4" /> Retry
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {project.status === "ready_for_edit" && (
         <Card>
@@ -606,7 +721,11 @@ export default function ProjectDetailPage() {
         <Card className="border-rose-200 dark:border-rose-800">
           <CardContent className="py-4">
             <p className="text-sm text-rose-600 dark:text-rose-400">
-              Last job failed: {typeof latestJob.error === "object" ? (latestJob.error as any).message || JSON.stringify(latestJob.error) : String(latestJob.error)}
+              Last job failed: {typeof latestJob.error === "object"
+                ? ((latestJob.error as { message?: unknown }).message
+                    ? String((latestJob.error as { message?: unknown }).message)
+                    : JSON.stringify(latestJob.error))
+                : String(latestJob.error)}
             </p>
           </CardContent>
         </Card>
@@ -619,7 +738,7 @@ export default function ProjectDetailPage() {
         </Card>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <section className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">Scenes ({project.scenes.length})</h2>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -628,47 +747,72 @@ export default function ProjectDetailPage() {
             onClick={handleSyncAllSubtitlesFromNarration}
             disabled={syncingSubtitles || !project.scenes.length}
             title="Set each scene’s subtitle to its narration (saved immediately)"
+            loading={syncingSubtitles}
+            loadingLabel="Syncing..."
           >
-            {syncingSubtitles ? (
-              <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <ArrowDownToLine className="h-4 w-4" />
-            )}
+            <ArrowDownToLine className="h-4 w-4" />
             Copy narration → subtitle (all)
           </Button>
-          <Button variant="outline" size="sm" onClick={handleAddScene}>
+          <Button variant="outline" size="sm" onClick={handleAddScene} loading={addingScene} loadingLabel="Adding...">
             <Plus className="h-4 w-4" /> Add Scene
           </Button>
         </div>
-      </div>
+      </section>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={project.scenes.map((s) => s.id)} strategy={verticalListSortingStrategy}>
-          <div className="space-y-4">
-            {project.scenes.map((scene, idx) => (
-              <SortableSceneCard
-                key={scene.id}
-                scene={scene}
-                idx={idx}
-                editingScene={editingScene}
-                setEditingScene={setEditingScene}
-                onUpdate={handleUpdateScene}
-                onDelete={handleDeleteScene}
-                onRegenerate={() => handleRegenerateImage(scene.id)}
-                regenerating={regeneratingSceneId === scene.id}
-                projectId={projectId}
-                onRefresh={() => api.getProject(projectId).then(setProject)}
-                projectSettings={project.settings}
-                matchScenesToAudio={matchScenesToAudio}
-                projectStatus={project.status}
-                onQueueAsset={(type) => handleQueueAssetJob(scene.id, type)}
-                incrementing={incrementingSceneId === scene.id}
-                onIncremental={() => handleIncrementalScene(scene.id)}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-4 items-start">
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={project.scenes.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-4">
+              {project.scenes.map((scene, idx) => (
+                <SortableSceneCard
+                  key={scene.id}
+                  scene={scene}
+                  idx={idx}
+                  selected={selectedScene?.id === scene.id}
+                  onSelect={() => {
+                    if (sceneEditorDirty && selectedScene && selectedScene.id !== scene.id) {
+                      const leave = window.confirm("You have unsaved scene edits. Discard and switch scene?");
+                      if (!leave) return;
+                      setSceneEditorDirty(false);
+                    }
+                    setSelectedSceneId(scene.id);
+                  }}
+                  onDelete={handleDeleteScene}
+                  deleteLoading={pendingDeleteSceneId === scene.id}
+                  onRegenerate={() => handleRegenerateImage(scene.id)}
+                  regenerating={regeneratingSceneId === scene.id}
+                  projectId={projectId}
+                  onRefresh={() => refreshProject().catch(() => {})}
+                  projectSettings={project.settings}
+                  matchScenesToAudio={matchScenesToAudio}
+                  projectStatus={project.status}
+                  onQueueAsset={(type) => handleQueueAssetJob(scene.id, type)}
+                  incrementing={incrementingSceneId === scene.id}
+                  onIncremental={() => handleIncrementalScene(scene.id)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+        <Card className="xl:sticky xl:top-24">
+          <CardHeader>
+            <CardTitle className="text-base">Selected Scene Details</CardTitle>
+          </CardHeader>
+          <CardContent className="xl:max-h-[calc(100vh-9rem)] xl:overflow-auto">
+            {selectedScene ? (
+              <SceneEditor
+                key={selectedScene.id}
+                scene={selectedScene}
+                onSave={(data) => handleUpdateScene(selectedScene.id, data)}
+                onCancel={() => setSceneEditorDirty(false)}
+                onDirtyChange={setSceneEditorDirty}
               />
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
+            ) : (
+              <p className="text-sm text-muted-foreground">Select a scene to edit.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <AICoPilot projectId={projectId} controlMode={project.control_mode || "autopilot"} />
     </div>
@@ -678,10 +822,10 @@ export default function ProjectDetailPage() {
 function SortableSceneCard({
   scene,
   idx,
-  editingScene,
-  setEditingScene,
-  onUpdate,
+  selected,
+  onSelect,
   onDelete,
+  deleteLoading,
   onRegenerate,
   regenerating,
   projectId,
@@ -695,10 +839,10 @@ function SortableSceneCard({
 }: {
   scene: Scene;
   idx: number;
-  editingScene: string | null;
-  setEditingScene: (id: string | null) => void;
-  onUpdate: (id: string, data: any) => void;
+  selected: boolean;
+  onSelect: () => void;
   onDelete: (id: string) => void;
+  deleteLoading: boolean;
   onRegenerate: () => void;
   regenerating: boolean;
   projectId: string;
@@ -736,7 +880,7 @@ function SortableSceneCard({
   const imgAlt = scene.image_prompt ? scene.image_prompt.slice(0, 120) : `Scene ${idx + 1}`;
 
   return (
-    <Card ref={setNodeRef} style={style} className="overflow-hidden">
+    <Card ref={setNodeRef} style={style} className={cn("overflow-hidden", selected && "border-cyan-500/50")}>
       <div className="flex">
         <div
           {...attributes}
@@ -745,17 +889,23 @@ function SortableSceneCard({
         >
           <GripVertical className="h-4 w-4 text-slate-400" />
         </div>
-        <div className="flex-1 p-4 min-w-0">
+        <div className="flex-1 p-4 min-w-0" role="button" tabIndex={0} onClick={onSelect} onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect();
+          }
+        }}>
           <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="secondary">Scene {idx + 1}</Badge>
+              {selected ? <Badge variant="inProgress">selected</Badge> : null}
               {scene.is_locked ? (
                 <Badge variant="outline" className="border-amber-500/50 text-amber-800 dark:text-amber-200">
                   locked
                 </Badge>
               ) : null}
               <Badge variant="secondary">
-                <Image className="h-3 w-3 mr-1" />
+                <ImageIcon className="h-3 w-3 mr-1" />
                 {scene.scene_type || "image"}
               </Badge>
               <span className="text-xs text-slate-500 dark:text-slate-400">
@@ -767,7 +917,7 @@ function SortableSceneCard({
                 </span>
               )}
             </div>
-            <div className="flex gap-1 shrink-0">
+            <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
               <label className="cursor-pointer" title="Upload image">
                 <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif" onChange={handleImageUpload} className="hidden" />
                 <span className="inline-flex items-center justify-center h-7 w-7 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 transition-all">
@@ -783,21 +933,21 @@ function SortableSceneCard({
                     variant="ghost"
                     size="sm"
                     className="h-7 px-1.5 text-[10px]"
-                    title="Queue async image generation (background job)"
+                    title="Queue background image generation"
                     onClick={() => onQueueAsset("image")}
                     disabled={!scene.image_prompt}
                   >
-                    Job img
+                    Generate image job
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 px-1.5 text-[10px]"
-                    title="Queue async TTS (background job)"
+                    title="Queue background narration generation"
                     onClick={() => onQueueAsset("audio")}
                     disabled={!scene.narration?.trim()}
                   >
-                    Job TTS
+                    Generate narration job
                   </Button>
                 </>
               )}
@@ -810,13 +960,10 @@ function SortableSceneCard({
                   onClick={onIncremental}
                   disabled={incrementing}
                 >
-                  {incrementing ? <div className="h-3 w-3 border border-current border-t-transparent rounded-full animate-spin" /> : "Δ video"}
+                  {incrementing ? <div className="h-3 w-3 border border-current border-t-transparent rounded-full animate-spin motion-reduce:animate-none" /> : "Re-render scene"}
                 </Button>
               )}
-              <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit scene" onClick={() => setEditingScene(editingScene === scene.id ? null : scene.id)}>
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-rose-500" onClick={() => onDelete(scene.id)}>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-rose-500" onClick={() => onDelete(scene.id)} loading={deleteLoading} loadingLabel="">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -905,46 +1052,37 @@ function SortableSceneCard({
                 )}
               </div>
 
-              {editingScene === scene.id ? (
-                <SceneEditor scene={scene} onSave={(data) => onUpdate(scene.id, data)} onCancel={() => setEditingScene(null)} />
-              ) : (
-                <div className="space-y-2">
-                  {scene.narration && (
-                    <p className="text-sm leading-relaxed">
-                      <Volume2 className="h-3.5 w-3.5 inline mr-1 text-slate-400 align-text-bottom" />
-                      {scene.narration}
-                    </p>
-                  )}
-                  {scene.subtitle && scene.subtitle !== scene.narration && (
-                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                      <Type className="h-3 w-3 inline mr-1 align-text-bottom" />
-                      Subtitle: {scene.subtitle}
-                    </p>
-                  )}
-                  {scene.image_prompt && (
-                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                      <Image className="h-3 w-3 inline mr-1 align-text-bottom" />
-                      {scene.image_prompt}
-                    </p>
-                  )}
-                  {scene.user_notes ? (
-                    <p className="text-xs text-amber-800/90 dark:text-amber-200/80 leading-relaxed border-l-2 border-amber-500/40 pl-2">
-                      Note: {scene.user_notes}
-                    </p>
-                  ) : null}
-                  {(scene.trim_start_sec || scene.trim_end_sec) ? (
-                    <p className="text-[10px] text-muted-foreground">
-                      Trim: start {scene.trim_start_sec ?? 0}s · end {scene.trim_end_sec ?? 0}s
-                    </p>
-                  ) : null}
-                  {audioAsset && assetMediaSrc(audioAsset) && (
-                    <div className="pt-2 border-t border-border/60">
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Narration audio</p>
-                      <audio controls className="h-9 w-full max-w-md" src={assetMediaSrc(audioAsset)} preload="metadata" />
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="space-y-2">
+                {scene.narration && (
+                  <p className="text-sm leading-relaxed line-clamp-2">
+                    <Volume2 className="h-3.5 w-3.5 inline mr-1 text-slate-400 align-text-bottom" />
+                    {scene.narration}
+                  </p>
+                )}
+                {scene.subtitle && scene.subtitle !== scene.narration && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-1">
+                    <Type className="h-3 w-3 inline mr-1 align-text-bottom" />
+                    Subtitle: {scene.subtitle}
+                  </p>
+                )}
+                {scene.image_prompt && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-2">
+                    <ImageIcon className="h-3 w-3 inline mr-1 align-text-bottom" />
+                    {scene.image_prompt}
+                  </p>
+                )}
+                {(scene.trim_start_sec || scene.trim_end_sec) ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Trim: start {scene.trim_start_sec ?? 0}s · end {scene.trim_end_sec ?? 0}s
+                  </p>
+                ) : null}
+                {audioAsset && assetMediaSrc(audioAsset) && (
+                  <div className="pt-2 border-t border-border/60">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Narration audio</p>
+                    <audio controls className="h-9 w-full max-w-md" src={assetMediaSrc(audioAsset)} preload="metadata" />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -960,7 +1098,17 @@ const IMAGE_STYLES = [
   { id: "illustration", name: "Illustration" },
 ];
 
-function SceneEditor({ scene, onSave, onCancel }: { scene: Scene; onSave: (data: any) => void; onCancel: () => void }) {
+function SceneEditor({
+  scene,
+  onSave,
+  onCancel,
+  onDirtyChange,
+}: {
+  scene: Scene;
+  onSave: (data: Partial<Scene>) => void;
+  onCancel: () => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const [form, setForm] = useState({
     narration: scene.narration || "",
     subtitle: scene.subtitle || scene.narration || "",
@@ -980,6 +1128,31 @@ function SceneEditor({ scene, onSave, onCancel }: { scene: Scene; onSave: (data:
   const [ovSeed, setOvSeed] = useState(baseSs.seed !== undefined && baseSs.seed !== null ? String(baseSs.seed) : "");
   const [transitions, setTransitions] = useState<{ id: string; name: string; description?: string }[]>([]);
   const [imageProviders, setImageProviders] = useState<{ name: string; configured?: boolean }[]>([]);
+
+  useEffect(() => {
+    const baseNarration = scene.narration || "";
+    const baseSubtitle = scene.subtitle || scene.narration || "";
+    const basePrompt = scene.image_prompt || "";
+    const baseNotes = scene.user_notes || "";
+    const baseStart = scene.trim_start_sec ?? 0;
+    const baseEnd = scene.trim_end_sec ?? 0;
+    const dirty =
+      form.narration !== baseNarration ||
+      form.subtitle !== baseSubtitle ||
+      form.image_prompt !== basePrompt ||
+      form.user_notes !== baseNotes ||
+      form.trim_start_sec !== baseStart ||
+      form.trim_end_sec !== baseEnd ||
+      form.duration !== scene.duration ||
+      form.transition_type !== scene.transition_type ||
+      form.scene_type !== scene.scene_type ||
+      form.is_locked !== !!scene.is_locked ||
+      ovProvider !== String(baseSs.image_provider || "") ||
+      ovStyle !== String(baseSs.image_style || "") ||
+      ovNeg !== String(baseSs.negative_prompt || "") ||
+      ovSeed !== (baseSs.seed !== undefined && baseSs.seed !== null ? String(baseSs.seed) : "");
+    onDirtyChange(dirty);
+  }, [baseSs.image_provider, baseSs.image_style, baseSs.negative_prompt, baseSs.seed, form, onDirtyChange, ovNeg, ovProvider, ovSeed, ovStyle, scene.duration, scene.image_prompt, scene.is_locked, scene.narration, scene.scene_type, scene.subtitle, scene.transition_type, scene.trim_end_sec, scene.trim_start_sec, scene.user_notes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1023,6 +1196,7 @@ function SceneEditor({ scene, onSave, onCancel }: { scene: Scene; onSave: (data:
       scene_settings: buildSceneSettings(),
       user_notes: form.user_notes.trim() || null,
     });
+    onDirtyChange(false);
   };
 
   const transitionFallback = useMemo(

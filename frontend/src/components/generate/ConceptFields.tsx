@@ -4,6 +4,7 @@ import { memo } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
 import type { GenerateFormValues } from "@/app/generate/schema";
 
 const SNIPPETS: Record<string, string[]> = {
@@ -40,9 +41,15 @@ const SNIPPETS: Record<string, string[]> = {
 };
 
 export const ConceptFields = memo(function ConceptFields() {
-  const { register, setValue, control } = useFormContext<GenerateFormValues>();
+  const {
+    register,
+    setValue,
+    control,
+    formState: { errors, touchedFields, submitCount },
+  } = useFormContext<GenerateFormValues>();
   const storyType = useWatch({ control, name: "story_type" });
   const examples = SNIPPETS[storyType] ?? SNIPPETS.general;
+  const showTitleError = (touchedFields.title || submitCount > 0) && !!errors.title;
 
   return (
     <div
@@ -51,16 +58,18 @@ export const ConceptFields = memo(function ConceptFields() {
       aria-labelledby="content-tab-concept"
       className="space-y-3"
     >
-      <div>
-        <label className="text-sm font-medium mb-1.5 block" htmlFor="gen-title">
-          Title / Concept
-        </label>
+      <Field
+        id="gen-title"
+        label="Title / Concept"
+        required
+        error={showTitleError ? (errors.title?.message as string) || "Please enter a concept or switch to script mode." : undefined}
+      >
         <Input
-          id="gen-title"
           placeholder="e.g., 5 Mysterious Places on Earth..."
+          className={showTitleError ? "border-red-500 focus-visible:ring-red-500" : undefined}
           {...register("title")}
         />
-      </div>
+      </Field>
       <div className="flex flex-wrap gap-2 items-center">
         <span className="text-xs text-slate-500 dark:text-slate-400">Try an example:</span>
         {examples.map((text, i) => (

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -24,33 +24,33 @@ class GenerateVideoRequest(BaseModel):
     story_template: StoryTemplateField = "default"
     custom_script: str | None = None
     scenes: list[GenerateVideoSceneInput] | None = None
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
-    image_provider: str = "replicate"
-    image_style: str = "realistic"
-    tts_provider: str = "edge"
-    tts_voice: str = "en-US-ChristopherNeural"
-    resolution: str = "1080x1920"
-    transition: str = "fade"
+    llm_provider: str = Field(default="openai", min_length=1)
+    llm_model: str = Field(default="gpt-4o-mini", min_length=1)
+    image_provider: str = Field(default="replicate", min_length=1)
+    image_style: str = Field(default="realistic", min_length=1)
+    tts_provider: str = Field(default="edge", min_length=1)
+    tts_voice: str = Field(default="en-US-ChristopherNeural", min_length=1)
+    resolution: str = Field(default="1080x1920", min_length=3)
+    transition: str = Field(default="fade", min_length=1)
     subtitle_enabled: bool = True
-    subtitle_source: str = "transcription"  # "transcription" | "llm"
+    subtitle_source: Literal["llm", "transcription"] = "llm"
     generate_subtitles: bool = True  # When true, LLM generates subtitle text per scene
-    transcription_provider: str = "openai"  # openai | groq
-    transcription_language: str = "en"  # ISO 639-1 language code for speech-to-text
-    subtitle_font: str = "Arial"
-    subtitle_size: int = 48
-    subtitle_color: str = "#FFFFFF"
-    subtitle_position: str = "bottom"
+    transcription_provider: Literal["openai", "groq"] = "openai"
+    transcription_language: str = Field(default="en", pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
+    subtitle_font: str = Field(default="Arial", min_length=1)
+    subtitle_size: int = Field(default=48, ge=24, le=96)
+    subtitle_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_position: Literal["bottom", "top", "center"] = "bottom"
     background_music: str | None = None
-    background_music_volume: float = 0.15
-    scene_count: int = 5
-    word_count: int = 400
-    scene_duration: float = Field(5.0, ge=1.0, le=60.0)
+    background_music_volume: float = Field(default=0.15, ge=0.0, le=1.0)
+    scene_count: int = Field(default=5, ge=2, le=15)
+    word_count: int = Field(default=400, ge=150, le=800)
+    scene_duration: float = Field(default=5.0, ge=1.0, le=60.0)
     prepare_only: bool = False
     """When True, stop after per-scene image+TTS assets (no final FFmpeg composite)."""
     storyboard_only: bool = False
     """When True, stop after LLM storyboard + Scene rows — no image/TTS generation."""
-    control_mode: str = Field(
+    control_mode: Literal["autopilot", "co_pilot", "manual"] = Field(
         default="autopilot",
         description="autopilot | co_pilot | manual",
     )

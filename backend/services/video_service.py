@@ -186,7 +186,7 @@ async def render_video(
     image_provider = settings.get("image_provider") or app_settings.default_image_provider
     image_style = settings.get("image_style") or app_settings.default_image_style
     subtitle_enabled = settings.get("subtitle_enabled", True)
-    subtitle_source = settings.get("subtitle_source", "transcription")
+    subtitle_source = settings.get("subtitle_source", "llm")
     subtitle_settings = {
         "font": settings.get("subtitle_font", "Arial"),
         "font_size": settings.get("subtitle_size", 48),

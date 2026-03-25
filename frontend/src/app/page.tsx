@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Video, TrendingUp, Clock, CheckCircle, AlertCircle, RotateCcw, RefreshCcw, BarChart3, Film, BarChart2, ListTodo, FolderOpen, Plus } from "lucide-react";
+import { Video, TrendingUp, Clock, CheckCircle, AlertCircle, RotateCcw, RefreshCcw, BarChart3, Film, BarChart2, ListTodo, FolderOpen, Plus, BellRing } from "lucide-react";
 import { BentoGrid } from "@/components/ui/bento-grid";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -10,54 +10,55 @@ import { LinearProgress } from "@/components/ui/progress-linear";
 import { api, getMediaUrl } from "@/lib/api";
 import { useProjectStore } from "@/stores/projectStore";
 import type { ProjectListItem, Job } from "@/lib/types";
+import { toast } from "sonner";
+import {
+  useDashboardSummaryQuery,
+  useJobsQuery,
+  useProjectsQuery,
+  useRetryJobMutation,
+  useRetryProjectMutation,
+  queryKeys,
+} from "@/lib/queries";
+import {
+  buildActivityBuckets,
+  computeDashboardMetrics,
+  computeDelta,
+  type DashboardRange,
+} from "@/lib/dashboard-metrics";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function DashboardPage() {
   const { projects, setProjects, jobs, setJobs } = useProjectStore();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [range, setRange] = useState<"7" | "30">("7");
+  const [range, setRange] = useState<DashboardRange>("7");
   const [preview, setPreview] = useState<{ url: string; x: number; y: number } | null>(null);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
-
-  const fetchDashboard = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [proj, job] = await Promise.all([
-        api.listProjects({ limit: 100 }),
-        api.listJobs({ limit: 100 }),
-      ]);
-      setProjects(proj);
-      setJobs(job);
-      setLastUpdated(new Date());
-    } catch (err: any) {
-      setError(err?.message || "Failed to load dashboard data.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [retryingProjectId, setRetryingProjectId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { data: fetchedProjects, isLoading: loadingProjects, error: projectsError } = useProjectsQuery();
+  const { data: fetchedJobs, isLoading: loadingJobs, error: jobsError } = useJobsQuery();
+  const { data: summary } = useDashboardSummaryQuery();
+  const retryJobMutation = useRetryJobMutation();
+  const retryProjectMutation = useRetryProjectMutation();
+  const loading = loadingProjects || loadingJobs;
+  const error = projectsError || jobsError;
 
   useEffect(() => {
-    fetchDashboard();
-  }, []);
+    if (fetchedProjects) setProjects(fetchedProjects);
+    if (fetchedJobs) setJobs(fetchedJobs);
+    setLastUpdated(new Date());
+  }, [fetchedProjects, fetchedJobs, setProjects, setJobs]);
 
-  const projectStats = {
-    total: projects.length,
-    completed: projects.filter((p) => p.status === "completed").length,
-    inProgress: projects.filter((p) => p.status === "generating").length,
-    failed: projects.filter((p) => p.status === "failed").length,
-    activeJobs: jobs.filter((j) => j.status === "queued" || j.status === "in_progress").length,
+  const refreshDashboard = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }),
+    ]);
+    setLastUpdated(new Date());
   };
-  const jobStats = {
-    total: jobs.length,
-    completed: jobs.filter((j) => j.status === "completed").length,
-    inProgress: jobs.filter((j) => j.status === "in_progress" || j.status === "queued").length,
-    failed: jobs.filter((j) => j.status === "failed").length,
-    activeJobs: jobs.filter((j) => j.status === "queued" || j.status === "in_progress").length,
-  };
-  const useJobStatsAsPrimary = projects.length === 0 && jobs.length > 0;
-  const stats = useJobStatsAsPrimary ? jobStats : projectStats;
+
+  const metrics = useMemo(() => computeDashboardMetrics(projects, jobs), [projects, jobs]);
 
   const projectMap = useMemo(() => {
     const map: Record<string, ProjectListItem> = {};
@@ -66,74 +67,30 @@ export default function DashboardPage() {
   }, [projects]);
 
   const analytics = useMemo(() => {
-    const days = range === "7" ? 7 : 30;
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    const start = new Date(end);
-    start.setDate(end.getDate() - (days - 1));
-    start.setHours(0, 0, 0, 0);
-
-    const buckets: { label: string; completed: number; failed: number; date: Date }[] = [];
-    for (let i = 0; i < days; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      buckets.push({ label, completed: 0, failed: 0, date: d });
-    }
-
-    let totalDuration = 0;
-    let totalProcessingMs = 0;
-    let processingCount = 0;
-    const byType: Record<string, number> = {};
-
-    for (const job of jobs) {
-      if (job.type) byType[job.type] = (byType[job.type] || 0) + 1;
-      if (job.status === "completed" && job.result?.duration) {
-        totalDuration += Number(job.result.duration);
-      }
-      if (job.status === "completed" && job.created_at && job.completed_at) {
-        const created = parseTimestamp(job.created_at);
-        const completed = parseTimestamp(job.completed_at);
-        if (created && completed) {
-          totalProcessingMs += completed.getTime() - created.getTime();
-          processingCount += 1;
-        }
-      }
-
-      const completedAt = job.status === "completed" ? parseTimestamp(job.completed_at) : null;
-      const created = parseTimestamp(job.created_at);
-      const ts = (completedAt || created);
-      if (!ts || ts < start || ts > end) continue;
-      const idx = Math.floor((ts.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
-      if (buckets[idx]) {
-        if (job.status === "completed") buckets[idx].completed += 1;
-        else if (job.status === "failed") buckets[idx].failed += 1;
-      }
-    }
-
-    const completed = jobs.filter((j) => j.status === "completed").length;
-    const failed = jobs.filter((j) => j.status === "failed").length;
-    const successRate = completed + failed > 0 ? Math.round((completed / (completed + failed)) * 100) : 100;
+    const buckets = buildActivityBuckets(jobs, range);
     const maxCount = Math.max(1, ...buckets.map((b) => b.completed + b.failed));
-    const avgProcessingMin = processingCount > 0 ? Math.round(totalProcessingMs / processingCount / 60000) : 0;
-
+    const splitPoint = Math.floor(buckets.length / 2);
+    const previousCount = buckets.slice(0, splitPoint).reduce((acc, b) => acc + b.completed + b.failed, 0);
+    const currentCount = buckets.slice(splitPoint).reduce((acc, b) => acc + b.completed + b.failed, 0);
     return {
       buckets,
       maxCount,
-      successRate,
-      totalDurationMin: Math.round(totalDuration / 60),
-      byType,
-      avgProcessingMin,
+      throughputDelta: computeDelta(currentCount, previousCount),
       totalInRange: buckets.reduce((sum, b) => sum + b.completed + b.failed, 0),
     };
   }, [jobs, range]);
 
   const handleRetry = async (id: string) => {
     try {
-      await api.retryProject(id);
-      const updated = await api.listProjects({ limit: 10 });
-      setProjects(updated);
-    } catch {}
+      setRetryingProjectId(id);
+      await retryProjectMutation.mutateAsync(id);
+      toast.success("Retry queued");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Retry failed";
+      toast.error(message);
+    } finally {
+      setRetryingProjectId(null);
+    }
   };
 
   const updatePreviewPosition = (evt: React.MouseEvent) => {
@@ -158,10 +115,15 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <span className="text-sm text-slate-500 dark:text-slate-400">At a glance</span>
         <div className="flex items-center gap-2">
+          {summary && (
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {summary.jobs.in_progress + summary.jobs.queued} active jobs
+            </span>
+          )}
           {lastUpdated && (
             <span className="text-xs text-slate-500 dark:text-slate-400">Updated {lastUpdated.toLocaleTimeString()}</span>
           )}
-          <Button variant="ghost" size="icon" onClick={fetchDashboard} disabled={loading} title="Refresh">
+          <Button variant="ghost" size="icon" onClick={refreshDashboard} disabled={loading} title="Refresh">
             <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </Button>
         </div>
@@ -170,8 +132,8 @@ export default function DashboardPage() {
       <BentoGrid
         items={[
           {
-            title: useJobStatsAsPrimary ? "Total Jobs" : "Total Projects",
-            meta: String(stats.total),
+            title: "Total Projects",
+            meta: String(metrics.totalProjects),
             description: "All projects and generation jobs in your workspace",
             icon: <Video className="w-4 h-4 text-cyan-500" />,
             accentColor: "cyan",
@@ -182,7 +144,7 @@ export default function DashboardPage() {
           },
           {
             title: "Completed",
-            meta: String(stats.completed),
+            meta: String(metrics.completedProjects),
             description: "Successfully finished generations",
             icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,
             accentColor: "emerald",
@@ -191,35 +153,35 @@ export default function DashboardPage() {
           },
           {
             title: "In Progress",
-            meta: String(stats.inProgress),
+            meta: String(metrics.inProgressProjects),
             description: "Currently generating or queued",
             icon: <Clock className="w-4 h-4 text-amber-500" />,
             accentColor: "amber",
-            status: stats.inProgress > 0 ? "Running" : "Idle",
+            status: metrics.inProgressProjects > 0 ? "Running" : "Idle",
             tags: ["Queue", "Processing"],
           },
           {
             title: "Failed",
-            meta: String(stats.failed),
+            meta: String(metrics.failedProjects),
             description: "Jobs that encountered errors",
             icon: <AlertCircle className="w-4 h-4 text-rose-500" />,
             accentColor: "rose",
-            status: stats.failed > 0 ? "Needs attention" : "Clear",
+            status: metrics.failedProjects > 0 ? "Needs attention" : "Clear",
             tags: ["Errors", "Retry"],
             colSpan: 2,
           },
           {
             title: "Success Rate",
-            meta: `${analytics.successRate}%`,
+            meta: `${metrics.successRate}%`,
             description: "Percentage of finished jobs completed successfully",
             icon: <BarChart3 className="w-4 h-4 text-emerald-500" />,
             accentColor: "emerald",
-            status: analytics.successRate >= 90 ? "Healthy" : "Review",
+            status: metrics.successRate >= 90 ? "Healthy" : "Review",
             tags: ["Analytics", "Quality"],
           },
           {
             title: "Content Produced",
-            meta: `${analytics.totalDurationMin} min`,
+            meta: `${metrics.totalDurationMin} min`,
             description: "Total video runtime from completed generations",
             icon: <Film className="w-4 h-4 text-violet-500" />,
             accentColor: "violet",
@@ -228,7 +190,7 @@ export default function DashboardPage() {
           },
           {
             title: "Avg. Processing",
-            meta: `${analytics.avgProcessingMin}m`,
+            meta: `${metrics.avgProcessingMin}m`,
             description: "Average time per completed job",
             icon: <TrendingUp className="w-4 h-4 text-sky-500" />,
             accentColor: "sky",
@@ -240,7 +202,7 @@ export default function DashboardPage() {
 
       {error && (
         <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 p-4 shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
-          <p className="text-sm text-rose-500">{error}</p>
+          <p className="text-sm text-rose-500">{(error as Error).message || "Failed to load dashboard data."}</p>
         </div>
       )}
       {!loading && !error && projects.length === 0 && jobs.length === 0 && (
@@ -271,33 +233,32 @@ export default function DashboardPage() {
         </div>
         <div className="p-6 pt-0 space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 dark:from-emerald-500/20 dark:to-emerald-500/10">
+            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-linear-to-br from-emerald-500/10 to-emerald-500/5 dark:from-emerald-500/20 dark:to-emerald-500/10">
               <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Success Rate</p>
-              <p className="text-2xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">{analytics.successRate}%</p>
+              <p className="text-2xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">{metrics.successRate}%</p>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">of finished jobs completed</p>
             </div>
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-gradient-to-br from-cyan-500/10 to-cyan-500/5 dark:from-cyan-500/20 dark:to-cyan-500/10">
+            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-linear-to-br from-cyan-500/10 to-cyan-500/5 dark:from-cyan-500/20 dark:to-cyan-500/10">
               <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Content Produced</p>
-              <p className="text-2xl font-bold tabular-nums text-cyan-600 dark:text-cyan-400 mt-1">{analytics.totalDurationMin} min</p>
+              <p className="text-2xl font-bold tabular-nums text-cyan-600 dark:text-cyan-400 mt-1">{metrics.totalDurationMin} min</p>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">total video runtime</p>
             </div>
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-gradient-to-br from-violet-500/10 to-violet-500/5 dark:from-violet-500/20 dark:to-violet-500/10">
+            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-linear-to-br from-violet-500/10 to-violet-500/5 dark:from-violet-500/20 dark:to-violet-500/10">
               <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Avg. Processing</p>
-              <p className="text-2xl font-bold tabular-nums text-violet-600 dark:text-violet-400 mt-1">{analytics.avgProcessingMin}m</p>
+              <p className="text-2xl font-bold tabular-nums text-violet-600 dark:text-violet-400 mt-1">{metrics.avgProcessingMin}m</p>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">per completed job</p>
             </div>
             <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-slate-50/80 dark:bg-zinc-800/70">
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">By Type</p>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Insight</p>
               <div className="mt-2 space-y-1">
-                {Object.entries(analytics.byType).map(([type, count]) => (
-                  <div key={type} className="flex justify-between text-sm">
-                    <span className="text-slate-500 dark:text-slate-400 capitalize">{type.replace(/_/g, " ")}</span>
-                    <span className="font-medium tabular-nums text-slate-900 dark:text-slate-100">{count}</span>
-                  </div>
-                ))}
-                {Object.keys(analytics.byType).length === 0 && (
-                  <p className="text-sm text-slate-500 dark:text-slate-400">No jobs yet</p>
-                )}
+                <p className="text-sm text-slate-700 dark:text-slate-200">
+                  Throughput delta: <span className={analytics.throughputDelta >= 0 ? "text-emerald-500" : "text-rose-500"}>
+                    {analytics.throughputDelta >= 0 ? "+" : ""}{analytics.throughputDelta}%
+                  </span>
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Top failure: {metrics.topFailureReason || "No failures in range"}
+                </p>
               </div>
             </div>
           </div>
@@ -342,6 +303,58 @@ export default function DashboardPage() {
               <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-rose-500/80" /> Failed</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 p-6 space-y-4">
+        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <BellRing className="w-5 h-5 text-amber-500" />
+          Action Center
+        </h3>
+        <div className="grid md:grid-cols-2 gap-3">
+          {jobs.filter((j) => j.status === "failed").slice(0, 3).map((job) => (
+            <div key={job.id} className="p-3 rounded-lg border border-slate-200/70 dark:border-zinc-700 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">{job.type.replace(/_/g, " ")}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Job failed - needs retry</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={retryingJobId === job.id}
+                onClick={async () => {
+                  setRetryingJobId(job.id);
+                  try {
+                    await retryJobMutation.mutateAsync(job.id);
+                    toast.success("Retry queued");
+                  } catch (e: unknown) {
+                    const message = e instanceof Error ? e.message : "Retry failed";
+                    toast.error(message);
+                  } finally {
+                    setRetryingJobId(null);
+                  }
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                Retry
+              </Button>
+            </div>
+          ))}
+          {projects.filter((p) => p.status === "failed").slice(0, 3).map((project) => (
+            <div key={project.id} className="p-3 rounded-lg border border-slate-200/70 dark:border-zinc-700 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">{project.title}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Project failed - retry render</p>
+              </div>
+              <Button size="sm" variant="outline" disabled={retryingProjectId === project.id} onClick={() => handleRetry(project.id)}>
+                <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                Retry
+              </Button>
+            </div>
+          ))}
+          {jobs.filter((j) => j.status === "failed").length === 0 && projects.filter((p) => p.status === "failed").length === 0 && (
+            <p className="text-sm text-slate-500 dark:text-slate-400">No actions pending.</p>
+          )}
         </div>
       </div>
 
@@ -408,11 +421,11 @@ export default function DashboardPage() {
                   onRetry={async () => {
                     setRetryingJobId(job.id);
                     try {
-                      const newJob = await api.retryJob(job.id);
-                      useProjectStore.getState().addJob(newJob);
-                      await fetchDashboard();
-                    } catch (e: any) {
-                      alert(e?.message || "Retry failed");
+                      await retryJobMutation.mutateAsync(job.id);
+                      toast.success("Retry queued");
+                    } catch (e: unknown) {
+                      const message = e instanceof Error ? e.message : "Retry failed";
+                      toast.error(message);
                     } finally {
                       setRetryingJobId(null);
                     }
@@ -460,7 +473,13 @@ export default function DashboardPage() {
                   <div className="flex items-center gap-2">
                     <StatusBadge status={project.status} />
                     {project.status === "failed" && (
-                      <Button variant="ghost" size="sm" onClick={() => handleRetry(project.id)} title="Retry">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRetry(project.id)}
+                        title="Retry"
+                        disabled={retryingProjectId === project.id}
+                      >
                         <RotateCcw className="h-3.5 w-3.5" />
                       </Button>
                     )}
@@ -512,27 +531,6 @@ function extractMediaPath(raw: string): string {
   }
 }
 
-function parseTimestamp(value: unknown): Date | null {
-  if (typeof value === "number") {
-    const ms = value > 1e12 ? value : value * 1000;
-    const dt = new Date(ms);
-    return Number.isNaN(dt.getTime()) ? null : dt;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    if (/^\d+$/.test(trimmed)) {
-      const num = Number(trimmed);
-      const ms = num > 1e12 ? num : num * 1000;
-      const dt = new Date(ms);
-      return Number.isNaN(dt.getTime()) ? null : dt;
-    }
-    const dt = new Date(trimmed);
-    return Number.isNaN(dt.getTime()) ? null : dt;
-  }
-  return null;
-}
-
 function JobRow({
   job,
   projectTitle,
@@ -552,7 +550,7 @@ function JobRow({
 }) {
   const previewPath = (job.result?.video_path || "") as string;
   const rawPreview = (job.result?.video_url || job.result?.video_path || "") as string;
-  const created = parseTimestamp(job.created_at);
+  const created = job.created_at ? new Date(job.created_at) : null;
   return (
     <div
       className="group relative flex items-center justify-between p-4 rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 hover:shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)] hover:-translate-y-0.5 transition-all duration-200"

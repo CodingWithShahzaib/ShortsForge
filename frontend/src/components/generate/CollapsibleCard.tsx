@@ -9,11 +9,25 @@ type Props = {
   title: ReactNode;
   icon?: ReactNode;
   defaultOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 };
 
-export const CollapsibleCard = memo(function CollapsibleCard({ title, icon, defaultOpen = true, children }: Props) {
-  const [open, setOpen] = useState(defaultOpen);
+export const CollapsibleCard = memo(function CollapsibleCard({
+  title,
+  icon,
+  defaultOpen = true,
+  open: controlledOpen,
+  onOpenChange,
+  children,
+}: Props) {
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    onOpenChange?.(next);
+    if (controlledOpen === undefined) setInternalOpen(next);
+  };
 
   return (
     <Card>
@@ -29,7 +43,7 @@ export const CollapsibleCard = memo(function CollapsibleCard({ title, icon, defa
             size="sm"
             className="shrink-0 h-8 w-8 p-0"
             aria-expanded={open}
-            onClick={() => setOpen((o) => !o)}
+            onClick={() => setOpen(!open)}
             aria-label={open ? "Collapse section" : "Expand section"}
           >
             <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />

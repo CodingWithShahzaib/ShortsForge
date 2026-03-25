@@ -4,6 +4,7 @@ import { memo } from "react";
 import { useWatch } from "react-hook-form";
 import type { Control } from "react-hook-form";
 import type { GenerateFormValues } from "@/app/generate/schema";
+import { Badge } from "@/components/ui/badge";
 
 type Props = { control: Control<GenerateFormValues> };
 
@@ -13,6 +14,10 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
   const scene_duration = useWatch({ control, name: "scene_duration" });
   const image_provider = useWatch({ control, name: "image_provider" });
   const tts_provider = useWatch({ control, name: "tts_provider" });
+  const subtitle_enabled = useWatch({ control, name: "subtitle_enabled" });
+  const totalDuration = Math.max(1, Math.round(scene_count * scene_duration));
+  const estRuntimeMin = Math.max(1, Math.round(totalDuration / 20));
+  const riskyCombo = scene_count >= 10 && scene_duration >= 6;
 
   return (
     <div className="text-sm space-y-2 text-slate-500 dark:text-slate-400">
@@ -35,6 +40,18 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
       <div className="flex justify-between">
         <span>TTS</span>
         <span className="text-slate-900 dark:text-slate-100">{tts_provider}</span>
+      </div>
+      <div className="flex justify-between">
+        <span>Estimated video length</span>
+        <span className="text-slate-900 dark:text-slate-100">~{totalDuration}s</span>
+      </div>
+      <div className="flex justify-between">
+        <span>Estimated generation time</span>
+        <span className="text-slate-900 dark:text-slate-100">~{estRuntimeMin} min</span>
+      </div>
+      <div className="pt-1 flex flex-wrap gap-1.5">
+        {riskyCombo ? <Badge variant="destructive">High runtime risk</Badge> : null}
+        {!subtitle_enabled ? <Badge variant="outline">Subtitles disabled</Badge> : null}
       </div>
     </div>
   );

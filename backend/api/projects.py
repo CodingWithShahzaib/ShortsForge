@@ -8,7 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,22 +49,74 @@ async def list_projects(
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Project).order_by(Project.created_at.desc()).offset(skip).limit(limit)
+    scene_counts_sq = (
+        select(
+            Scene.project_id.label("project_id"),
+            func.count(Scene.id).label("scene_count"),
+        )
+        .group_by(Scene.project_id)
+        .subquery()
+    )
+    query = (
+        select(Project, func.coalesce(scene_counts_sq.c.scene_count, 0).label("scene_count"))
+        .outerjoin(scene_counts_sq, scene_counts_sq.c.project_id == Project.id)
+        .order_by(Project.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
     if status:
         query = query.where(Project.status == status)
     result = await db.execute(query)
-    projects = result.scalars().all()
-    out = []
-    for p in projects:
-        scene_count_q = await db.execute(
-            select(func.count(Scene.id)).where(Scene.project_id == p.id)
+    rows = result.all()
+    return [
+        ProjectListOut(
+            id=p.id,
+            title=p.title,
+            story_type=p.story_type,
+            status=p.status,
+            created_at=p.created_at,
+            scene_count=int(scene_count or 0),
         )
-        count = scene_count_q.scalar() or 0
-        out.append(ProjectListOut(
-            id=p.id, title=p.title, story_type=p.story_type,
-            status=p.status, created_at=p.created_at, scene_count=count,
-        ))
-    return out
+        for p, scene_count in rows
+    ]
+
+
+@router.get("/summary")
+async def dashboard_summary(db: AsyncSession = Depends(get_db)):
+    projects_q = await db.execute(
+        select(
+            func.count(Project.id).label("total"),
+            func.coalesce(func.sum(case((Project.status == "completed", 1), else_=0)), 0).label("completed"),
+            func.coalesce(func.sum(case((Project.status == "generating", 1), else_=0)), 0).label("generating"),
+            func.coalesce(func.sum(case((Project.status == "failed", 1), else_=0)), 0).label("failed"),
+        )
+    )
+    jobs_q = await db.execute(
+        select(
+            func.count(Job.id).label("total"),
+            func.coalesce(func.sum(case((Job.status == "completed", 1), else_=0)), 0).label("completed"),
+            func.coalesce(func.sum(case((Job.status == "failed", 1), else_=0)), 0).label("failed"),
+            func.coalesce(func.sum(case((Job.status == "queued", 1), else_=0)), 0).label("queued"),
+            func.coalesce(func.sum(case((Job.status == "in_progress", 1), else_=0)), 0).label("in_progress"),
+        )
+    )
+    p = projects_q.one()
+    j = jobs_q.one()
+    return {
+        "projects": {
+            "total": int(p.total or 0),
+            "completed": int(p.completed or 0),
+            "generating": int(p.generating or 0),
+            "failed": int(p.failed or 0),
+        },
+        "jobs": {
+            "total": int(j.total or 0),
+            "completed": int(j.completed or 0),
+            "failed": int(j.failed or 0),
+            "queued": int(j.queued or 0),
+            "in_progress": int(j.in_progress or 0),
+        },
+    }
 
 
 @router.post("/", response_model=ProjectOut, status_code=201)

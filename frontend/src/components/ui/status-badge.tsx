@@ -14,14 +14,14 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  const variantMap: Record<string, "default" | "destructive" | "secondary"> = {
-    completed: "default",
-    generating: "secondary",
-    in_progress: "secondary",
-    queued: "secondary",
-    failed: "destructive",
+  const variantMap: Record<string, "success" | "error" | "warning" | "inProgress" | "secondary"> = {
+    completed: "success",
+    generating: "inProgress",
+    in_progress: "inProgress",
+    queued: "warning",
+    failed: "error",
     draft: "secondary",
-    ready_for_edit: "default",
+    ready_for_edit: "success",
     cancelled: "secondary",
   };
   const label = STATUS_LABELS[status] ?? status.replace(/_/g, " ");
@@ -31,7 +31,7 @@ export function StatusBadge({ status }: { status: string }) {
 
   if (isActive) {
     return (
-      <Badge variant={variant} className="gap-1.5 border-primary/30 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary">
+      <Badge variant={variant} className="gap-1.5">
         <span className="relative flex h-1.5 w-1.5">
           <span className="absolute inline-flex h-full w-full rounded-full bg-primary opacity-75 animate-ping" />
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />

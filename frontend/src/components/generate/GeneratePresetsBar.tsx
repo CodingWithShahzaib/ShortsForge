@@ -37,6 +37,22 @@ export const GeneratePresetsBar = memo(function GeneratePresetsBar({ resolutionI
     toast.message("Applied high quality preset");
   };
 
+  const applyNoSubtitles = () => {
+    setValue("subtitle_enabled", false, { shouldDirty: true });
+    setValue("generate_subtitles", false, { shouldDirty: true });
+    toast.message("Applied no subtitles preset");
+  };
+
+  const applyQualityNarration = () => {
+    setValue("resolution", pickRes("heavier"), { shouldDirty: true });
+    setValue("scene_count", 6, { shouldDirty: true });
+    setValue("word_count", 460, { shouldDirty: true });
+    setValue("scene_duration", 5, { shouldDirty: true });
+    setValue("subtitle_enabled", true, { shouldDirty: true });
+    setValue("subtitle_source", "transcription", { shouldDirty: true });
+    toast.message("Applied quality narration preset");
+  };
+
   const saveTemplate = () => {
     const name = window.prompt("Template name");
     if (!name?.trim()) return;
@@ -73,9 +89,19 @@ export const GeneratePresetsBar = memo(function GeneratePresetsBar({ resolutionI
       <Button type="button" variant="secondary" size="sm" className="h-8 text-xs" onClick={applyFastDraft}>
         Fast draft
       </Button>
+      <p className="text-[11px] text-muted-foreground mr-1">Fastest: low runtime, lower detail</p>
+      <Button type="button" variant="secondary" size="sm" className="h-8 text-xs" onClick={applyQualityNarration}>
+        Quality narration
+      </Button>
+      <p className="text-[11px] text-muted-foreground mr-1">Balanced: better voice + subtitle quality</p>
+      <Button type="button" variant="secondary" size="sm" className="h-8 text-xs" onClick={applyNoSubtitles}>
+        No subtitles
+      </Button>
+      <p className="text-[11px] text-muted-foreground mr-1">Lower processing cost, cleaner frames</p>
       <Button type="button" variant="secondary" size="sm" className="h-8 text-xs" onClick={applyHighQuality}>
         High quality
       </Button>
+      <p className="text-[11px] text-muted-foreground mr-1">Longest runtime, highest visual detail</p>
       <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={saveTemplate}>
         Save template
       </Button>

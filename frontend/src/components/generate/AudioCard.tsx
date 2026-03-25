@@ -5,7 +5,7 @@ import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Volume2, Type, Music, Upload, Headphones } from "lucide-react";
+import { Type, Music, Upload, Headphones } from "lucide-react";
 import type { GenerateFormValues } from "@/app/generate/schema";
 import type { Voice } from "@/lib/types";
 
@@ -32,9 +32,15 @@ export const AudioCard = memo(function AudioCard({
   onVoicePreview,
   onMusicUpload,
 }: Props) {
-  const { control, register } = useFormContext<GenerateFormValues>();
+  const {
+    control,
+    register,
+    formState: { errors, touchedFields, submitCount },
+  } = useFormContext<GenerateFormValues>();
   const backgroundMusic = useWatch({ control, name: "background_music" });
   const subtitleEnabled = useWatch({ control, name: "subtitle_enabled" });
+  const subtitleSource = useWatch({ control, name: "subtitle_source" });
+  const showError = (name: keyof GenerateFormValues) => !!(submitCount > 0 || touchedFields[name]) && !!errors[name];
 
   return (
     <>
@@ -61,6 +67,9 @@ export const AudioCard = memo(function AudioCard({
               </Select>
             )}
           />
+          {showError("tts_provider") ? (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.tts_provider?.message}</p>
+          ) : null}
         </div>
         <div>
           <label className="text-sm font-medium mb-1.5 block">Voice</label>
@@ -99,6 +108,9 @@ export const AudioCard = memo(function AudioCard({
               )}
             </Button>
           </div>
+          {showError("tts_voice") ? (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.tts_voice?.message}</p>
+          ) : null}
         </div>
       </div>
 
@@ -158,6 +170,7 @@ export const AudioCard = memo(function AudioCard({
                     min={0}
                     max={1}
                     step={0.05}
+                    aria-label="Background music volume"
                     value={vol.value}
                     onChange={(e) => vol.onChange(parseFloat(e.target.value))}
                     className="h-2"
@@ -168,6 +181,9 @@ export const AudioCard = memo(function AudioCard({
                 </>
               )}
             />
+            {showError("background_music_volume") ? (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.background_music_volume?.message}</p>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -202,6 +218,9 @@ export const AudioCard = memo(function AudioCard({
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     LLM generates captions per scene; transcription uses speech-to-text.
                   </p>
+                  {showError("subtitle_source") ? (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_source?.message}</p>
+                  ) : null}
                 </div>
                 <Controller
                   control={control}
@@ -237,6 +256,9 @@ export const AudioCard = memo(function AudioCard({
                                 </Select>
                               )}
                             />
+                            {showError("transcription_provider") ? (
+                              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.transcription_provider?.message}</p>
+                            ) : null}
                           </div>
                           <div>
                             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -245,9 +267,14 @@ export const AudioCard = memo(function AudioCard({
                             <Input
                               placeholder="en"
                               className="mt-1"
+                              aria-invalid={showError("transcription_language")}
                               {...register("transcription_language")}
                             />
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">ISO 639-1 (e.g. en, es, fr)</p>
+                            {showError("transcription_language") ? (
+                              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.transcription_language?.message}</p>
+                            ) : (
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">ISO 639-1 (e.g. en, es, fr)</p>
+                            )}
                           </div>
                         </div>
                       )}
@@ -276,10 +303,22 @@ export const AudioCard = memo(function AudioCard({
                       </Select>
                     )}
                   />
+                  {showError("subtitle_font") ? (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_font?.message}</p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1.5 block">Size</label>
-                  <Input type="number" min={24} max={96} {...register("subtitle_size", { valueAsNumber: true })} />
+                  <Input
+                    type="number"
+                    min={24}
+                    max={96}
+                    className={showError("subtitle_size") ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                    {...register("subtitle_size", { valueAsNumber: true })}
+                  />
+                  {showError("subtitle_size") ? (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_size?.message}</p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1.5 block">Color</label>
@@ -303,6 +342,11 @@ export const AudioCard = memo(function AudioCard({
                       </div>
                     )}
                   />
+                  {showError("subtitle_color") ? (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_color?.message}</p>
+                  ) : (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Use hex color format, e.g. #FFFFFF</p>
+                  )}
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1.5 block">Position</label>
@@ -322,9 +366,17 @@ export const AudioCard = memo(function AudioCard({
                       </Select>
                     )}
                   />
+                  {showError("subtitle_position") ? (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_position?.message}</p>
+                  ) : null}
                 </div>
               </div>
             </div>
+      ) : null}
+      {subtitleEnabled && subtitleSource === "transcription" && !showError("transcription_language") ? (
+        <p className="text-xs text-muted-foreground">
+          Tip: use a locale like <code>en</code> or <code>en-US</code> for better transcript alignment.
+        </p>
       ) : null}
     </>
   );

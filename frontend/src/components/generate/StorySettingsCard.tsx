@@ -15,7 +15,11 @@ type Props = {
 };
 
 export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, llmProviders }: Props) {
-  const { control, register } = useFormContext<GenerateFormValues>();
+  const {
+    control,
+    register,
+    formState: { errors, touchedFields, submitCount },
+  } = useFormContext<GenerateFormValues>();
   const { data: storyTemplatesRemote = [] } = useStoryTemplatesQuery();
   const storyTemplates = useMemo(
     () =>
@@ -33,6 +37,7 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
     const t = storyTemplates.find((x) => x.id === storyTemplateId);
     return t?.description ?? "";
   }, [storyTemplates, storyTemplateId]);
+  const showError = (name: keyof GenerateFormValues) => !!(submitCount > 0 || touchedFields[name]) && !!errors[name];
 
   return (
     <>
@@ -78,88 +83,114 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
             </Select>
           )}
         />
-      </div>
-      <div>
-        <label className="text-sm font-medium mb-1.5 block">Narrative structure</label>
-        <Controller
-          control={control}
-          name="story_template"
-          render={({ field }) => (
-            <Select value={field.value} onValueChange={field.onChange}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select structure" />
-              </SelectTrigger>
-              <SelectContent>
-                {storyTemplates.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        />
-        {templateHint ? (
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{templateHint}</p>
+        {showError("story_type") ? (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.story_type?.message}</p>
         ) : null}
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="text-sm font-medium mb-1.5 block">Script length (words)</label>
-          <Input
-            type="number"
-            min={150}
-            max={800}
-            {...register("word_count", { valueAsNumber: true })}
-          />
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Longer scripts = more substantial narration</p>
-        </div>
-        <div>
-          <label className="text-sm font-medium mb-1.5 block">LLM Provider</label>
-          <Controller
-            control={control}
-            name="llm_provider"
-            render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  {llmProviders
-                    .filter((p) => p.configured)
-                    .map((p) => (
-                      <SelectItem key={p.name} value={p.name}>
-                        {p.name.charAt(0).toUpperCase() + p.name.slice(1)}
+      <details className="rounded-md border border-border/70 p-3">
+        <summary className="cursor-pointer text-sm font-medium">Advanced story controls</summary>
+        <div className="space-y-4 mt-3">
+          <div>
+            <label className="text-sm font-medium mb-1.5 block">Narrative structure</label>
+            <Controller
+              control={control}
+              name="story_template"
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select structure" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {storyTemplates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
                       </SelectItem>
                     ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            {templateHint ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{templateHint}</p>
+            ) : null}
+            {showError("story_template") ? (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.story_template?.message}</p>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Script length (words)</label>
+              <Input
+                type="number"
+                min={150}
+                max={800}
+                className={showError("word_count") ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                {...register("word_count", { valueAsNumber: true })}
+              />
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Longer scripts = more substantial narration</p>
+              {showError("word_count") ? (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.word_count?.message}</p>
+              ) : null}
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">LLM Provider</label>
+              <Controller
+                control={control}
+                name="llm_provider"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {llmProviders
+                        .filter((p) => p.configured)
+                        .map((p) => (
+                          <SelectItem key={p.name} value={p.name}>
+                            {p.name.charAt(0).toUpperCase() + p.name.slice(1)}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              {showError("llm_provider") ? (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.llm_provider?.message}</p>
+              ) : null}
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Scenes</label>
+              <Input
+                type="number"
+                min={2}
+                max={15}
+                className={showError("scene_count") ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                {...register("scene_count", { valueAsNumber: true })}
+              />
+              {showError("scene_count") ? (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.scene_count?.message}</p>
+              ) : null}
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1.5 block">Scene Duration (seconds)</label>
+            <Input
+              type="number"
+              min={1}
+              max={60}
+              step={0.5}
+              className={showError("scene_duration") ? "border-red-500 focus-visible:ring-red-500" : undefined}
+              {...register("scene_duration", { valueAsNumber: true })}
+            />
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Applies to each scene; auto-extends to match narration.
+            </p>
+            {showError("scene_duration") ? (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.scene_duration?.message}</p>
+            ) : null}
+          </div>
         </div>
-        <div>
-          <label className="text-sm font-medium mb-1.5 block">Scenes</label>
-          <Input
-            type="number"
-            min={2}
-            max={15}
-            {...register("scene_count", { valueAsNumber: true })}
-          />
-        </div>
-      </div>
-      <div>
-        <label className="text-sm font-medium mb-1.5 block">Scene Duration (seconds)</label>
-        <Input
-          type="number"
-          min={1}
-          max={60}
-          step={0.5}
-          {...register("scene_duration", { valueAsNumber: true })}
-        />
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Applies to each scene; auto-extends to match narration.
-        </p>
-      </div>
+      </details>
     </>
   );
 });

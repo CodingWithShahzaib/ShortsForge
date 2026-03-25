@@ -11,6 +11,9 @@ export const STORY_TEMPLATE_IDS = [
 ] as const;
 
 export const CONTROL_MODES = ["autopilot", "co_pilot", "manual"] as const;
+export const SUBTITLE_SOURCES = ["llm", "transcription"] as const;
+export const TRANSCRIPTION_PROVIDERS = ["openai", "groq"] as const;
+export const SUBTITLE_POSITIONS = ["bottom", "top", "center"] as const;
 
 export const generateVideoFormSchema = z.object({
   title: z.string(),
@@ -27,19 +30,22 @@ export const generateVideoFormSchema = z.object({
   resolution: z.string(),
   transition: z.string(),
   subtitle_enabled: z.boolean(),
-  subtitle_source: z.string(),
+  subtitle_source: z.enum(SUBTITLE_SOURCES).default("llm"),
   generate_subtitles: z.boolean(),
-  transcription_provider: z.string(),
-  transcription_language: z.string(),
+  transcription_provider: z.enum(TRANSCRIPTION_PROVIDERS).default("openai"),
+  transcription_language: z
+    .string()
+    .trim()
+    .regex(/^[a-z]{2}(-[A-Z]{2})?$/, "Use ISO code like en or en-US"),
   subtitle_font: z.string(),
   subtitle_size: z.coerce.number().min(24).max(96),
   subtitle_color: z.string(),
-  subtitle_position: z.string(),
+  subtitle_position: z.enum(SUBTITLE_POSITIONS).default("bottom"),
   background_music: z.string(),
   background_music_volume: z.coerce.number().min(0).max(1),
   scene_count: z.coerce.number().int().min(2).max(15),
   word_count: z.coerce.number().int().min(150).max(800),
-  scene_duration: z.coerce.number().min(0.5).max(60),
+  scene_duration: z.coerce.number().min(1).max(60),
 });
 
 export type GenerateFormValues = z.infer<typeof generateVideoFormSchema>;

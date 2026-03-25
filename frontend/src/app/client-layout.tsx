@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -12,32 +12,50 @@ import { toast } from "sonner";
 import { QueryProvider } from "@/providers/query-provider";
 import IsoLevelWarp from "@/components/ui/isometric-wave-grid-background";
 import type { WsMessage } from "@/lib/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queries";
 
-export function ClientLayout({ children }: { children: React.ReactNode }) {
+function ClientLayoutInner({ children }: { children: React.ReactNode }) {
   const updateJobFromWs = useProjectStore((s) => s.updateJobFromWs);
-  const setProjects = useProjectStore((s) => s.setProjects);
-  const setJobs = useProjectStore((s) => s.setJobs);
   const setProviders = useSettingsStore((s) => s.setProviders);
   const setTransitions = useSettingsStore((s) => s.setTransitions);
   const setResolutions = useSettingsStore((s) => s.setResolutions);
   const setDefaults = useSettingsStore((s) => s.setDefaults);
+  const queryClient = useQueryClient();
+  const refreshTimeoutRef = useRef<number | null>(null);
+
+  const scheduleCoalescedRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      window.clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = window.setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }).catch(() => {});
+      refreshTimeoutRef.current = null;
+    }, 1000);
+  }, [queryClient]);
   const handleWsMessage = useCallback(
     (msg: WsMessage) => {
       updateJobFromWs(msg);
       if (msg.type === "completed") {
         toast.success(`${msg.job_type.replace(/_/g, " ")} completed!`);
-        api.listProjects({ limit: 100 }).then(setProjects).catch(() => {});
-        api.listJobs({ limit: 100 }).then(setJobs).catch(() => {});
+        scheduleCoalescedRefresh();
       } else if (msg.type === "error") {
         toast.error(msg.error || "Job failed");
-        api.listProjects({ limit: 100 }).then(setProjects).catch(() => {});
-        api.listJobs({ limit: 100 }).then(setJobs).catch(() => {});
+        scheduleCoalescedRefresh();
       }
     },
-    [updateJobFromWs, setProjects, setJobs]
+    [updateJobFromWs, scheduleCoalescedRefresh]
   );
 
   useWebSocket(handleWsMessage);
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimeoutRef.current) window.clearTimeout(refreshTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     api.listProviders().then(setProviders).catch(() => {});
@@ -62,7 +80,6 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
   }, [setProviders, setTransitions, setResolutions, setDefaults]);
 
   return (
-    <QueryProvider>
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden relative">
@@ -77,6 +94,13 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
       </div>
       <Toaster />
     </div>
+  );
+}
+
+export function ClientLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <QueryProvider>
+      <ClientLayoutInner>{children}</ClientLayoutInner>
     </QueryProvider>
   );
 }
