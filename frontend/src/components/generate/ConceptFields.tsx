@@ -1,89 +1,93 @@
 "use client";
 
-import { memo } from "react";
-import { useFormContext, useWatch } from "react-hook-form";
+import { memo, useState } from "react";
+import { motion } from "framer-motion";
+import { useFormContext } from "react-hook-form";
+import { Play } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 import type { GenerateFormValues } from "@/app/generate/schema";
+import { fieldFocusVariants, prefersReducedMotion } from "@/lib/micro-interactions";
 
-const SNIPPETS: Record<string, string[]> = {
-  scary: [
-    "Three hikers ignored the warning signs on the mountain trail. By nightfall, only footprints remained—leading back to the cabin they had left hours ago.",
-  ],
-  mystery: [
-    "The antique shop owner swore the pocket watch had never been opened. When it ticked at midnight, the buyer finally understood why.",
-  ],
-  bedtime: [
-    "A sleepy fox follows a trail of fireflies through a quiet forest until the moon tucks everyone in beneath the pines.",
-  ],
-  philosophy: [
-    "What if the thoughts you dismiss as distractions are the only honest signals your mind still sends?",
-  ],
-  life_pro_tips: [
-    "Five tiny habits that compound: a two-minute reset between tasks, one clear priority before noon, and saying no once a day on purpose.",
-  ],
-  fun_facts: [
-    "Why your brain confuses déjà vu with prediction, and what that says about memory, pattern recognition, and time.",
-  ],
-  motivational: [
-    "You do not need a perfect plan—you need one honest step today that your future self will thank you for.",
-  ],
-  science: [
-    "How bioluminescence turns ordinary oceans into living constellations, and what it teaches us about energy on a budget.",
-  ],
-  history: [
-    "The forgotten postal route that carried secret messages across a divided city—and the riders who never made the history books.",
-  ],
-  general: [
-    "Five mysterious places on Earth that scientists still argue about, from singing sands to lights that appear without a storm.",
-  ],
+type Props = {
+  generating: boolean;
+  canGenerate: boolean;
+  onGenerate: () => void;
 };
 
-export const ConceptFields = memo(function ConceptFields() {
+export const ConceptFields = memo(function ConceptFields({ generating, canGenerate, onGenerate }: Props) {
   const {
     register,
-    setValue,
-    control,
     formState: { errors, touchedFields, submitCount },
   } = useFormContext<GenerateFormValues>();
-  const storyType = useWatch({ control, name: "story_type" });
-  const examples = SNIPPETS[storyType] ?? SNIPPETS.general;
   const showTitleError = (touchedFields.title || submitCount > 0) && !!errors.title;
+  const [titleFocused, setTitleFocused] = useState(false);
+  const reduceMotion = prefersReducedMotion();
+  const titleField = register("title");
 
   return (
     <div
       role="tabpanel"
       id="content-panel-concept"
       aria-labelledby="content-tab-concept"
-      className="space-y-3"
+      className="space-y-2"
     >
-      <Field
-        id="gen-title"
-        label="Title / Concept"
-        required
-        error={showTitleError ? (errors.title?.message as string) || "Please enter a concept or switch to script mode." : undefined}
-      >
-        <Input
-          placeholder="e.g., 5 Mysterious Places on Earth..."
-          className={showTitleError ? "border-red-500 focus-visible:ring-red-500" : undefined}
-          {...register("title")}
-        />
-      </Field>
-      <div className="flex flex-wrap gap-2 items-center">
-        <span className="text-xs text-slate-500 dark:text-slate-400">Try an example:</span>
-        {examples.map((text, i) => (
-          <Button
-            key={i}
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setValue("title", text, { shouldDirty: true })}
-          >
-            Example {i + 1}
-          </Button>
-        ))}
+      <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 sm:p-3 space-y-2.5">
+        <Field
+          id="gen-title"
+          applyIdToChild={false}
+          label={
+            <span className="inline-flex items-center gap-2">
+              <Play className="h-3.5 w-3.5 shrink-0 fill-primary text-primary" aria-hidden />
+              Title / Concept
+            </span>
+          }
+          required
+          className="space-y-1.5"
+          error={showTitleError ? (errors.title?.message as string) || "Please enter a concept or switch to script mode." : undefined}
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <motion.div
+              className="min-w-0 flex-1 rounded-md"
+              variants={fieldFocusVariants}
+              initial="initial"
+              animate={!reduceMotion && titleFocused ? "focus" : "initial"}
+            >
+              <Input
+                id="gen-title"
+                placeholder="e.g., 5 Mysterious Places on Earth..."
+                className={`h-10 text-sm ${showTitleError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+                name={titleField.name}
+                ref={titleField.ref}
+                onChange={titleField.onChange}
+                onBlur={(e) => {
+                  void titleField.onBlur(e);
+                  setTitleFocused(false);
+                }}
+                onFocus={() => setTitleFocused(true)}
+              />
+            </motion.div>
+            <Button
+              type="button"
+              variant="animated"
+              className="h-10 w-full shrink-0 px-3 text-sm font-semibold sm:w-auto sm:min-w-40"
+              disabled={!canGenerate || generating}
+              onClick={onGenerate}
+            >
+              {generating ? (
+                <>
+                  <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin inline-block" />{" "}
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 shrink-0" /> Generate Video
+                </>
+              )}
+            </Button>
+          </div>
+        </Field>
       </div>
     </div>
   );

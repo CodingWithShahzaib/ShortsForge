@@ -3,12 +3,19 @@
 import { memo, useMemo } from "react";
 import Link from "next/link";
 import { useFormContext } from "react-hook-form";
+import { FileText, Play } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 import type { GenerateFormValues } from "@/app/generate/schema";
-import { FileText } from "lucide-react";
 
-export const ScriptFields = memo(function ScriptFields() {
+type Props = {
+  generating: boolean;
+  canGenerate: boolean;
+  onGenerate: () => void;
+};
+
+export const ScriptFields = memo(function ScriptFields({ generating, canGenerate, onGenerate }: Props) {
   const {
     register,
     watch,
@@ -33,17 +40,44 @@ export const ScriptFields = memo(function ScriptFields() {
     >
       <Field
         id="custom-script"
-        label="Script"
+        applyIdToChild={false}
+        label={
+          <span className="inline-flex items-center gap-2">
+            <Play className="h-3.5 w-3.5 shrink-0 fill-primary text-primary" aria-hidden />
+            Script
+          </span>
+        }
         required
         error={showScriptError ? (errors.custom_script?.message as string) || "Please provide a script to continue." : undefined}
       >
-        <Textarea
-          placeholder="Paste your script here..."
-          rows={6}
-          className={showScriptError ? "border-red-500 focus-visible:ring-red-500" : undefined}
-          {...register("custom_script")}
-          aria-describedby="script-stats-hint"
-        />
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+          <Textarea
+            placeholder="Paste your script here..."
+            rows={6}
+            className={`min-h-[140px] flex-1 lg:min-h-[180px] ${showScriptError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+            {...register("custom_script")}
+            id="custom-script"
+            aria-describedby="script-stats-hint"
+          />
+          <Button
+            type="button"
+            variant="animated"
+            className="h-11 w-full shrink-0 px-4 text-sm font-semibold lg:mt-0 lg:w-44"
+            disabled={!canGenerate || generating}
+            onClick={onGenerate}
+          >
+            {generating ? (
+              <>
+                <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin inline-block" />{" "}
+                Generating…
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 shrink-0" /> Generate Video
+              </>
+            )}
+          </Button>
+        </div>
       </Field>
       <div id="script-stats-hint" className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
         <span>

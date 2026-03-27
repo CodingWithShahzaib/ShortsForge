@@ -1,6 +1,6 @@
 # ShortsForge
 
-**From script to reel in minutes.** AI-powered faceless video generation platform with OpenAI Sora integration.
+**From script to reel in minutes.** AI-powered faceless video generation platform with LLM storyboards, multi-provider images and TTS, and FFmpeg rendering.
 
 ---
 
@@ -21,7 +21,6 @@
 ## Features
 
 - **AI Video Generation** — Create faceless shorts from text concepts or custom scripts
-- **OpenAI Sora Integration** — Generate, edit, extend, and remix videos with Sora
 - **Multiple AI Providers**
   - **LLM:** OpenAI, Groq, OpenRouter
   - **Images:** Replicate, FAL, Together, Runware, Pollinations, OpenAI DALL-E
@@ -30,7 +29,7 @@
 - **Real-time Progress** — WebSocket-based progress updates for all generation flows
 - **Scene Editor** — Visual scene management with drag-and-drop reordering
 - **Batch Processing** — Generate multiple videos concurrently via Redis queue
-- **Hybrid Mode** — Mix AI images and Sora video clips in one production
+- **Hybrid-friendly workflow** — Combine AI-generated images, narration, and FFmpeg output in one production
 - **Flexible Storage** — Local filesystem or S3/MinIO for media storage
 
 ---
@@ -45,7 +44,7 @@
 | **Queue & Cache** | Redis |
 | **Storage** | Local filesystem or S3/MinIO |
 | **Video** | FFmpeg |
-| **AI** | OpenAI (GPT, Sora, TTS, Whisper, DALL-E), Groq, OpenRouter, Replicate, FAL, Together, Runware, ElevenLabs, Edge TTS |
+| **AI** | OpenAI (GPT, TTS, Whisper, DALL-E), Groq, OpenRouter, Replicate, FAL, Together, Runware, ElevenLabs, Edge TTS |
 
 ---
 
@@ -137,7 +136,7 @@ npm run dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key (GPT, Sora, TTS, DALL-E) | — |
+| `OPENAI_API_KEY` | OpenAI API key (GPT, TTS, DALL-E, Whisper) | — |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | `https://api.openai.com/v1` |
 | `GROQ_API_KEY` | Groq API key (LLM) | — |
 | `OPENROUTER_API_KEY` | OpenRouter API key (LLM) | — |
@@ -156,6 +155,9 @@ npm run dev
 | `MEDIA_DIR` | Local media directory (when `STORAGE_BACKEND=local`) | `./media` |
 | `FFMPEG_PATH` | Path to FFmpeg executable | `ffmpeg` |
 | `CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `http://localhost:3000` |
+| `YOUTUBE_CLIENT_ID` | Google OAuth client ID for YouTube | — |
+| `YOUTUBE_CLIENT_SECRET` | Google OAuth client secret for YouTube | — |
+| `YOUTUBE_TOKEN_KEY` | Fernet key for encrypting YouTube tokens | — |
 
 ### Database options
 
@@ -178,7 +180,6 @@ ShortsForge/
 │   ├── api/                 # API route handlers
 │   │   ├── projects.py      # Project CRUD
 │   │   ├── generation.py   # Video generation
-│   │   ├── sora.py         # Sora API
 │   │   ├── images.py       # Image generation
 │   │   ├── audio.py        # TTS
 │   │   ├── scripts.py      # Script extraction
@@ -189,8 +190,7 @@ ShortsForge/
 │   ├── services/            # Business logic
 │   ├── providers/           # AI provider implementations
 │   │   ├── image/          # Replicate, FAL, Together, Runware, OpenAI
-│   │   ├── tts/            # Edge TTS, OpenAI TTS, ElevenLabs
-│   │   └── video/          # Sora
+│   │   └── tts/            # Edge TTS, OpenAI TTS, ElevenLabs
 │   ├── core/                # FFmpeg, Redis, task manager, WebSocket
 │   └── migrations/         # Database migrations
 ├── frontend/

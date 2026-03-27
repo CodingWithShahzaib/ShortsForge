@@ -7,8 +7,6 @@ export interface AppDefaults {
   image_provider: string;
   tts_provider: string;
   tts_voice: string;
-  video_provider: string;
-  video_model: string;
   resolution: string;
   transition: string;
   image_style: string;
@@ -22,8 +20,6 @@ const DEFAULT_APP_DEFAULTS: AppDefaults = {
   image_provider: "replicate",
   tts_provider: "edge",
   tts_voice: "en-US-ChristopherNeural",
-  video_provider: "sora",
-  video_model: "sora-2",
   resolution: "1080x1920",
   transition: "fade",
   image_style: "realistic",

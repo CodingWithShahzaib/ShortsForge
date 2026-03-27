@@ -46,9 +46,11 @@ async def chat_completion(
     settings = get_settings()
     llm = get_llm_provider(provider)
     model = model or settings.default_llm_model or ("gpt-4o-mini" if isinstance(llm, OpenAILLMProvider) else None)
-    kwargs = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    kwargs = {"messages": messages, "max_tokens": max_tokens}
     if model:
         kwargs["model"] = model
+    if _supports_temperature(model):
+        kwargs["temperature"] = temperature
     return await llm.chat_completion(**kwargs)
 
 
@@ -62,11 +64,20 @@ async def chat_completion_stream(
     settings = get_settings()
     llm = get_llm_provider(provider)
     model = model or settings.default_llm_model or ("gpt-4o-mini" if isinstance(llm, OpenAILLMProvider) else None)
-    kwargs = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    kwargs = {"messages": messages, "max_tokens": max_tokens}
     if model:
         kwargs["model"] = model
+    if _supports_temperature(model):
+        kwargs["temperature"] = temperature
     async for token in llm.chat_completion_stream(**kwargs):
         yield token
+
+
+def _supports_temperature(model: str | None) -> bool:
+    if not model:
+        return True
+    normalized = model.lower()
+    return not (normalized.startswith("o1") or normalized.startswith("o3"))
 
 
 async def transcribe_audio(

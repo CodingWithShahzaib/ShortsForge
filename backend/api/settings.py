@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from backend.config import get_settings
 from backend.schemas import AppSettings, ProviderStatus
@@ -22,8 +25,6 @@ async def get_settings_endpoint():
         "default_image_provider": settings.default_image_provider,
         "default_tts_provider": settings.default_tts_provider,
         "default_tts_voice": settings.default_tts_voice,
-        "default_video_provider": settings.default_video_provider,
-        "default_video_model": settings.default_video_model,
         "default_resolution": settings.default_resolution,
         "default_transition": settings.default_transition,
         "default_image_style": settings.default_image_style,
@@ -62,8 +63,6 @@ async def update_settings(data: AppSettings):
         "default_image_provider": "DEFAULT_IMAGE_PROVIDER",
         "default_tts_provider": "DEFAULT_TTS_PROVIDER",
         "default_tts_voice": "DEFAULT_TTS_VOICE",
-        "default_video_provider": "DEFAULT_VIDEO_PROVIDER",
-        "default_video_model": "DEFAULT_VIDEO_MODEL",
         "default_resolution": "DEFAULT_RESOLUTION",
         "default_transition": "DEFAULT_TRANSITION",
         "default_image_style": "DEFAULT_IMAGE_STYLE",
@@ -105,13 +104,7 @@ async def list_providers():
             ProviderStatus(name="openai_tts", configured=bool(settings.openai_api_key)),
             ProviderStatus(name="elevenlabs", configured=bool(settings.elevenlabs_api_key)),
         ],
-        "video": [
-            ProviderStatus(
-                name="sora",
-                configured=bool(settings.openai_api_key),
-                models=["sora-2", "sora-2-pro", "sora-2-pro-2025-10-06"],
-            ),
-        ],
+        "video": [],
         "transcription": [
             ProviderStatus(name="openai", configured=bool(settings.openai_api_key)),
             ProviderStatus(name="groq", configured=bool(settings.groq_api_key)),
@@ -182,7 +175,7 @@ async def list_llm_models(provider: str = "openai"):
         models = [m["id"] for m in items if isinstance(m.get("id"), str)]
         # Filter OpenAI to chat-capable models only (avoids deprecated/embedding-only)
         if provider == "openai":
-            models = [m for m in models if m.startswith(("gpt-", "o1-", "o3-"))]
+            models = [m for m in models if m.startswith(("gpt-", "o1-", "o3-", "o4-"))]
 
     models = sorted(set(models))
     return {"models": models}
@@ -204,3 +197,109 @@ async def list_resolutions():
 @router.get("/transitions")
 async def list_transitions_endpoint():
     return list_transitions()
+
+
+class FetchOverlayBody(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2048)
+
+
+@router.get("/overlays")
+async def list_overlays_endpoint():
+    from backend.services.overlay_service import list_overlays
+
+    return list_overlays()
+
+
+@router.post("/overlays/upload")
+async def upload_overlay_endpoint(file: UploadFile = File(...)):
+    from backend.services.overlay_service import (
+        VIDEO_EXTS,
+        ensure_overlays_dir,
+        unique_filename,
+    )
+
+    if not file.filename:
+        raise HTTPException(400, "Missing filename")
+    raw = await file.read()
+    if len(raw) > 80 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 80MB)")
+    dest_name = unique_filename(file.filename)
+    dest = ensure_overlays_dir() / dest_name
+    dest.write_bytes(raw)
+    ext = dest.suffix.lower()
+    kind = "video" if ext in VIDEO_EXTS else "image"
+    return {"id": dest.name, "filename": dest.name, "kind": kind}
+
+
+@router.post("/overlays/fetch")
+async def fetch_overlay_endpoint(body: FetchOverlayBody):
+    from backend.services.overlay_service import (
+        ALLOWED_EXTS,
+        OVERLAY_FETCH_HEADERS,
+        VIDEO_EXTS,
+        ensure_overlays_dir,
+        guess_overlay_extension_from_bytes,
+        overlay_ext_from_content_type,
+    )
+
+    url = body.url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "Only http(s) URLs are allowed")
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=120.0,
+            headers=OVERLAY_FETCH_HEADERS,
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            if len(resp.content) > 80 * 1024 * 1024:
+                raise HTTPException(400, "Download too large")
+            content = resp.content
+            ct = resp.headers.get("content-type")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Download failed: {e.response.status_code}") from e
+    except httpx.RequestError as e:
+        raise HTTPException(502, f"Download failed: {e}") from e
+
+    lead = content.lstrip()[:64]
+    if lead.startswith(b"<!") or lead[:7].lower() == b"<!docty" or lead[:5].lower() == b"<html":
+        raise HTTPException(
+            400,
+            "That URL returned a web page, not a direct file. "
+            "Open the link in a browser, use “Save link as…”, or paste a URL that ends in "
+            ".png, .webm, .mp4, etc.",
+        )
+
+    path_part = unquote(urlparse(url).path)
+    suggested = Path(path_part).name or ""
+    ext = Path(suggested).suffix.lower()
+    if ext not in ALLOWED_EXTS:
+        ext = ""
+    if not ext:
+        ext = overlay_ext_from_content_type(ct) or ""
+    if not ext:
+        ext = guess_overlay_extension_from_bytes(content) or ""
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(
+            400,
+            "Could not detect a supported overlay type "
+            "(PNG, WebP, JPG, WebM, MOV, MP4, GIF, MKV). "
+            "Try a direct CDN link to the asset file.",
+        )
+    name = f"fetched_{uuid.uuid4().hex[:12]}{ext}"
+    dest = ensure_overlays_dir() / name
+    dest.write_bytes(content)
+    kind = "video" if ext in VIDEO_EXTS else "image"
+    return {"id": dest.name, "filename": dest.name, "kind": kind}
+
+
+@router.delete("/overlays/{filename}")
+async def delete_overlay_endpoint(filename: str):
+    from backend.services.overlay_service import resolve_overlay_file
+
+    p = resolve_overlay_file(filename)
+    if not p:
+        raise HTTPException(404, "Overlay not found")
+    p.unlink()
+    return {"status": "deleted"}

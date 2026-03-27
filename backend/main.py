@@ -66,7 +66,14 @@ async def lifespan(app: FastAPI):
     if settings.storage_is_s3:
         Path(settings.temp_dir).mkdir(parents=True, exist_ok=True)
     else:
-        for d in (settings.images_dir, settings.audio_dir, settings.videos_dir, settings.temp_dir, settings.music_dir):
+        for d in (
+            settings.images_dir,
+            settings.audio_dir,
+            settings.videos_dir,
+            settings.temp_dir,
+            settings.music_dir,
+            settings.overlays_dir,
+        ):
             Path(d).mkdir(parents=True, exist_ok=True)
     await init_db()
     await _cleanup_orphaned_jobs()
@@ -157,7 +164,6 @@ if not settings.storage_is_s3:
 
 from backend.api.projects import router as projects_router
 from backend.api.generation import router as generation_router
-from backend.api.sora import router as sora_router
 from backend.api.images import router as images_router
 from backend.api.audio import router as audio_router
 from backend.api.scripts import router as scripts_router
@@ -165,10 +171,10 @@ from backend.api.settings import router as settings_router
 from backend.api.templates import router as templates_router
 from backend.api.websocket import router as ws_router
 from backend.api.media import router as media_router
+from backend.api.youtube import router as youtube_router
 
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(generation_router, prefix="/api/generate", tags=["generation"])
-app.include_router(sora_router, prefix="/api/sora", tags=["sora"])
 app.include_router(images_router, prefix="/api/images", tags=["images"])
 app.include_router(audio_router, prefix="/api/audio", tags=["audio"])
 app.include_router(scripts_router, prefix="/api/scripts", tags=["scripts"])
@@ -176,6 +182,7 @@ app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(templates_router, prefix="/api/templates", tags=["templates"])
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])
 app.include_router(media_router, prefix="/api/media", tags=["media"])
+app.include_router(youtube_router, prefix="/api/youtube", tags=["youtube"])
 
 
 @app.get("/api/health")

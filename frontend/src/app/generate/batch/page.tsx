@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { LinearProgress } from "@/components/ui/progress-linear";
 import { api } from "@/lib/api";
+import { notify } from "@/lib/notify";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { Job } from "@/lib/types";
@@ -83,10 +84,18 @@ export default function BatchGeneratePage() {
     if (!baseSettings.title) return;
     setGenerating(true);
     try {
-      const result = await api.batchGenerate({ count, base_settings: baseSettings });
+      const result = await api.batchGenerate({
+        count,
+        base_settings: {
+          ...baseSettings,
+          control_mode: "co_pilot",
+          prepare_only: false,
+          storyboard_only: true,
+        },
+      });
       result.forEach((job: Job) => addJob(job));
     } catch (err: any) {
-      alert(err.message);
+      notify.error(err?.message || "Batch generate failed");
     } finally {
       setGenerating(false);
     }
@@ -275,6 +284,7 @@ export default function BatchGeneratePage() {
               </>
             )}
           </div>
+
           <Button variant="animated" onClick={handleBatchGenerate} disabled={generating || !baseSettings.title} className="w-full h-12 text-base">
             {generating ? (
               <><div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Starting batch...</>

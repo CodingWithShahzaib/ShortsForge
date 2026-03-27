@@ -81,6 +81,41 @@ async def pad_or_trim_audio(
     return output_path
 
 
+def normalize_transition(name: str | None) -> str:
+    """Map LLM/UI variants to canonical ids used by create_image_clip and xfade."""
+    if not name or not isinstance(name, str):
+        return "fade"
+    n = name.strip().lower().replace(" ", "_").replace("-", "_")
+    aliases: dict[str, str] = {
+        "wipe_left": "wipeleft",
+        "wipe_right": "wiperight",
+        "wipe_up": "wipeup",
+        "wipe_down": "wipedown",
+        "slide_up": "slideup",
+        "slide_down": "slidedown",
+        "slide_left": "slideleft",
+        "slide_right": "slideright",
+        "circle_open": "circleopen",
+        "circle_close": "circleclose",
+        "zoomin": "zoom_in",
+        "zoomout": "zoom_out",
+        "ken_burns_in": "zoom_in",
+        "ken_burns_out": "zoom_out",
+        "pan": "pan_left",
+        "none": "fade",
+    }
+    return aliases.get(n, n)
+
+
+def clamp_xfade_duration(durations: list[float], requested: float = 0.5) -> float:
+    """Avoid xfade longer than clips (short narration)."""
+    if not durations:
+        return max(0.05, min(requested, 0.5))
+    m = min(durations)
+    cap = max(0.05, min(m * 0.35, 0.8))
+    return max(0.05, min(requested, cap))
+
+
 async def concat_video_simple(clip_paths: list[str], output_path: str) -> str:
     """Concatenate video clips back-to-back (no xfade overlap; lengths sum for A/V sync)."""
     if len(clip_paths) == 1:
@@ -189,6 +224,8 @@ async def create_image_clip(
     fps: int = 30,
 ) -> str:
     """Create a video clip from a still image with optional Ken Burns effect."""
+    transition = normalize_transition(transition)
+
     filter_parts = [f"scale={width}:{height}:force_original_aspect_ratio=decrease",
                     f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"]
 
@@ -220,6 +257,7 @@ async def create_image_clip(
             f":d={int(duration*fps)}:s={width}x{height}:fps={fps}",
         ]
     else:
+        # Static hold; fade/dissolve/wipe/etc. are applied between clips (xfade), not on the still.
         filter_parts.append(f"fps={fps}")
 
     vf = ",".join(filter_parts)
@@ -249,7 +287,9 @@ async def concat_with_transitions(
         return output_path
 
     durations = [await get_duration(p) for p in clip_paths]
-    total_dur = sum(durations) - transition_duration * (len(clip_paths) - 1)
+    t_dur = clamp_xfade_duration(durations, transition_duration)
+    n = len(clip_paths)
+    total_dur = sum(durations) - t_dur * (n - 1)
 
     inputs = []
     for p in clip_paths:
@@ -257,15 +297,15 @@ async def concat_with_transitions(
 
     filter_parts = []
     current = "[0:v]"
-    for i in range(1, len(clip_paths)):
+    for i in range(1, n):
         trans = transition_types[i - 1] if i - 1 < len(transition_types) else "fade"
-        xfade_trans = _map_transition(trans)
-        offset = sum(durations[:i]) - transition_duration * i
+        xfade_trans = map_transition_to_xfade(trans)
+        offset = sum(durations[:i]) - t_dur * i
         out_label = f"[v{i}]"
         next_input = f"[{i}:v]"
         filter_parts.append(
             f"{current}{next_input}xfade=transition={xfade_trans}"
-            f":duration={transition_duration}:offset={offset:.3f}{out_label}"
+            f":duration={t_dur:.4f}:offset={offset:.4f}{out_label}"
         )
         current = out_label
 
@@ -281,18 +321,24 @@ async def concat_with_transitions(
     return output_path
 
 
-def _map_transition(name: str) -> str:
+def map_transition_to_xfade(name: str | None) -> str:
+    """Map scene transition id to FFmpeg xfade transition name."""
+    t = normalize_transition(name)
     mapping = {
         "fade": "fade",
         "dissolve": "dissolve",
         "wipeleft": "wipeleft",
         "wiperight": "wiperight",
+        "wipeup": "wipeup",
+        "wipedown": "wipedown",
         "slideup": "slideup",
         "slidedown": "slidedown",
         "slideleft": "slideleft",
         "slideright": "slideright",
         "circleopen": "circleopen",
         "circleclose": "circleclose",
+        "circlecrop": "circlecrop",
+        # Ken Burns / pan: blend with a directional crossfade (motion is already in the clip)
         "zoom_in": "fade",
         "zoom_out": "fade",
         "pan_left": "slideleft",
@@ -300,7 +346,45 @@ def _map_transition(name: str) -> str:
         "pan_up": "slideup",
         "pan_down": "slidedown",
     }
-    return mapping.get(name, "fade")
+    return mapping.get(t, "fade")
+
+
+async def concat_audio_with_crossfade(
+    audio_paths: list[str],
+    output_path: str,
+    crossfade_duration: float,
+) -> str:
+    """Chain scene audio with acrossfade so total length matches xfade video concat."""
+    if len(audio_paths) == 1:
+        shutil.copy2(audio_paths[0], output_path)
+        return output_path
+
+    inputs: list[str] = []
+    for p in audio_paths:
+        inputs.extend(["-i", p])
+
+    d = crossfade_duration
+    n = len(audio_paths)
+    if n == 2:
+        fc = f"[0:a][1:a]acrossfade=d={d:.4f}:c1=tri:c2=tri[aout]"
+    else:
+        parts: list[str] = []
+        cur = "[0:a]"
+        for i in range(1, n):
+            nxt = f"[{i}:a]"
+            out = f"[a{i}]" if i < n - 1 else "[aout]"
+            parts.append(f"{cur}{nxt}acrossfade=d={d:.4f}:c1=tri:c2=tri{out}")
+            cur = out
+        fc = ";".join(parts)
+
+    args = inputs + [
+        "-filter_complex", fc,
+        "-map", "[aout]",
+        "-c:a", "libmp3lame", "-q:a", "2",
+        output_path,
+    ]
+    await run_ffmpeg(args)
+    return output_path
 
 
 async def add_audio_to_video(
@@ -347,6 +431,52 @@ async def overlay_subtitles(
         "-i", video_path,
         "-vf", f"ass='{sub_path_escaped}'",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "copy",
+        output_path,
+    ]
+    await run_ffmpeg(args)
+    return output_path
+
+
+def _is_video_overlay_asset(overlay_path: str) -> bool:
+    ext = Path(overlay_path).suffix.lower()
+    return ext in (".webm", ".mov", ".mp4", ".mkv", ".gif")
+
+
+async def overlay_asset_on_video(
+    video_path: str,
+    overlay_path: str,
+    output_path: str,
+    width: int,
+    height: int,
+) -> str:
+    """Composite a full-frame image or looping video (e.g. alpha WebM) over the main video."""
+    w, h = max(width, 1), max(height, 1)
+    if _is_video_overlay_asset(overlay_path):
+        inputs = [
+            "-i", video_path,
+            "-stream_loop", "-1",
+            "-i", overlay_path,
+        ]
+        fc = (
+            f"[1:v]scale={w}:{h}:flags=lanczos[ov];"
+            f"[0:v][ov]overlay=0:0:shortest=1:format=auto[outv]"
+        )
+    else:
+        inputs = ["-i", video_path, "-i", overlay_path]
+        ext = Path(overlay_path).suffix.lower()
+        scale = (
+            f"[1:v]scale={w}:{h}:flags=lanczos,format=rgba[ov]"
+            if ext in (".png", ".webp")
+            else f"[1:v]scale={w}:{h}:flags=lanczos[ov]"
+        )
+        fc = f"{scale};[0:v][ov]overlay=0:0:format=auto[outv]"
+    args = inputs + [
+        "-filter_complex", fc,
+        "-map", "[outv]",
+        "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         output_path,
     ]

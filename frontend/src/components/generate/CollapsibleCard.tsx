@@ -30,27 +30,27 @@ export const CollapsibleCard = memo(function CollapsibleCard({
   };
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
+    <Card className="w-full min-w-0 border-0 bg-transparent shadow-none" size="2">
+      <CardHeader className="space-y-0 p-3 pb-2 sm:px-3.5">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+          <CardTitle className="flex min-w-0 flex-1 items-center gap-2 text-sm font-semibold leading-tight tracking-tight text-foreground">
             {icon}
-            {title}
+            <span className="min-w-0">{title}</span>
           </CardTitle>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="shrink-0 h-8 w-8 p-0"
+            className="h-7 w-7 shrink-0 p-0"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
             aria-label={open ? "Collapse section" : "Expand section"}
           >
-            <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
           </Button>
         </div>
       </CardHeader>
-      {open && <CardContent className="space-y-4 pt-0">{children}</CardContent>}
+      {open && <CardContent className="space-y-3 px-3 pb-3 pt-0 sm:px-3.5">{children}</CardContent>}
     </Card>
   );
 });

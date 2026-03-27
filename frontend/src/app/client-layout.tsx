@@ -2,15 +2,16 @@
 
 import { useEffect, useCallback, useRef } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { Header } from "@/components/layout/Header";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { api } from "@/lib/api";
 import { Toaster } from "@/components/ui/sonner";
-import { toast } from "sonner";
+import { ConfirmDialogHost } from "@/components/confirm-dialog-host";
+import { notify } from "@/lib/notify";
 import { QueryProvider } from "@/providers/query-provider";
-import IsoLevelWarp from "@/components/ui/isometric-wave-grid-background";
+import { AppAmbientBackground } from "@/components/layout/AppAmbientBackground";
+import { VideoPreviewModalHost } from "@/components/video/video-preview-modal-host";
 import type { WsMessage } from "@/lib/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queries";
@@ -39,10 +40,10 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
     (msg: WsMessage) => {
       updateJobFromWs(msg);
       if (msg.type === "completed") {
-        toast.success(`${msg.job_type.replace(/_/g, " ")} completed!`);
+        notify.success(`${msg.job_type.replace(/_/g, " ")} completed!`);
         scheduleCoalescedRefresh();
       } else if (msg.type === "error") {
-        toast.error(msg.error || "Job failed");
+        notify.error(msg.error || "Job failed");
         scheduleCoalescedRefresh();
       }
     },
@@ -68,8 +69,6 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
         image_provider: s.default_image_provider ?? "replicate",
         tts_provider: s.default_tts_provider ?? "edge",
         tts_voice: s.default_tts_voice ?? "en-US-ChristopherNeural",
-        video_provider: s.default_video_provider ?? "sora",
-        video_model: s.default_video_model ?? "sora-2",
         resolution: s.default_resolution ?? "1080x1920",
         transition: s.default_transition ?? "fade",
         image_style: s.default_image_style ?? "realistic",
@@ -82,17 +81,13 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        <IsoLevelWarp
-          color="6, 182, 212"
-          density={40}
-          speed={0.04}
-          className="fixed top-14 left-64 right-0 bottom-0 opacity-100 dark:opacity-90 -z-10"
-        />
-        <Header />
-        <main className="flex-1 overflow-y-auto p-6 min-w-0 w-full relative z-0">{children}</main>
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <AppAmbientBackground />
+        <main className="relative z-10 flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-y-auto p-6">{children}</main>
+        <VideoPreviewModalHost />
       </div>
       <Toaster />
+      <ConfirmDialogHost />
     </div>
   );
 }

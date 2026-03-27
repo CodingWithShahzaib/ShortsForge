@@ -6,6 +6,8 @@ AVAILABLE_TRANSITIONS = {
     "dissolve": "Smooth cross-dissolve between scenes",
     "wipeleft": "Wipe from right to left",
     "wiperight": "Wipe from left to right",
+    "wipeup": "Wipe from bottom to top",
+    "wipedown": "Wipe from top to bottom",
     "slideup": "Slide up transition",
     "slidedown": "Slide down transition",
     "slideleft": "Slide left transition",
@@ -18,6 +20,7 @@ AVAILABLE_TRANSITIONS = {
     "pan_right": "Horizontal pan from left to right",
     "pan_up": "Vertical pan from bottom to top",
     "pan_down": "Vertical pan from top to bottom",
+    "none": "Soft blend at cuts (same as fade in export)",
 }
 
 

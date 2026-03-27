@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from backend.services.ai_client import chat_completion
@@ -47,6 +48,23 @@ STORY_TEMPLATES_META: list[dict[str, str]] = [
 ]
 
 STORY_TEMPLATE_IDS: tuple[str, ...] = tuple(m["id"] for m in STORY_TEMPLATES_META)
+
+STORY_HOOK_TEMPLATES: dict[str, str] = {
+    "scary": "Start with an unsettling question or hidden danger nobody sees coming.",
+    "mystery": "Open with an unexplained event that demands answers.",
+    "motivational": "Begin with a relatable struggle followed by an unexpected turnaround.",
+    "science": "Lead with a counterintuitive fact that challenges common belief.",
+    "history": "Connect a forgotten past event to something happening right now.",
+    "corporate_expose": "Reveal what's hidden in plain sight that affects the viewer directly.",
+    "urgent_warning": "State the stakes in one line—what could be lost if ignored.",
+}
+
+SCENE_EMOTION_MAP = {
+    "hook": "tense",
+    "pattern": "neutral",
+    "revelation": "urgent",
+    "close": "hopeful",
+}
 
 
 def validate_story_template_field(value: str) -> str:
@@ -96,13 +114,22 @@ def list_story_templates() -> list[dict[str, str]]:
     return list(STORY_TEMPLATES_META)
 
 
-def _storyboard_arc_addon(scene_count: int, image_style: str) -> str:
+def _storyboard_arc_addon(scene_count: int, image_style: str, story_template: str) -> str:
     """Extra instructions when using a non-default story_template."""
     n = max(2, min(15, int(scene_count)))
+    template_visual_notes = {
+        "political_commentary": "Use symbolic imagery (scales, documents, crowds) not individual faces.",
+        "corporate_expose": "Show systems, buildings, documents, data visualizations—professional aesthetic.",
+        "historical_parallel": "Split between archival-style and modern imagery for contrast.",
+        "urgent_warning": "High contrast, urgent colors (red/orange accents), clear stakes visualization.",
+        "satirical_irony": "Visual contrast between stated claim and actual reality (split composition).",
+    }
+    visual_note = template_visual_notes.get(story_template, "Match imagery to narration emotion.")
     lines = [
         "",
-        "NARRATIVE ARC (non-default template):",
+        f"NARRATIVE ARC ({story_template} template):",
         f"- Split the script into exactly {n} scenes. narration for each scene must be copied verbatim from the script in order—no paraphrase.",
+        f"- Visual note: {visual_note}",
         f"- image_prompt: detailed, in {image_style} style; vary composition and mood per beat.",
         "- Choose transition to match emotional shifts (e.g. dissolve or zoom_in for revelation; wipeleft/pan for pattern sequences).",
         "- Scene roles:",
@@ -123,6 +150,90 @@ def _storyboard_arc_addon(scene_count: int, image_style: str) -> str:
     return "\n".join(lines)
 
 
+def _fallback_storyboard_scenes(
+    script: str,
+    *,
+    scene_count: int,
+    image_style: str,
+) -> list[dict[str, str]]:
+    """Create a minimal storyboard when the LLM returns no scenes."""
+    target = max(1, min(15, int(scene_count) if scene_count else 5))
+    cleaned = (script or "").strip()
+    if not cleaned:
+        cleaned = "A concise narration about the concept."
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+    if not sentences:
+        sentences = [cleaned]
+    buckets = [[] for _ in range(target)]
+    for idx, sentence in enumerate(sentences):
+        buckets[idx % target].append(sentence)
+    scenes: list[dict[str, str]] = []
+    for chunk in buckets:
+        narration = " ".join(chunk).strip() or cleaned
+        prompt_hint = narration.split(".")[0].strip() or narration[:140]
+        scenes.append(
+            {
+                "narration": narration,
+                "image_prompt": f"{image_style} cinematic still, {prompt_hint}",
+                "transition": "fade",
+            }
+        )
+    return scenes
+
+
+def _scene_emotion_for_index(idx: int, total: int) -> str:
+    if total <= 1:
+        return SCENE_EMOTION_MAP["hook"]
+    if idx == 0:
+        return SCENE_EMOTION_MAP["hook"]
+    if idx == total - 1:
+        return SCENE_EMOTION_MAP["close"]
+    if idx == total - 2:
+        return SCENE_EMOTION_MAP["revelation"]
+    return SCENE_EMOTION_MAP["pattern"]
+
+
+def enhance_image_prompt(base_prompt: str, narration: str, scene_emotion: str, image_style: str) -> str:
+    """Add specificity and emotional alignment to image prompts."""
+    emotion_lighting = {
+        "tense": "dramatic shadows, high contrast, cool tones",
+        "hopeful": "warm golden light, soft diffusion, uplifting atmosphere",
+        "mysterious": "low key lighting, fog or haze, muted colors",
+        "urgent": "harsh lighting, saturated reds/oranges, dynamic angles",
+        "calm": "natural light, balanced exposure, serene composition",
+        "neutral": "balanced lighting, natural color grade, clear detail",
+    }
+    cleaned = (base_prompt or "").strip()
+    narration_hint = (narration or "").strip()
+    hints = [h for h in (cleaned, narration_hint) if h]
+    content_hint = ", ".join(hints) if hints else "clear focal subject"
+    enhancements = [
+        f"Vertical 9:16 {image_style} cinematic still, {content_hint}",
+        f"Lighting: {emotion_lighting.get(scene_emotion, 'natural balanced lighting')}",
+        "Photorealistic, shallow depth of field, professional color grade",
+        "Subject positioned for mobile viewing (center-weighted, clear focal point)",
+        "No on-screen text unless story-critical signage",
+    ]
+    return ", ".join(enhancements)
+
+
+def validate_storyboard_quality(storyboard: dict) -> list[str]:
+    """Check for common quality issues."""
+    issues = []
+    scenes = storyboard.get("scenes", []) if isinstance(storyboard, dict) else []
+    for i, scene in enumerate(scenes):
+        prompt = (scene.get("image_prompt") or "").strip()
+        narration = (scene.get("narration") or "").strip()
+        duration = scene.get("duration") or scene.get("duration_seconds") or 5
+        if len(prompt) < 50:
+            issues.append(f"Scene {i + 1}: image_prompt too short ({len(prompt)} chars)")
+        if narration and not any(word in narration.lower() for word in ["you", "we", "this", "the"]):
+            issues.append(f"Scene {i + 1}: narration lacks engagement words")
+        if len(narration) > 100 and float(duration) < 5:
+            issues.append(f"Scene {i + 1}: narration too long for duration")
+    return issues
+
+
 async def generate_script(
     concept: str,
     story_type: str = "general",
@@ -135,10 +246,25 @@ async def generate_script(
     if story_template not in STORY_TEMPLATE_IDS:
         story_template = "default"
 
+    hook_template = STORY_HOOK_TEMPLATES.get(
+        story_type, "Open with a curiosity gap that feels immediately relevant to the viewer."
+    )
+    critical_requirements = (
+        "CRITICAL REQUIREMENTS:\n"
+        "- OPENING HOOK: First sentence must create curiosity gap, shock, or immediate relevance "
+        "(use 'you', 'what if', 'nobody tells you' where natural)\n"
+        "- REALISM: Include specific numbers, names, dates, or verifiable details (not vague claims)\n"
+        "- PACING: Vary sentence length (3–8 words for impact, 12–18 for explanation)\n"
+        "- EMOTIONAL ARC: Build tension → revelation → resolution across the script\n"
+        "- CONCRETE IMAGERY: Use sensory details that can be visualized\n"
+        f"- HOOK TEMPLATE: {hook_template}\n"
+    )
+
     if story_template == "default":
         system_prompt = (
             f"You are a professional short-form video scriptwriter. "
             f"Write a compelling, SUBSTANTIAL {story_type} script for a faceless video narration. "
+            f"{critical_requirements}"
             f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
             f"Expand on the concept with detail, examples, and engaging content. "
             f"Write ONLY the narration text - no scene directions, no brackets, no stage directions. "
@@ -155,6 +281,7 @@ async def generate_script(
         system_prompt = (
             f"You are a professional short-form video scriptwriter. "
             f"Genre/tone category: {story_type}. "
+            f"{critical_requirements}"
             f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
             f"Write ONLY speakable narration: no beat labels (no HOOK:, PATTERN:, etc.), no markdown headings, "
             f"no scene numbers, no stage directions, no brackets. "
@@ -166,6 +293,29 @@ async def generate_script(
             "Follow the narrative structure in your instructions. Output plain narration only."
         )
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    return await chat_completion(messages, llm_provider, llm_model, temperature)
+
+
+async def rewrite_script(
+    text: str,
+    instruction: str,
+    story_type: str = "general",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    temperature: float = 0.7,
+) -> str:
+    """Rewrite narration text with a targeted editing instruction."""
+    system_prompt = (
+        "You are a professional short-form video script editor. "
+        "Rewrite the provided narration to follow the instruction precisely. "
+        "Keep the same language and output ONLY the rewritten narration text. "
+        f"Story tone category: {story_type}."
+    )
+    user_content = f"Instruction: {instruction}\n\nText:\n{text}"
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
@@ -214,6 +364,13 @@ async def generate_story_and_storyboard(
         f"You are a video storyboard planner for faceless short-form videos. "
         f"Given a narration script, split it into exactly {scene_count} scenes. "
         f"{caption_note}"
+        f"CRITICAL IMAGE PROMPT REQUIREMENTS:\n"
+        f"- Each image_prompt must directly visualize the narration's key subject/action\n"
+        f"- Include: subject, environment, lighting, mood, camera angle, color palette\n"
+        f"- Match emotional tone of narration (tense=dark/shadows, hopeful=bright/warm)\n"
+        f"- Use {image_style} style consistently but vary composition per scene\n"
+        f"- NO text in images unless signage is story-critical\n"
+        f"- Vertical 9:16 framing for shorts\n"
         f"For each scene, provide:\n"
         f"- narration: The exact narration text for that scene (this is what is spoken and shown as captions)\n"
         f"- image_prompt: A detailed image generation prompt in {image_style} style. "
@@ -223,10 +380,19 @@ async def generate_story_and_storyboard(
         f'{{"title": "...", "scenes": [{{"narration": "...", "image_prompt": "...", "transition": "..."}}]}}'
     )
     if story_template != "default":
-        system_prompt += _storyboard_arc_addon(scene_count, image_style)
+        system_prompt += _storyboard_arc_addon(scene_count, image_style, story_template)
 
     messages = [
         {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                "Example good image_prompt: "
+                "'Vertical 9:16 cinematic still, abandoned hospital corridor at dusk, flickering fluorescent light, "
+                "peeling paint on walls, ominous shadows stretching toward camera, desaturated green-blue color grade, "
+                "photorealistic, shallow depth of field'"
+            ),
+        },
         {"role": "user", "content": f"Script:\n{script}"},
     ]
     raw = await chat_completion(messages, llm_provider, llm_model, temperature, max_tokens=8192)
@@ -246,42 +412,55 @@ async def generate_story_and_storyboard(
         else:
             raise ValueError("Failed to parse storyboard JSON from LLM response")
 
+    scenes = storyboard.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        logger.warning("Storyboard response missing scenes; building fallback scenes.")
+        storyboard["scenes"] = _fallback_storyboard_scenes(
+            script,
+            scene_count=scene_count,
+            image_style=image_style,
+        )
     storyboard["script"] = script
     # Subtitle field in DB/UI matches spoken line (full narration — used for captions on re-export)
-    for sc in storyboard.get("scenes", []):
+    for i, sc in enumerate(storyboard.get("scenes", [])):
         nar = (sc.get("narration") or "").strip()
         if generate_subtitles:
             sc["subtitle"] = nar
         elif not (sc.get("subtitle") or "").strip():
             sc["subtitle"] = nar
+        scene_emotion = _scene_emotion_for_index(i, len(storyboard.get("scenes", [])))
+        sc["image_prompt"] = enhance_image_prompt(
+            sc.get("image_prompt") or "",
+            nar,
+            scene_emotion,
+            image_style,
+        )
+        sc["scene_emotion"] = scene_emotion
+    issues = validate_storyboard_quality(storyboard)
+    if issues:
+        logger.warning("Storyboard quality issues: %s", "; ".join(issues))
     return storyboard
 
 
-# Professional video AI prompt structure (Sora, Runway, Kling):
-# [Camera setup and movement], [subject] [action], [environment], [lighting/time of day], [style/mood]
-# Template: [Camera shot + movement], [subject] [action], [environment], [lighting], [quality/style]
-VIDEO_PRODUCTION_SYSTEM_PROMPT = """You are a professional video director and scriptwriter for AI video generation tools (Sora, Runway, Kling, Veo).
+# Storyboard prompts feed ShortsForge's image + narration pipeline (vertical shorts), not text-to-video APIs.
+VIDEO_PRODUCTION_SYSTEM_PROMPT = """You are a director and scriptwriter for short-form vertical video (9:16) built from still images plus voiceover.
 
-Create a video production script with timestamps and per-scene technical specs. Each scene must include:
+The app generates one still image per scene from your **image_prompt**, then uses **script** as narration/captions. Write prompts that describe a single clear key frame (not a full video clip).
+
+Each scene must include:
 
 1. **timestamp**: Format "0:00-0:05" (start-end in MM:SS)
-2. **duration_seconds**: Numeric duration (e.g. 5.0)
-3. **camera_angle**: Shot type and framing. Use professional terms:
-   - Wide/establishing shot, medium shot, close-up, extreme close-up
-   - Low angle, high angle, bird's eye, over-the-shoulder
-   - Eye level, Dutch angle
-4. **camera_movement**: Static, slow dolly in/out, pan left/right, tilt up/down, tracking shot, handheld, Steadicam, drone/aerial
-5. **lighting**: Quality and direction. Examples:
-   - Golden hour, soft key from left, rim light, backlit
-   - Natural sunlight, overcast, neon, practical lights
-   - Warm tungsten, cool daylight, volumetric light
-6. **quality**: Resolution/style. Examples:
-   - 4K cinematic, shallow depth of field, anamorphic
-   - 35mm film grain, 8K photorealistic, documentary style
-7. **script**: The narration or dialogue for this scene (concise, punchy)
-8. **sora_prompt**: A single combined prompt for Sora/Runway. Format:
-   "[Camera shot and movement], [subject and action], [environment], [lighting], [quality/style]"
-   Example: "Slow dolly in, medium close-up of a woman walking through Tokyo market at dusk, warm orange vendor lights, shallow depth of field, cinematic 4K"
+2. **duration_seconds**: Numeric duration (e.g. 5.0), typically 4–8 seconds per scene
+3. **camera_angle**: Shot type and framing (wide, medium, close-up, low/high angle, etc.)
+4. **camera_movement**: Implied motion for composition (even though the output is a still, this guides mood and staging)
+5. **lighting**: Direction, quality, time of day, color
+6. **quality**: Visual style for the still (e.g. photorealistic, cinematic color grade, clean YouTube thumbnail look, documentary)
+7. **script**: Spoken line for this scene — concise, punchy, fits the duration
+8. **image_prompt**: One self-contained English prompt for image generation. Must work as a still frame:
+   - Vertical short framing when relevant (subject placement for 9:16)
+   - Concrete subject, action frozen in time, environment, lighting, style
+   - No on-screen text in the image unless the concept requires signage
+   - Do not mention "Sora", "Runway", or other video APIs
 
 Return valid JSON only:
 {
@@ -291,13 +470,13 @@ Return valid JSON only:
     {
       "scene_number": 1,
       "timestamp": "0:00-0:05",
-  "duration_seconds": 5.0,
-  "camera_angle": "Wide establishing shot, eye level",
-  "camera_movement": "Slow push in",
-  "lighting": "Golden hour, soft key from camera left",
-  "quality": "4K cinematic, shallow depth of field",
-  "script": "Have you ever wondered...",
-  "sora_prompt": "Wide establishing shot with slow push in, bustling city street at golden hour, soft key from left, 4K cinematic shallow DOF"
+      "duration_seconds": 5.0,
+      "camera_angle": "Wide establishing shot, eye level",
+      "camera_movement": "Slow push in implied",
+      "lighting": "Golden hour, soft key from camera left",
+      "quality": "Cinematic, shallow depth of field, photorealistic",
+      "script": "Have you ever wondered...",
+      "image_prompt": "Vertical 9:16 cinematic still, bustling Tokyo street market at golden hour, steam rising from food stalls, shallow depth of field, warm practical lights, photorealistic"
     }
   ]
 }"""
@@ -312,12 +491,12 @@ async def generate_video_production_script(
     temperature: float = 0.7,
 ) -> dict:
     """Generate a professional video production script with timestamps, camera angles, lighting, quality per scene."""
-    user_prompt = f"""Create a {scene_count}-scene video production script for AI video generation (Sora/Runway style).
+    user_prompt = f"""Create a {scene_count}-scene storyboard for vertical shorts (still images + voiceover).
 
 Concept: {concept}
 Story type: {story_type}
 
-Each scene should be 4-8 seconds. Use the professional prompt structure. Return valid JSON only."""
+Each scene should be 4-8 seconds of spoken content. **image_prompt** must be a single strong still-image description per scene. Return valid JSON only."""
 
     messages = [
         {"role": "system", "content": VIDEO_PRODUCTION_SYSTEM_PROMPT},
@@ -354,135 +533,21 @@ Each scene should be 4-8 seconds. Use the professional prompt structure. Return 
         scene.setdefault("lighting", "Natural light")
         scene.setdefault("quality", "4K cinematic")
         scene.setdefault("script", "")
-        if not scene.get("sora_prompt") and scene.get("script"):
-            scene["sora_prompt"] = f"{scene.get('camera_angle', '')}, {scene.get('lighting', '')}, {scene.get('script', '')}"
+        raw_img = (scene.get("image_prompt") or scene.get("sora_prompt") or "").strip()
+        if not raw_img:
+            raw_img = ", ".join(
+                x for x in (
+                    scene.get("camera_angle"),
+                    scene.get("camera_movement"),
+                    scene.get("lighting"),
+                    scene.get("script"),
+                ) if x
+            )
+        scene["image_prompt"] = raw_img
+        scene.pop("sora_prompt", None)
 
     result["scenes"] = scenes
     return result
-
-
-DIRECTOR_BOARD_SYSTEM_PROMPT = """You are a professional video director and Sora prompt engineer. Given a story and total duration, generate a detailed timeline plus cinematic, audio, and safety sections for a Sora video prompt.
-
-1. **timeline_entries**: Array of segments that cover 0 to total_duration seconds. Each segment:
-   - start_sec, end_sec: Timestamps (e.g. 0.0-0.7, 0.7-1.5). Segments must be sequential and cover the full duration.
-   - phase_label: Optional label like "Hook", "Build", "Climax", "Discovery", "Reaction", "Tension", "Escape", "Loop Ending"
-   - script: Main action/description for this segment
-   - bullet_notes: Array of micro-actions or details (e.g. "One hand grips frame", "Slight ear twitch")
-   Split the duration into 6-12 segments. Each segment typically 0.5-1.5 seconds. Create a compelling beat structure (hook, build, payoff, loop-friendly ending if applicable).
-
-2. **cinematic_settings**: Technical specs and visual style. Format as newline-separated bullet points. Include:
-   - Resolution (e.g. 8K, 4K)
-   - Camera style (e.g. smartphone handheld, cinematic, documentary)
-   - Visual quality (e.g. ultra photorealistic, must look real not AI)
-   - Lighting (e.g. warm bedside lighting, low-light grain)
-   - Camera behavior (e.g. slight handheld shake, autofocus breathing)
-   - Any other relevant tech specs (e.g. shallow depth of field, film grain)
-
-3. **audio_design**: Sound and ambience. Format as newline-separated bullet points. Include:
-   - Ambient sounds
-   - Movement/foley sounds
-   - Any specific sounds relevant to the story (e.g. instrument notes, fabric rustle)
-   - Note: "IMPORTANT FOR VIRALITY" for audio that enhances shareability
-
-4. **safety_rules**: Strict exclusions for Sora. Format as array of strings. Each rule should be:
-   - "No X" format for exclusions (e.g. "No real song or copyrighted melody", "No aggression")
-   - "Keep X" for positive constraints (e.g. "Keep behavior natural and believable")
-   - Avoid copyrighted content, aggressive behavior, exaggerated expressions, text overlays
-
-Return valid JSON only:
-{
-  "timeline_entries": [
-    {"start_sec": 0.0, "end_sec": 0.7, "phase_label": "Hook", "script": "...", "bullet_notes": ["...", "..."]},
-    ...
-  ],
-  "cinematic_settings": "line1\\nline2\\nline3",
-  "audio_design": "line1\\nline2\\nline3",
-  "safety_rules": ["rule1", "rule2", "rule3"]
-}"""
-
-
-async def generate_director_board_sections(
-    overall_story: str,
-    timeline_entries: list[dict],
-    total_duration: float = 8.0,
-    llm_provider: str | None = None,
-    llm_model: str | None = None,
-    temperature: float = 0.6,
-) -> dict:
-    """Generate timeline, cinematic settings, audio design, and safety rules from story + total duration."""
-    def _fmt_entry(e: dict) -> str:
-        parts = [
-            f"{e.get('start_sec', 0)}s – {e.get('end_sec', 0)}s"
-            + (f" ({e.get('phase_label', '')})" if e.get("phase_label") else ""),
-            e.get("script", ""),
-        ]
-        bullets = [b for b in (e.get("bullet_notes") or []) if b and str(b).strip()]
-        if bullets:
-            parts.append("\n".join(f"  - {b}" for b in bullets))
-        return "\n".join(parts)
-
-    timeline_text = "\n\n".join(_fmt_entry(e) for e in timeline_entries) if timeline_entries else ""
-
-    timeline_section = (
-        f"EXISTING TIMELINE (use as reference or override):\n{timeline_text}"
-        if timeline_text
-        else "(Generate timeline from scratch based on total duration)"
-    )
-
-    user_prompt = f"""Create a {total_duration}s video with timeline, cinematic, audio, and safety sections.
-
-OVERALL STORY:
-{overall_story or "(none provided)"}
-
-{timeline_section}
-
-TOTAL DURATION: {total_duration}s
-
-Generate timeline_entries that fit exactly within 0.0s to {total_duration}s. Then generate cinematic_settings, audio_design, and safety_rules. Return valid JSON only."""
-
-    messages = [
-        {"role": "system", "content": DIRECTOR_BOARD_SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-    raw = await chat_completion(messages, llm_provider, llm_model, temperature, max_tokens=8192)
-    raw = raw.strip()
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines)
-
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            result = json.loads(raw[start:end])
-        else:
-            raise ValueError("Failed to parse director board JSON from LLM response")
-
-    # Normalize timeline entries
-    raw_entries = result.get("timeline_entries", [])
-    timeline_out = []
-    for i, e in enumerate(raw_entries):
-        if isinstance(e, dict):
-            timeline_out.append({
-                "start_sec": float(e.get("start_sec", 0)),
-                "end_sec": float(e.get("end_sec", 0)),
-                "phase_label": e.get("phase_label") or None,
-                "script": str(e.get("script", "")),
-                "bullet_notes": [str(b) for b in (e.get("bullet_notes") or []) if b],
-            })
-
-    return {
-        "timeline_entries": timeline_out,
-        "cinematic_settings": result.get("cinematic_settings", ""),
-        "audio_design": result.get("audio_design", ""),
-        "safety_rules": result.get("safety_rules", []),
-    }
 
 
 _LOCKED_STORYBOARD_FIELDS = frozenset({

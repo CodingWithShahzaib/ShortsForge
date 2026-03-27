@@ -4,26 +4,39 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.schemas import (
     GenerateScriptRequest,
     GenerateVideoProductionScriptRequest,
-    DirectorBoardGenerateRequest,
+    RewriteScriptRequest,
     StoryTemplateField,
 )
+from backend.schemas.generation import ViralIdeasRequest
 from backend.services.script_service import (
     generate_script,
     generate_story_and_storyboard,
     generate_video_production_script,
-    generate_director_board_sections,
     list_story_templates,
+    rewrite_script,
     STORY_TYPES,
     validate_story_template_field,
 )
+from backend.services.transition_service import list_transitions
+from backend.services.viral_ideas_service import fetch_viral_ideas
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_RESOLUTION_IDS = [
+    "1080x1920",
+    "720x1280",
+    "1920x1080",
+    "1280x720",
+    "1024x1024",
+    "1024x1792",
+    "1792x1024",
+]
 
 
 def _check_story_template(story_template: str) -> None:
@@ -45,6 +58,23 @@ async def generate_script_endpoint(req: GenerateScriptRequest):
         story_template=req.story_template,
     )
     return {"script": script, "word_count": len(script.split())}
+
+
+@router.post("/rewrite")
+async def rewrite_script_endpoint(req: RewriteScriptRequest):
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
+    if not req.instruction.strip():
+        raise HTTPException(status_code=400, detail="Instruction is required")
+    edited = await rewrite_script(
+        text=req.text,
+        instruction=req.instruction,
+        story_type=req.story_type,
+        llm_provider=req.llm_provider,
+        llm_model=req.llm_model,
+        temperature=req.temperature,
+    )
+    return {"text": edited}
 
 
 @router.post("/storyboard")
@@ -78,7 +108,7 @@ async def generate_storyboard_endpoint(
 
 @router.post("/video-production")
 async def generate_video_production_script_endpoint(req: GenerateVideoProductionScriptRequest):
-    """Generate a professional video production script with timestamps, camera angles, lighting, quality per scene (Sora/Runway style)."""
+    """Generate a professional video production script with timestamps, camera angles, lighting, quality per scene."""
     result = await generate_video_production_script(
         concept=req.concept,
         story_type=req.story_type,
@@ -88,29 +118,6 @@ async def generate_video_production_script_endpoint(req: GenerateVideoProduction
         temperature=req.temperature,
     )
     return result
-
-
-@router.post("/director-board")
-async def generate_director_board_endpoint(req: DirectorBoardGenerateRequest):
-    """AI-generate cinematic settings, audio design, and safety rules from overall story + timeline."""
-    entries = [
-        {
-            "start_sec": e.start_sec,
-            "end_sec": e.end_sec,
-            "phase_label": e.phase_label,
-            "script": e.script,
-            "bullet_notes": e.bullet_notes or [],
-        }
-        for e in req.timeline_entries
-    ]
-    return await generate_director_board_sections(
-        overall_story=req.overall_story,
-        timeline_entries=entries,
-        total_duration=req.total_duration,
-        llm_provider=req.llm_provider,
-        llm_model=req.llm_model,
-        temperature=req.temperature,
-    )
 
 
 @router.get("/story-types")
@@ -249,3 +256,57 @@ async def text_to_script(req: TextToScriptRequest):
         "word_count": len(script.split()),
         "extracted_length": len(content),
     }
+
+
+@router.post("/viral-ideas")
+async def viral_ideas(req: ViralIdeasRequest):
+    """LLM-generated viral-style topics with normalized video settings for the Create form."""
+    transition_ids = [t["id"] for t in list_transitions()]
+    try:
+        ideas = await fetch_viral_ideas(
+            niche=req.niche,
+            count=req.count,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+            resolution_ids=_RESOLUTION_IDS,
+            transition_ids=transition_ids,
+        )
+    except ValueError as exc:
+        logger.warning("viral ideas parse error: %s", exc)
+        raise HTTPException(502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("viral ideas LLM failure")
+        raise HTTPException(502, detail=f"LLM failed: {str(exc)[:200]}") from exc
+    return {"ideas": ideas}
+
+
+class AnalyzeConceptRequest(BaseModel):
+    title: str = ""
+    story_type: str = "general"
+    niche: str | None = Field(default=None, max_length=240)
+    llm_provider: str = "openai"
+    llm_model: str | None = None
+
+
+@router.post("/analyze-concept")
+async def analyze_concept_endpoint(req: AnalyzeConceptRequest):
+    """LLM hook variations and engagement notes for the Create form co-pilot."""
+    if not req.title.strip():
+        raise HTTPException(400, detail="Title is required")
+    from backend.services.concept_analyze_service import analyze_concept as run_analyze
+
+    try:
+        suggestions = await run_analyze(
+            title=req.title,
+            story_type=req.story_type,
+            niche=req.niche,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+        )
+    except ValueError as exc:
+        logger.warning("analyze concept parse error: %s", exc)
+        raise HTTPException(502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("analyze concept LLM failure")
+        raise HTTPException(502, detail=f"LLM failed: {str(exc)[:200]}") from exc
+    return {"suggestions": suggestions}

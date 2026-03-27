@@ -25,7 +25,11 @@ class PollinationsImageProvider(ImageProvider):
         **kwargs: Any,
     ) -> bytes:
         encoded_prompt = quote(prompt)
-        url = f"https://pollinations.ai/p/{encoded_prompt}?width={width}&height={height}&nologo=true&enhance=true"
+        # Official image host (pollinations.ai/p/ often serves HTML, not image bytes)
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"?width={width}&height={height}&model=flux&nologo=true&enhance=true"
+        )
         async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,41 @@ from backend.schemas import GenerateVideoRequest, BatchGenerateRequest, JobOut
 from backend.core.task_manager import task_manager
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def _delete_final_videos_for_recompile(project_id: str, db: AsyncSession) -> None:
+    """Remove stored final renders for a project and clear video pointers on completed video_render jobs."""
+    result = await db.execute(
+        select(Job).where(
+            Job.project_id == project_id,
+            Job.type == "video_render",
+            Job.status == "completed",
+        )
+    )
+    jobs = result.scalars().all()
+    keys: list[str] = []
+    for job in jobs:
+        res = job.result if isinstance(job.result, dict) else {}
+        vp = res.get("video_path")
+        if isinstance(vp, str) and vp.strip():
+            keys.append(vp.strip())
+        vu = res.get("video_url")
+        if isinstance(vu, str) and vu.strip() and not vu.startswith("http"):
+            keys.append(vu.strip())
+    unique_keys = list(dict.fromkeys(keys))
+    storage = get_storage()
+    for key in unique_keys:
+        try:
+            await storage.delete(key)
+        except Exception:
+            logger.warning("Could not delete prior render object %s", key, exc_info=True)
+    for job in jobs:
+        res = job.result if isinstance(job.result, dict) else {}
+        if not res.get("video_path") and not res.get("video_url"):
+            continue
+        new_res = {k: v for k, v in res.items() if k not in ("video_path", "video_url")}
+        job.result = new_res if new_res else None
 
 
 async def _requeue_failed_video_render(
@@ -132,11 +168,14 @@ async def list_jobs(
     skip: int = 0,
     limit: int = 50,
     status: str | None = None,
+    project_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Job).order_by(Job.created_at.desc()).offset(skip).limit(limit)
     if status:
         query = query.where(Job.status == status)
+    if project_id:
+        query = query.where(Job.project_id == project_id)
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -207,18 +246,22 @@ async def incremental_render_video(req: IncrementalRenderRequest, db: AsyncSessi
 
 @router.post("/compile", response_model=JobOut)
 async def compile_video(req: CompileRequest, db: AsyncSession = Depends(get_db)):
-    """Compile a project that has status ready_for_edit (post-production complete)."""
+    """Compile from ready_for_edit, or recompile from completed (prior final file removed)."""
     result = await db.execute(
         select(Project).where(Project.id == req.project_id)
     )
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if project.status != "ready_for_edit":
+    if project.status not in ("ready_for_edit", "completed"):
         raise HTTPException(
             400,
-            f"Project must be in ready_for_edit status to compile (current: {project.status}).",
+            "Compile is only available when the project is ready to edit or already has a completed video "
+            f"(current: {project.status}).",
         )
+
+    if project.status == "completed":
+        await _delete_final_videos_for_recompile(project.id, db)
 
     project.status = "generating"
     job = Job(
@@ -238,6 +281,9 @@ async def compile_video(req: CompileRequest, db: AsyncSession = Depends(get_db))
         "settings": None,
         "prepare_only": False,
         "storyboard_only": False,
+        # Re-encode each scene clip from the still image + current timing (required when
+        # match_scenes_to_audio or other duration settings change; avoids reusing stale clips).
+        "force_regenerate_scene_clips": True,
     }
 
     async def _do_render():
@@ -293,7 +339,7 @@ async def retry_project(project_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/jobs/{job_id}/retry", response_model=JobOut)
 async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
-    """Retry a failed job. Reuses the same job row for video_render and Sora; re-enqueues with stored or default params."""
+    """Retry a failed job. Reuses the same job row; re-enqueues with stored Redis params or video_render defaults."""
     result = await db.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
@@ -313,7 +359,7 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
             )
         return await _requeue_failed_video_render(job, project, db)
 
-    # Sora jobs: get params from Redis and reuse the same job
+    # Other job types (e.g. asset_generate): re-dispatch using params stored in Redis
     from backend.core import redis_queue
 
     params = await redis_queue.get_job_params(job_id)
@@ -335,7 +381,7 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
 
     redis_params = {**params, "job_id": job.id}
 
-    async def _do_sora():
+    async def _dispatch_registered_handler():
         from backend.core.job_registry import get_handler
         handler = get_handler(job_type)
         if handler:
@@ -343,9 +389,34 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
         raise ValueError(f"No handler for {job_type}")
 
     await task_manager.submit_to_redis(
-        job.id, job_type, redis_params, fallback_coro=_do_sora,
+        job.id, job_type, redis_params, fallback_coro=_dispatch_registered_handler,
     )
     return job
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+async def delete_failed_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    """Remove a failed job. For video_render jobs with a project, deletes the project (cascade: scenes, assets, all jobs)."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "failed":
+        raise HTTPException(400, f"Only failed jobs can be deleted (current status: {job.status}).")
+
+    await task_manager.cancel_redis_job(job_id)
+
+    if job.type == "video_render" and job.project_id:
+        rp = await db.execute(select(Project).where(Project.id == job.project_id))
+        project = rp.scalar_one_or_none()
+        if project:
+            await db.delete(project)
+        else:
+            await db.delete(job)
+    else:
+        await db.delete(job)
+
+    await db.commit()
 
 
 @router.post("/jobs/{job_id}/cancel")

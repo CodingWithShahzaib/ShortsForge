@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Type, Music, Upload, Headphones } from "lucide-react";
 import type { GenerateFormValues } from "@/app/generate/schema";
 import type { Voice } from "@/lib/types";
+import { prefersReducedMotion } from "@/lib/micro-interactions";
 
 type Provider = { name: string; configured: boolean };
 
@@ -38,15 +39,16 @@ export const AudioCard = memo(function AudioCard({
     formState: { errors, touchedFields, submitCount },
   } = useFormContext<GenerateFormValues>();
   const backgroundMusic = useWatch({ control, name: "background_music" });
+  const ttsVoice = useWatch({ control, name: "tts_voice" });
   const subtitleEnabled = useWatch({ control, name: "subtitle_enabled" });
   const subtitleSource = useWatch({ control, name: "subtitle_source" });
   const showError = (name: keyof GenerateFormValues) => !!(submitCount > 0 || touchedFields[name]) && !!errors[name];
 
   return (
-    <>
-      <div className="grid grid-cols-2 gap-4">
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-sm font-medium mb-1.5 block">TTS Provider</label>
+          <label className="text-sm font-medium mb-1 block">TTS Provider</label>
           <Controller
             control={control}
             name="tts_provider"
@@ -72,26 +74,41 @@ export const AudioCard = memo(function AudioCard({
           ) : null}
         </div>
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Voice</label>
-          <div className="flex gap-2">
-            <Controller
-              control={control}
-              name="tts_voice"
-              render={({ field }) => (
-                <Select value={field.value} onValueChange={field.onChange}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select voice" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {voices.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>
-                        {v.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            />
+          <label className="text-sm font-medium mb-1 flex items-center gap-2">
+            Voice
+            {ttsVoice && !prefersReducedMotion() ? (
+              <span className="inline-flex h-3.5 items-end gap-0.5" aria-hidden title="Voice selected">
+                {[0, 1, 2, 3].map((i) => (
+                  <span
+                    key={i}
+                    className="w-0.5 rounded-sm bg-primary/80 animate-pulse"
+                    style={{ animationDelay: `${i * 0.15}s`, height: `${40 + i * 15}%` }}
+                  />
+                ))}
+              </span>
+            ) : null}
+          </label>
+          <div className="flex min-w-0 gap-2">
+            <div className="min-w-0 flex-1">
+              <Controller
+                control={control}
+                name="tts_voice"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select voice" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {voices.map((v) => (
+                        <SelectItem key={v.id} value={v.id}>
+                          {v.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
             <Button
               variant="outline"
               size="icon"
@@ -115,7 +132,7 @@ export const AudioCard = memo(function AudioCard({
       </div>
 
       <div>
-        <label className="text-sm font-medium mb-1.5 flex items-center gap-1">
+        <label className="text-sm font-medium mb-1 flex items-center gap-1">
           <Music className="h-4 w-4" /> Background Music
         </label>
         <div className="flex gap-2">
@@ -197,9 +214,9 @@ export const AudioCard = memo(function AudioCard({
 
       {subtitleEnabled ? (
         <div className="contents">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">Subtitle Source</label>
+                  <label className="text-sm font-medium mb-1 block">Subtitle Source</label>
                   <Controller
                     control={control}
                     name="subtitle_source"
@@ -236,7 +253,7 @@ export const AudioCard = memo(function AudioCard({
                         </div>
                       )}
                       {src.value === "transcription" && (
-                        <div className="grid grid-cols-2 gap-4 pt-2">
+                        <div className="grid grid-cols-2 gap-3 pt-2">
                           <div>
                             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                               Transcription provider
@@ -282,9 +299,9 @@ export const AudioCard = memo(function AudioCard({
                   )}
                 />
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">Font</label>
+                  <label className="text-sm font-medium mb-1 block">Font</label>
                   <Controller
                     control={control}
                     name="subtitle_font"
@@ -308,7 +325,7 @@ export const AudioCard = memo(function AudioCard({
                   ) : null}
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">Size</label>
+                  <label className="text-sm font-medium mb-1 block">Size</label>
                   <Input
                     type="number"
                     min={24}
@@ -321,7 +338,7 @@ export const AudioCard = memo(function AudioCard({
                   ) : null}
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">Color</label>
+                  <label className="text-sm font-medium mb-1 block">Color</label>
                   <Controller
                     control={control}
                     name="subtitle_color"
@@ -349,7 +366,7 @@ export const AudioCard = memo(function AudioCard({
                   )}
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">Position</label>
+                  <label className="text-sm font-medium mb-1 block">Position</label>
                   <Controller
                     control={control}
                     name="subtitle_position"
@@ -378,6 +395,6 @@ export const AudioCard = memo(function AudioCard({
           Tip: use a locale like <code>en</code> or <code>en-US</code> for better transcript alignment.
         </p>
       ) : null}
-    </>
+    </div>
   );
 });

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, ProjectListItem, Job, WsMessage } from "@/lib/types";
+import type { Project, ProjectListItem, Job, WsMessage, JobPipelinePayload } from "@/lib/types";
 
 interface ProjectStore {
   projects: ProjectListItem[];
@@ -7,6 +7,7 @@ interface ProjectStore {
   jobs: Job[];
   activeJobIds: Set<string>;
   jobDetails: Record<string, string>;
+  jobPipelines: Record<string, JobPipelinePayload>;
   setProjects: (projects: ProjectListItem[]) => void;
   setCurrentProject: (project: Project | null) => void;
   setJobs: (jobs: Job[]) => void;
@@ -14,12 +15,13 @@ interface ProjectStore {
   addJob: (job: Job) => void;
 }
 
-export const useProjectStore = create<ProjectStore>((set, get) => ({
+export const useProjectStore = create<ProjectStore>((set) => ({
   projects: [],
   currentProject: null,
   jobs: [],
   activeJobIds: new Set(),
   jobDetails: {},
+  jobPipelines: {},
 
   setProjects: (projects) => set({ projects }),
   setCurrentProject: (project) => set({ currentProject: project }),
@@ -51,6 +53,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const jobDetails = { ...state.jobDetails };
     if (msg.detail) jobDetails[msg.job_id] = msg.detail;
     if (msg.type === "completed" || msg.type === "error") delete jobDetails[msg.job_id];
-    return { jobs, activeJobIds: active, jobDetails };
+
+    const jobPipelines = { ...state.jobPipelines };
+    if (msg.pipeline && msg.job_id) {
+      jobPipelines[msg.job_id] = msg.pipeline;
+    }
+    if (msg.type === "completed" || msg.type === "error") {
+      delete jobPipelines[msg.job_id];
+    }
+
+    return { jobs, activeJobIds: active, jobDetails, jobPipelines };
   }),
 }));

@@ -21,6 +21,15 @@
   --input: 214 32% 91%;
   --ring: 187 94% 43%;
   --radius: 0.75rem;
+
+  /* Neon buttons: inherit from nearest .section-neon--* (defaults = primary + accent) */
+  --neon-1: 187 94% 48%;
+  --neon-2: 187 100% 52%;
+  --neon-3: 262 83% 58%;
+  --neon-fg: 187 50% 30%;
+  --neon-fg-hover: 187 58% 26%;
+  --neon-fg-d: 185 88% 78%;
+  --neon-fg-d-hover: 180 92% 92%;
 }
 
 .dark {
@@ -43,6 +52,12 @@
   --border: 217 33% 17%;
   --input: 217 33% 17%;
   --ring: 187 94% 55%;
+
+  --neon-1: 187 94% 52%;
+  --neon-2: 187 100% 55%;
+  --neon-3: 262 83% 62%;
+  --neon-fg-d: 185 88% 78%;
+  --neon-fg-d-hover: 180 92% 92%;
 }
 
 @theme {
@@ -140,5 +155,439 @@ html:not(.dark) body {
   );
   background-size: 200% 100%;
   animation: progress-shimmer 1.5s linear infinite;
+}
+
+@keyframes sf-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.sf-skeleton-shimmer {
+  background: linear-gradient(
+    105deg,
+    hsl(var(--muted) / 0.45) 0%,
+    hsl(var(--muted) / 0.45) 38%,
+    hsl(var(--primary) / 0.22) 50%,
+    hsl(var(--muted) / 0.45) 62%,
+    hsl(var(--muted) / 0.45) 100%
+  );
+  background-size: 220% 100%;
+  animation: sf-skeleton-shimmer 2.2s ease-in-out infinite;
+}
+
+.dark .sf-skeleton-shimmer {
+  background: linear-gradient(
+    105deg,
+    hsl(var(--muted) / 0.35) 0%,
+    hsl(var(--muted) / 0.35) 38%,
+    hsl(var(--primary) / 0.18) 50%,
+    hsl(var(--muted) / 0.35) 62%,
+    hsl(var(--muted) / 0.35) 100%
+  );
+  background-size: 220% 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sf-skeleton-shimmer {
+    animation: none;
+    background: hsl(var(--muted) / 0.5);
+  }
+}
+
+/* ─── Viral ideas skeleton animations ─── */
+
+@keyframes viral-idea-card-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes viral-idea-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes viral-idea-icon-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.15);
+  }
+}
+
+.viral-idea-skeleton-card {
+  opacity: 0;
+  animation: viral-idea-card-in 0.45s ease-out forwards;
+}
+
+.viral-idea-sweep {
+  animation: viral-idea-sweep 2.4s ease-in-out infinite;
+}
+
+.viral-idea-icon-pulse {
+  animation: viral-idea-icon-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes viral-idea-status-fade {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.viral-idea-status-text {
+  animation: viral-idea-status-fade 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viral-idea-skeleton-card {
+    opacity: 1;
+    animation: none;
+  }
+  .viral-idea-sweep {
+    animation: none;
+  }
+  .viral-idea-icon-pulse {
+    animation: none;
+    opacity: 0.3;
+  }
+  .viral-idea-status-text {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* ─── ScriptStep generating gradient ─── */
+
+@keyframes generating-gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.generating-gradient {
+  background-image: linear-gradient(
+    135deg,
+    hsl(var(--card)) 0%,
+    hsl(var(--primary) / 0.06) 25%,
+    hsl(var(--accent) / 0.06) 50%,
+    hsl(var(--primary) / 0.04) 75%,
+    hsl(var(--card)) 100%
+  );
+  background-size: 300% 300%;
+  animation: generating-gradient-shift 8s ease infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .generating-gradient {
+    animation: none;
+  }
+}
+
+/* ─── Section-scoped neon tokens (buttons inherit from nearest ancestor) ─── */
+
+.section-neon--violet {
+  --neon-1: 265 82% 58%;
+  --neon-2: 187 92% 52%;
+  --neon-3: 278 72% 58%;
+  --neon-fg: 265 42% 28%;
+  --neon-fg-hover: 265 48% 24%;
+  --neon-fg-d: 268 88% 82%;
+  --neon-fg-d-hover: 270 92% 95%;
+}
+
+.section-neon--content {
+  --neon-1: 200 88% 48%;
+  --neon-2: 198 95% 50%;
+  --neon-3: 215 85% 55%;
+  --neon-fg: 210 45% 28%;
+  --neon-fg-hover: 212 50% 22%;
+  --neon-fg-d: 200 82% 80%;
+  --neon-fg-d-hover: 198 88% 92%;
+}
+
+.section-neon--visuals {
+  --neon-1: 250 78% 55%;
+  --neon-2: 252 85% 52%;
+  --neon-3: 265 75% 58%;
+  --neon-fg: 250 45% 28%;
+  --neon-fg-hover: 248 50% 24%;
+  --neon-fg-d: 252 85% 80%;
+  --neon-fg-d-hover: 255 90% 92%;
+}
+
+.section-neon--audio {
+  --neon-1: 182 88% 44%;
+  --neon-2: 185 95% 52%;
+  --neon-3: 175 75% 48%;
+  --neon-fg: 185 48% 28%;
+  --neon-fg-hover: 185 55% 24%;
+  --neon-fg-d: 183 85% 70%;
+  --neon-fg-d-hover: 180 88% 86%;
+}
+
+.section-neon--summary {
+  --neon-1: 158 72% 42%;
+  --neon-2: 160 78% 45%;
+  --neon-3: 165 70% 48%;
+  --neon-fg: 158 42% 26%;
+  --neon-fg-hover: 158 48% 22%;
+  --neon-fg-d: 158 82% 72%;
+  --neon-fg-d-hover: 160 88% 86%;
+}
+
+.section-neon--pipeline {
+  --neon-1: 215 70% 50%;
+  --neon-2: 220 75% 52%;
+  --neon-3: 230 65% 55%;
+  --neon-fg: 215 40% 28%;
+  --neon-fg-hover: 218 45% 24%;
+  --neon-fg-d: 215 78% 80%;
+  --neon-fg-d-hover: 218 82% 90%;
+}
+
+.section-neon--copilot {
+  --neon-1: 262 80% 58%;
+  --neon-2: 187 92% 52%;
+  --neon-3: 265 78% 58%;
+  --neon-fg: 262 50% 30%;
+  --neon-fg-hover: 262 55% 26%;
+  --neon-fg-d: 262 80% 82%;
+  --neon-fg-d-hover: 265 88% 92%;
+}
+
+.section-neon--cta {
+  --neon-1: 187 94% 50%;
+  --neon-2: 170 80% 48%;
+  --neon-3: 262 83% 58%;
+  --neon-fg: 187 50% 28%;
+  --neon-fg-hover: 187 58% 24%;
+  --neon-fg-d: 185 88% 78%;
+  --neon-fg-d-hover: 180 92% 92%;
+}
+
+.section-neon--amber {
+  --neon-1: 38 92% 50%;
+  --neon-2: 32 95% 52%;
+  --neon-3: 45 88% 55%;
+  --neon-fg: 32 50% 26%;
+  --neon-fg-hover: 35 55% 22%;
+  --neon-fg-d: 45 88% 72%;
+  --neon-fg-d-hover: 42 90% 88%;
+}
+
+/* ─── Neon primary CTAs — transparent fill, glow from section --neon-* tokens ─── */
+/* Radix solid buttons use --accent-9 / color-scale vars; override so fill stays clear. */
+/* `variant="animated"` adds Tailwind hover:shadow-lg — box-shadow uses !important. */
+
+.btn-neon-primary {
+  justify-content: center !important;
+  text-align: center;
+  --accent-9: transparent;
+  --accent-10: transparent;
+  --accent-a9: transparent;
+  --accent-a10: transparent;
+  --cyan-9: transparent;
+  --cyan-10: transparent;
+  --cyan-a9: transparent;
+  --cyan-a10: transparent;
+  position: relative;
+  isolation: isolate;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: calc(var(--radius) + 4px);
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border: 1px solid hsl(var(--neon-1) / 0.65) !important;
+  color: hsl(var(--neon-fg)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.22),
+    0 0 20px hsl(var(--neon-2) / 0.28),
+    0 0 40px hsl(var(--neon-3) / 0.12) !important;
+  text-shadow: none;
+  transition:
+    box-shadow 0.28s ease,
+    border-color 0.22s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.btn-neon-primary svg {
+  color: currentColor;
+  opacity: 0.95;
+  filter: drop-shadow(0 0 8px hsl(var(--neon-2) / 0.35));
+}
+
+.btn-neon-primary:hover:not(:disabled):not([data-disabled]) {
+  border-color: hsl(var(--neon-1) / 0.85) !important;
+  color: hsl(var(--neon-fg-hover)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.45),
+    0 0 28px hsl(var(--neon-2) / 0.45),
+    0 0 52px hsl(var(--neon-2) / 0.22),
+    0 0 80px hsl(var(--neon-3) / 0.18) !important;
+}
+
+.btn-neon-primary:active:not(:disabled):not([data-disabled]) {
+  transform: scale(0.985);
+}
+
+.btn-neon-primary:focus-visible {
+  outline: none;
+  border-color: hsl(var(--neon-1) / 0.9) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.4),
+    0 0 24px hsl(var(--neon-2) / 0.4),
+    0 0 0 3px hsl(var(--neon-2) / 0.35),
+    0 0 48px hsl(var(--neon-3) / 0.15) !important;
+}
+
+.btn-neon-primary:disabled,
+.btn-neon-primary[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: hsl(var(--neon-1) / 0.35) !important;
+  color: hsl(var(--neon-fg) / 0.55) !important;
+  box-shadow: 0 0 0 1px hsl(var(--neon-1) / 0.12) !important;
+}
+
+.dark .btn-neon-primary {
+  background: transparent !important;
+  background-color: transparent !important;
+  border-color: hsl(var(--neon-1) / 0.55) !important;
+  color: hsl(var(--neon-fg-d)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.28),
+    0 0 24px hsl(var(--neon-2) / 0.35),
+    0 0 48px hsl(var(--neon-3) / 0.16) !important;
+}
+
+.dark .btn-neon-primary:hover:not(:disabled):not([data-disabled]) {
+  border-color: hsl(var(--neon-1) / 0.75) !important;
+  color: hsl(var(--neon-fg-d-hover)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.4),
+    0 0 32px hsl(var(--neon-2) / 0.5),
+    0 0 64px hsl(var(--neon-2) / 0.22),
+    0 0 96px hsl(var(--neon-3) / 0.2) !important;
+}
+
+.dark .btn-neon-primary:disabled,
+.dark .btn-neon-primary[data-disabled] {
+  color: hsl(var(--neon-fg-d) / 0.45) !important;
+  border-color: hsl(var(--neon-1) / 0.35) !important;
+}
+
+/* Secondary neon — same section tokens, softer weight */
+
+.btn-neon-outline {
+  justify-content: center !important;
+  text-align: center;
+  --accent-9: transparent;
+  --accent-10: transparent;
+  --accent-a9: transparent;
+  --accent-a10: transparent;
+  --cyan-9: transparent;
+  --cyan-10: transparent;
+  --cyan-a9: transparent;
+  --cyan-a10: transparent;
+  --gray-9: transparent;
+  --gray-10: transparent;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: calc(var(--radius) + 4px);
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border: 1px solid hsl(var(--neon-1) / 0.42) !important;
+  color: hsl(var(--neon-fg)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.14),
+    0 0 16px hsl(var(--neon-2) / 0.2),
+    0 0 32px hsl(var(--neon-3) / 0.1) !important;
+  transition:
+    box-shadow 0.28s ease,
+    border-color 0.22s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.btn-neon-outline:hover:not(:disabled):not([data-disabled]) {
+  border-color: hsl(var(--neon-1) / 0.65) !important;
+  color: hsl(var(--neon-fg-hover)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.32),
+    0 0 22px hsl(var(--neon-2) / 0.32),
+    0 0 44px hsl(var(--neon-3) / 0.14) !important;
+}
+
+.btn-neon-outline:focus-visible {
+  outline: none;
+  border-color: hsl(var(--neon-1) / 0.75) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.35),
+    0 0 20px hsl(var(--neon-2) / 0.35),
+    0 0 0 3px hsl(var(--neon-2) / 0.28) !important;
+}
+
+.btn-neon-outline:disabled,
+.btn-neon-outline[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dark .btn-neon-outline {
+  border-color: hsl(var(--neon-1) / 0.4) !important;
+  color: hsl(var(--neon-fg-d)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.2),
+    0 0 18px hsl(var(--neon-2) / 0.28),
+    0 0 36px hsl(var(--neon-3) / 0.12) !important;
+}
+
+.dark .btn-neon-outline:hover:not(:disabled):not([data-disabled]) {
+  border-color: hsl(var(--neon-1) / 0.62) !important;
+  color: hsl(var(--neon-fg-d-hover)) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--neon-1) / 0.35),
+    0 0 26px hsl(var(--neon-2) / 0.42),
+    0 0 52px hsl(var(--neon-3) / 0.16) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-neon-primary,
+  .btn-neon-outline {
+    transition: none;
+  }
+  .btn-neon-primary:active:not(:disabled):not([data-disabled]) {
+    transform: none;
+  }
 }
 

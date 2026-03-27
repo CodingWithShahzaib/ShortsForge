@@ -1,15 +1,18 @@
 import * as React from "react";
+import { Card as RadixCard } from "@radix-ui/themes";
 
 import { cn } from "@/lib/utils";
 
 const Card = React.forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <div
+  React.ComponentPropsWithoutRef<typeof RadixCard>
+>(({ className, variant = "surface", size = "3", ...props }, ref) => (
+  <RadixCard
     ref={ref}
+    variant={variant}
+    size={size}
     className={cn(
-      "rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 text-slate-900 dark:text-slate-100 shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.5)] transition-all duration-300 motion-reduce:transition-none hover:shadow-[0_2px_12px_rgba(0,0,0,0.05)] dark:hover:shadow-[0_6px_28px_rgba(0,0,0,0.6)]",
+      "w-full min-w-0 shadow-sm transition-shadow duration-300 motion-reduce:transition-none dark:shadow-[0_4px_24px_rgba(0,0,0,0.45)]",
       className
     )}
     {...props}
@@ -21,11 +24,7 @@ const CardHeader = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn("flex flex-col space-y-1.5 p-6", className)}
-    {...props}
-  />
+  <div ref={ref} className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
 ));
 CardHeader.displayName = "CardHeader";
 
@@ -35,7 +34,7 @@ const CardTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <h3
     ref={ref}
-    className={cn("text-2xl font-semibold leading-none tracking-tight text-slate-900 dark:text-slate-100", className)}
+    className={cn("text-2xl font-semibold leading-none tracking-tight text-foreground", className)}
     {...props}
   />
 ));
@@ -45,11 +44,7 @@ const CardDescription = React.forwardRef<
   HTMLParagraphElement,
   React.HTMLAttributes<HTMLParagraphElement>
 >(({ className, ...props }, ref) => (
-  <p
-    ref={ref}
-    className={cn("text-sm text-slate-500 dark:text-slate-400", className)}
-    {...props}
-  />
+  <p ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
 ));
 CardDescription.displayName = "CardDescription";
 
@@ -65,11 +60,7 @@ const CardFooter = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn("flex items-center p-6 pt-0", className)}
-    {...props}
-  />
+  <div ref={ref} className={cn("flex items-center p-6 pt-0", className)} {...props} />
 ));
 CardFooter.displayName = "CardFooter";
 

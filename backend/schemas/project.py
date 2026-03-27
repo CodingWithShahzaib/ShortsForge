@@ -100,7 +100,7 @@ class ProjectBase(BaseModel):
     title: str
     story_type: str = "general"
     settings: dict[str, Any] | None = None
-    control_mode: str = "autopilot"
+    control_mode: str = "co_pilot"
 
 
 class ProjectCreate(ProjectBase):
@@ -125,7 +125,7 @@ class ProjectOut(ProjectBase):
     id: str
     script: str | None = None
     status: str
-    control_mode: str = "autopilot"
+    control_mode: str = "co_pilot"
     version: int = 1
     created_at: datetime
     updated_at: datetime
@@ -142,5 +142,7 @@ class ProjectListOut(BaseModel):
     status: str
     created_at: datetime
     scene_count: int = 0
+    thumbnail_url: str | None = None
+    duration_sec: int | None = None
 
     model_config = {"from_attributes": True}

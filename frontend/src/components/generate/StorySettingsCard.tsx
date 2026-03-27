@@ -14,7 +14,10 @@ type Props = {
   llmProviders: Provider[];
 };
 
-export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, llmProviders }: Props) {
+export const StorySettingsCard = memo(function StorySettingsCard({
+  storyTypes,
+  llmProviders,
+}: Props) {
   const {
     control,
     register,
@@ -40,31 +43,9 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
   const showError = (name: keyof GenerateFormValues) => !!(submitCount > 0 || touchedFields[name]) && !!errors[name];
 
   return (
-    <>
+    <div className="space-y-3">
       <div>
-        <label className="text-sm font-medium mb-1.5 block">Creation mode</label>
-        <Controller
-          control={control}
-          name="control_mode"
-          render={({ field }) => (
-            <Select value={field.value} onValueChange={field.onChange}>
-              <SelectTrigger>
-                <SelectValue placeholder="Mode" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="autopilot">Autopilot — AI creates images and voice, then you compile</SelectItem>
-                <SelectItem value="co_pilot">Co-pilot — storyboard only; add assets per scene in the editor</SelectItem>
-                <SelectItem value="manual">Manual — storyboard first (same as co-pilot entry)</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
-        />
-        <p className="text-xs text-muted-foreground mt-1">
-          Co-pilot and Manual skip automatic image and TTS until you generate them on the project page.
-        </p>
-      </div>
-      <div>
-        <label className="text-sm font-medium mb-1.5 block">Story Type</label>
+        <label className="text-sm font-medium mb-1 block">Story Type</label>
         <Controller
           control={control}
           name="story_type"
@@ -87,11 +68,11 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.story_type?.message}</p>
         ) : null}
       </div>
-      <details className="rounded-md border border-border/70 p-3">
+      <details className="rounded-md border border-border/70 p-2.5">
         <summary className="cursor-pointer text-sm font-medium">Advanced story controls</summary>
-        <div className="space-y-4 mt-3">
+        <div className="mt-2.5 space-y-3">
           <div>
-            <label className="text-sm font-medium mb-1.5 block">Narrative structure</label>
+            <label className="text-sm font-medium mb-1 block">Narrative structure</label>
             <Controller
               control={control}
               name="story_template"
@@ -117,9 +98,9 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
               <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.story_template?.message}</p>
             ) : null}
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium mb-1.5 block">Script length (words)</label>
+              <label className="text-sm font-medium mb-1 block">Script length (words)</label>
               <Input
                 type="number"
                 min={150}
@@ -133,7 +114,7 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
               ) : null}
             </div>
             <div>
-              <label className="text-sm font-medium mb-1.5 block">LLM Provider</label>
+              <label className="text-sm font-medium mb-1 block">LLM Provider</label>
               <Controller
                 control={control}
                 name="llm_provider"
@@ -159,7 +140,7 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
               ) : null}
             </div>
             <div>
-              <label className="text-sm font-medium mb-1.5 block">Scenes</label>
+              <label className="text-sm font-medium mb-1 block">Scenes</label>
               <Input
                 type="number"
                 min={2}
@@ -173,7 +154,7 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
             </div>
           </div>
           <div>
-            <label className="text-sm font-medium mb-1.5 block">Scene Duration (seconds)</label>
+            <label className="text-sm font-medium mb-1 block">Scene Duration (seconds)</label>
             <Input
               type="number"
               min={1}
@@ -191,6 +172,6 @@ export const StorySettingsCard = memo(function StorySettingsCard({ storyTypes, l
           </div>
         </div>
       </details>
-    </>
+    </div>
   );
 });

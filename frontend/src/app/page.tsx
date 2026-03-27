@@ -2,61 +2,101 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Video, TrendingUp, Clock, CheckCircle, AlertCircle, RotateCcw, RefreshCcw, BarChart3, Film, BarChart2, ListTodo, FolderOpen, Plus, BellRing } from "lucide-react";
-import { BentoGrid } from "@/components/ui/bento-grid";
+import {
+  Video,
+  TrendingUp,
+  Clock,
+  CheckCircle,
+  AlertCircle,
+  ListTodo,
+  FolderOpen,
+  Plus,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { LinearProgress } from "@/components/ui/progress-linear";
-import { api, getMediaUrl } from "@/lib/api";
 import { useProjectStore } from "@/stores/projectStore";
-import type { ProjectListItem, Job } from "@/lib/types";
-import { toast } from "sonner";
+import type { ProjectListItem } from "@/lib/types";
+import { notify } from "@/lib/notify";
 import {
   useDashboardSummaryQuery,
   useJobsQuery,
   useProjectsQuery,
   useRetryJobMutation,
   useRetryProjectMutation,
+  useDeleteFailedJobMutation,
+  useDeleteProjectMutation,
+  useYoutubeChannelStatsQuery,
+  useYoutubeChannelsQuery,
   queryKeys,
 } from "@/lib/queries";
 import {
+  aggregateActivityBucketsForDisplay,
   buildActivityBuckets,
   computeDashboardMetrics,
   computeDelta,
   type DashboardRange,
 } from "@/lib/dashboard-metrics";
+import { PulseMetricsStrip } from "@/components/dashboard/pulse-metrics-strip";
+import { PulseHero21st } from "@/components/dashboard/pulse-hero-21st";
+import type { StatCardItem21st } from "@/components/dashboard/stats-cards-21st";
+import { ActionCenter21st } from "@/components/dashboard/action-center-21st";
+import { AnalyticsPanel21st } from "@/components/dashboard/analytics-panel-21st";
+import { WorkTabs21st, type WorkTabId } from "@/components/dashboard/work-tabs-21st";
+import { YoutubeChannelPanel21st } from "@/components/dashboard/youtube-channel-panel-21st";
+import { NextActionPanel, type NextActionItem } from "@/components/dashboard/next-action-panel";
+import { DraftsPanel } from "@/components/dashboard/drafts-panel";
+import { PublishStatusPanel } from "@/components/dashboard/publish-status-panel";
+import { QuickStartsPanel } from "@/components/dashboard/quick-starts-panel";
+import { RecentWinPanel } from "@/components/dashboard/recent-win-panel";
+import { JobCard } from "@/components/job-card";
+import { ProjectCard } from "@/components/project-card";
+import { DashboardJobRowSkeleton } from "@/components/ui/content-skeletons";
+import { motion } from "framer-motion";
+import { appConfirm } from "@/stores/confirmDialogStore";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function DashboardPage() {
   const { projects, setProjects, jobs, setJobs } = useProjectStore();
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [range, setRange] = useState<DashboardRange>("7");
-  const [preview, setPreview] = useState<{ url: string; x: number; y: number } | null>(null);
+  const [workTab, setWorkTab] = useState<WorkTabId>("queue");
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [retryingProjectId, setRetryingProjectId] = useState<string | null>(null);
-  const queryClient = useQueryClient();
+  const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [ytChannelId, setYtChannelId] = useState<string | null>(null);
   const { data: fetchedProjects, isLoading: loadingProjects, error: projectsError } = useProjectsQuery();
   const { data: fetchedJobs, isLoading: loadingJobs, error: jobsError } = useJobsQuery();
   const { data: summary } = useDashboardSummaryQuery();
+  const { data: ytChannelsStatus } = useYoutubeChannelsQuery();
+  const ytChannels = ytChannelsStatus?.channels || [];
+  const ytConnected = ytChannelsStatus?.connected ?? false;
+  const ytDefaultId =
+    ytChannelsStatus?.default_channel_id ||
+    ytChannels.find((c) => c.is_default)?.channel_id ||
+    ytChannels[0]?.channel_id ||
+    null;
+  const {
+    data: ytChannelStats,
+    isLoading: ytStatsLoading,
+    isFetching: ytStatsFetching,
+    isError: ytStatsError,
+  } = useYoutubeChannelStatsQuery(ytChannelId || ytDefaultId || undefined);
   const retryJobMutation = useRetryJobMutation();
   const retryProjectMutation = useRetryProjectMutation();
+  const deleteFailedJobMutation = useDeleteFailedJobMutation();
+  const deleteProjectMutation = useDeleteProjectMutation();
+  const queryClient = useQueryClient();
   const loading = loadingProjects || loadingJobs;
   const error = projectsError || jobsError;
 
   useEffect(() => {
     if (fetchedProjects) setProjects(fetchedProjects);
     if (fetchedJobs) setJobs(fetchedJobs);
-    setLastUpdated(new Date());
   }, [fetchedProjects, fetchedJobs, setProjects, setJobs]);
 
-  const refreshDashboard = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }),
-    ]);
-    setLastUpdated(new Date());
-  };
+  useEffect(() => {
+    if (!ytChannelId && ytDefaultId) setYtChannelId(ytDefaultId);
+  }, [ytChannelId, ytDefaultId]);
+
 
   const metrics = useMemo(() => computeDashboardMetrics(projects, jobs), [projects, jobs]);
 
@@ -67,7 +107,8 @@ export default function DashboardPage() {
   }, [projects]);
 
   const analytics = useMemo(() => {
-    const buckets = buildActivityBuckets(jobs, range);
+    const daily = buildActivityBuckets(jobs, range);
+    const buckets = aggregateActivityBucketsForDisplay(daily, range);
     const maxCount = Math.max(1, ...buckets.map((b) => b.completed + b.failed));
     const splitPoint = Math.floor(buckets.length / 2);
     const previousCount = buckets.slice(0, splitPoint).reduce((acc, b) => acc + b.completed + b.failed, 0);
@@ -80,527 +121,446 @@ export default function DashboardPage() {
     };
   }, [jobs, range]);
 
+  const statItems: StatCardItem21st[] = useMemo(
+    () => [
+      {
+        id: "progress",
+        label: "In progress",
+        value: String(metrics.inProgressProjects),
+        hint: "Generating or queued",
+        icon: <Clock className="h-4 w-4 text-amber-600 dark:text-amber-400" />,
+        accent: "amber",
+      },
+      {
+        id: "completed",
+        label: "Completed",
+        value: String(metrics.completedProjects),
+        hint: "Successfully finished generations",
+        icon: <CheckCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />,
+        accent: "emerald",
+      },
+      {
+        id: "failed",
+        label: "Failed",
+        value: String(metrics.failedProjects),
+        hint: "Need attention or retry",
+        icon: <AlertCircle className="h-4 w-4 text-rose-600 dark:text-rose-400" />,
+        accent: "rose",
+      },
+      {
+        id: "avg",
+        label: "Avg. processing",
+        value: `${metrics.avgProcessingMin}m`,
+        hint: "Per completed job",
+        icon: <TrendingUp className="h-4 w-4 text-sky-600 dark:text-sky-400" />,
+        accent: "sky",
+      },
+    ],
+    [metrics]
+  );
+
   const handleRetry = async (id: string) => {
     try {
       setRetryingProjectId(id);
       await retryProjectMutation.mutateAsync(id);
-      toast.success("Retry queued");
+      notify.success("Retry queued");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Retry failed";
-      toast.error(message);
+      notify.error(message);
     } finally {
       setRetryingProjectId(null);
     }
   };
 
-  const updatePreviewPosition = (evt: React.MouseEvent) => {
-    if (!preview) return;
-    const padding = 16;
-    const width = 280;
-    const height = 170;
-    const maxX = window.innerWidth - width - padding;
-    const maxY = window.innerHeight - height - padding;
-    const x = Math.min(maxX, Math.max(padding, evt.clientX + 16));
-    const y = Math.min(maxY, Math.max(padding, evt.clientY + 16));
-    setPreview((p) => (p ? { ...p, x, y } : p));
+  const handleDeleteFailedJob = async (jobId: string) => {
+    const ok = await appConfirm({
+      title: "Delete failed job?",
+      description:
+        "This removes the failed job and its project (scenes, assets, and all related jobs). This cannot be undone.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      variant: "destructive",
+    });
+    if (!ok) return;
+    setDeletingJobId(jobId);
+    try {
+      await deleteFailedJobMutation.mutateAsync(jobId);
+      notify.success("Deleted");
+    } catch (e: unknown) {
+      notify.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingJobId(null);
+    }
   };
 
+  const handleDeleteFailedProject = async (projectId: string) => {
+    const ok = await appConfirm({
+      title: "Delete failed project?",
+      description: "This removes the project and all of its data. This cannot be undone.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      variant: "destructive",
+    });
+    if (!ok) return;
+    setDeletingProjectId(projectId);
+    try {
+      await deleteProjectMutation.mutateAsync(projectId);
+      notify.success("Project deleted");
+    } catch (e: unknown) {
+      notify.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingProjectId(null);
+    }
+  };
+
+  const { failedJobsSlice, failedProjectsSlice } = useMemo(() => {
+    const failedJobsList = jobs.filter((j) => j.status === "failed");
+    const projectIdsWithFailedJob = new Set<string>();
+    for (const j of failedJobsList) {
+      if (j.project_id) projectIdsWithFailedJob.add(j.project_id);
+    }
+    return {
+      failedJobsSlice: failedJobsList.slice(0, 3),
+      failedProjectsSlice: projects
+        .filter((p) => p.status === "failed" && !projectIdsWithFailedJob.has(p.id))
+        .slice(0, 3),
+    };
+  }, [jobs, projects]);
+
+  const sortedProjects = useMemo(
+    () =>
+      [...projects].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ),
+    [projects]
+  );
+
+  const draftProjects = useMemo(
+    () => sortedProjects.filter((p) => p.status !== "completed").slice(0, 3),
+    [sortedProjects]
+  );
+
+  const completedProjects = useMemo(
+    () => sortedProjects.filter((p) => p.status === "completed").slice(0, 3),
+    [sortedProjects]
+  );
+
+  const recentWin = completedProjects[0] ?? null;
+
+  const activeJobsCount =
+    summary?.jobs != null
+      ? summary.jobs.in_progress + summary.jobs.queued
+      : jobs.filter((j) => j.status === "in_progress" || j.status === "queued").length;
+
+  const lastUpdatedLabel =
+    summary && "last_updated" in summary && summary.last_updated
+      ? `Updated ${new Date(summary.last_updated).toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        })}`
+      : null;
+
+  const refreshDashboard = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }),
+    ]);
+  };
+
+  const nextActions: NextActionItem[] = useMemo(() => {
+    const items: NextActionItem[] = [];
+    const failedCount = failedJobsSlice.length + failedProjectsSlice.length;
+    if (failedCount > 0) {
+      items.push({
+        id: "fix-failures",
+        title: "Resolve failed items",
+        description: `${failedCount} failed item${failedCount === 1 ? "" : "s"} need attention.`,
+        ctaLabel: "Open action center",
+        href: "#needs-attention",
+      });
+    }
+    if (activeJobsCount > 0) {
+      items.push({
+        id: "track-jobs",
+        title: "Track active jobs",
+        description: `${activeJobsCount} job${activeJobsCount === 1 ? "" : "s"} running or queued.`,
+        ctaLabel: "View activity",
+        href: "/history",
+      });
+    }
+    if (projects.length === 0) {
+      items.push({
+        id: "first-project",
+        title: "Create your first project",
+        description: "Start with a script or idea to generate your first short.",
+        ctaLabel: "Start now",
+        href: "/generate",
+      });
+    }
+    if (items.length === 0) {
+      items.push({
+        id: "new-project",
+        title: "Start a fresh project",
+        description: "Keep your momentum with a new idea or script.",
+        ctaLabel: "New project",
+        href: "/generate",
+      });
+    }
+    return items.slice(0, 2);
+  }, [activeJobsCount, failedJobsSlice.length, failedProjectsSlice.length, projects.length]);
+
   return (
-    <div className="space-y-10 text-slate-900 dark:text-slate-100 w-full">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">Pulse</h1>
-        <p className="text-slate-500 dark:text-slate-400 mt-1">From script to reel in minutes.</p>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-slate-500 dark:text-slate-400">At a glance</span>
-        <div className="flex items-center gap-2">
-          {summary && (
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              {summary.jobs.in_progress + summary.jobs.queued} active jobs
-            </span>
-          )}
-          {lastUpdated && (
-            <span className="text-xs text-slate-500 dark:text-slate-400">Updated {lastUpdated.toLocaleTimeString()}</span>
-          )}
-          <Button variant="ghost" size="icon" onClick={refreshDashboard} disabled={loading} title="Refresh">
-            <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          </Button>
-        </div>
-      </div>
-
-      <BentoGrid
-        items={[
-          {
-            title: "Total Projects",
-            meta: String(metrics.totalProjects),
-            description: "All projects and generation jobs in your workspace",
-            icon: <Video className="w-4 h-4 text-cyan-500" />,
-            accentColor: "cyan",
-            status: "Live",
-            tags: ["Overview", "Workspace"],
-            colSpan: 2,
-            hasPersistentHover: true,
-          },
-          {
-            title: "Completed",
-            meta: String(metrics.completedProjects),
-            description: "Successfully finished generations",
-            icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,
-            accentColor: "emerald",
-            status: "Active",
-            tags: ["Success", "Done"],
-          },
-          {
-            title: "In Progress",
-            meta: String(metrics.inProgressProjects),
-            description: "Currently generating or queued",
-            icon: <Clock className="w-4 h-4 text-amber-500" />,
-            accentColor: "amber",
-            status: metrics.inProgressProjects > 0 ? "Running" : "Idle",
-            tags: ["Queue", "Processing"],
-          },
-          {
-            title: "Failed",
-            meta: String(metrics.failedProjects),
-            description: "Jobs that encountered errors",
-            icon: <AlertCircle className="w-4 h-4 text-rose-500" />,
-            accentColor: "rose",
-            status: metrics.failedProjects > 0 ? "Needs attention" : "Clear",
-            tags: ["Errors", "Retry"],
-            colSpan: 2,
-          },
-          {
-            title: "Success Rate",
-            meta: `${metrics.successRate}%`,
-            description: "Percentage of finished jobs completed successfully",
-            icon: <BarChart3 className="w-4 h-4 text-emerald-500" />,
-            accentColor: "emerald",
-            status: metrics.successRate >= 90 ? "Healthy" : "Review",
-            tags: ["Analytics", "Quality"],
-          },
-          {
-            title: "Content Produced",
-            meta: `${metrics.totalDurationMin} min`,
-            description: "Total video runtime from completed generations",
-            icon: <Film className="w-4 h-4 text-violet-500" />,
-            accentColor: "violet",
-            status: "Active",
-            tags: ["Video", "Output"],
-          },
-          {
-            title: "Avg. Processing",
-            meta: `${metrics.avgProcessingMin}m`,
-            description: "Average time per completed job",
-            icon: <TrendingUp className="w-4 h-4 text-sky-500" />,
-            accentColor: "sky",
-            status: "Metrics",
-            tags: ["Performance", "Speed"],
-          },
-        ]}
+    <div className="min-w-0 w-full max-w-none space-y-5 text-slate-900 dark:text-slate-100">
+      <PulseHero21st
+        title="Pulse"
+        subtitle="From script to reel in minutes."
+        activeJobsLabel={`${activeJobsCount} active job${activeJobsCount === 1 ? "" : "s"}`}
+        lastUpdatedLabel={lastUpdatedLabel}
+        loading={loading}
+        onRefresh={refreshDashboard}
       />
-
       {error && (
-        <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 p-4 shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
-          <p className="text-sm text-rose-500">{(error as Error).message || "Failed to load dashboard data."}</p>
-        </div>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="rounded-2xl border border-rose-200/80 bg-rose-50/90 px-4 py-3 dark:border-rose-900/50 dark:bg-rose-950/30"
+        >
+          <p className="text-sm text-rose-700 dark:text-rose-300">
+            {(error as Error).message || "Failed to load dashboard data."}
+          </p>
+        </motion.div>
       )}
+
       {!loading && !error && projects.length === 0 && jobs.length === 0 && (
-        <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 p-8 shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.5)] text-center">
-          <div className="w-12 h-12 rounded-xl bg-cyan-500/10 dark:bg-cyan-500/20 flex items-center justify-center mx-auto mb-4">
-            <Video className="w-6 h-6 text-cyan-500" />
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/80 px-6 py-14 text-center shadow-[0_12px_40px_rgba(15,23,42,0.08)] dark:border-zinc-700/80 dark:bg-zinc-900/80"
+        >
+          <div
+            className="pointer-events-none absolute inset-0"
+            aria-hidden
+            style={{
+              background:
+                "radial-gradient(circle at 20% 20%, rgba(56,189,248,0.12), transparent 55%), radial-gradient(circle at 80% 0%, rgba(14,165,233,0.14), transparent 45%), radial-gradient(circle at 50% 120%, rgba(34,211,238,0.12), transparent 55%)",
+            }}
+          />
+          <div className="relative flex flex-col items-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-200/50 bg-linear-to-br from-cyan-500/20 via-sky-500/10 to-transparent dark:border-cyan-500/30 dark:from-cyan-500/20">
+              <Video className="h-7 w-7 text-cyan-600 dark:text-cyan-300" />
+            </div>
+            <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl">
+              Your studio is ready
+            </h2>
+            <p className="mt-2 max-w-xl text-sm text-slate-600 dark:text-slate-300">
+              No data yet. Create a project or start a generation to see insights, activity, and wins.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <Button asChild className="gap-2 rounded-xl">
+                <Link href="/generate">
+                  <Plus className="h-4 w-4" />
+                  Create project
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="gap-2 rounded-xl">
+                <Link href="/scripts">
+                  <Video className="h-4 w-4" />
+                  Explore scripts
+                </Link>
+              </Button>
+            </div>
           </div>
-          <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">No data yet. Create a project or start a generation to see dashboard stats.</p>
-          <Link href="/generate">
-            <Button size="sm" className="gap-2">
-              <Plus className="w-4 h-4" />
-              Create project
-            </Button>
-          </Link>
-        </div>
+        </motion.div>
       )}
 
-      <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 overflow-hidden transition-all duration-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
-        <div className="flex flex-row items-center justify-between p-6">
-          <h3 className="text-2xl font-semibold leading-none tracking-tight text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <BarChart2 className="w-6 h-6 text-cyan-500" />
-            Analytics
-          </h3>
-          <div className="flex gap-2">
-            <Button variant={range === "7" ? "default" : "outline"} size="sm" onClick={() => setRange("7")}>Last 7 days</Button>
-            <Button variant={range === "30" ? "default" : "outline"} size="sm" onClick={() => setRange("30")}>Last 30 days</Button>
-          </div>
-        </div>
-        <div className="p-6 pt-0 space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-linear-to-br from-emerald-500/10 to-emerald-500/5 dark:from-emerald-500/20 dark:to-emerald-500/10">
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Success Rate</p>
-              <p className="text-2xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">{metrics.successRate}%</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">of finished jobs completed</p>
-            </div>
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-linear-to-br from-cyan-500/10 to-cyan-500/5 dark:from-cyan-500/20 dark:to-cyan-500/10">
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Content Produced</p>
-              <p className="text-2xl font-bold tabular-nums text-cyan-600 dark:text-cyan-400 mt-1">{metrics.totalDurationMin} min</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">total video runtime</p>
-            </div>
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-linear-to-br from-violet-500/10 to-violet-500/5 dark:from-violet-500/20 dark:to-violet-500/10">
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Avg. Processing</p>
-              <p className="text-2xl font-bold tabular-nums text-violet-600 dark:text-violet-400 mt-1">{metrics.avgProcessingMin}m</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">per completed job</p>
-            </div>
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 bg-slate-50/80 dark:bg-zinc-800/70">
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Insight</p>
-              <div className="mt-2 space-y-1">
-                <p className="text-sm text-slate-700 dark:text-slate-200">
-                  Throughput delta: <span className={analytics.throughputDelta >= 0 ? "text-emerald-500" : "text-rose-500"}>
-                    {analytics.throughputDelta >= 0 ? "+" : ""}{analytics.throughputDelta}%
-                  </span>
-                </p>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Top failure: {metrics.topFailureReason || "No failures in range"}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div>
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Activity</p>
-            <div className="relative h-24">
-              <div className="h-24 flex items-end gap-1">
-                {analytics.buckets.map((b) => {
-                  const total = b.completed + b.failed;
-                  const barHeightPct = analytics.maxCount > 0 ? Math.max(15, (total / analytics.maxCount) * 100) : 15;
-                  const completedPct = total > 0 ? (b.completed / total) * 100 : 0;
-                  const failedPct = total > 0 ? (b.failed / total) * 100 : 0;
-                  return (
-                    <div key={b.label} className="flex-1 flex flex-col items-center gap-1.5 group" title={`${b.label}: ${b.completed} completed, ${b.failed} failed`}>
-                      <div className="w-full rounded-t overflow-hidden flex flex-col-reverse" style={{ height: "80px" }}>
-                        {total > 0 ? (
-                          <div className="w-full flex flex-col-reverse" style={{ height: `${barHeightPct}%`, minHeight: "10px" }}>
-                            {b.failed > 0 && (
-                              <div className="w-full bg-rose-500/80 group-hover:bg-rose-500 transition-colors" style={{ height: `${failedPct}%`, minHeight: "2px" }} />
-                            )}
-                            {b.completed > 0 && (
-                              <div className="w-full bg-emerald-500/80 group-hover:bg-emerald-500 transition-colors" style={{ height: `${completedPct}%`, minHeight: "2px" }} />
-                            )}
-                          </div>
-                        ) : (
-                          <div className="w-full h-2 rounded-t bg-slate-200/80 dark:bg-zinc-800/80" />
-                        )}
-                      </div>
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400">{b.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              {analytics.totalInRange === 0 && (
-                <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400">
-                  No activity in selected range.
-                </div>
-              )}
-            </div>
-            <div className="flex gap-4 mt-2 text-xs text-slate-500 dark:text-slate-400">
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-emerald-500/80" /> Completed</span>
-              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-rose-500/80" /> Failed</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      {(!error && (projects.length > 0 || jobs.length > 0)) || loading ? (
+        <div className="grid w-full min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,34vw)] xl:items-start xl:gap-x-4 2xl:gap-x-6">
+          <div className="min-w-0 space-y-4">
+            <NextActionPanel items={nextActions} />
 
-      <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 p-6 space-y-4">
-        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-          <BellRing className="w-5 h-5 text-amber-500" />
-          Action Center
-        </h3>
-        <div className="grid md:grid-cols-2 gap-3">
-          {jobs.filter((j) => j.status === "failed").slice(0, 3).map((job) => (
-            <div key={job.id} className="p-3 rounded-lg border border-slate-200/70 dark:border-zinc-700 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">{job.type.replace(/_/g, " ")}</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Job failed - needs retry</p>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={retryingJobId === job.id}
-                onClick={async () => {
-                  setRetryingJobId(job.id);
-                  try {
-                    await retryJobMutation.mutateAsync(job.id);
-                    toast.success("Retry queued");
-                  } catch (e: unknown) {
-                    const message = e instanceof Error ? e.message : "Retry failed";
-                    toast.error(message);
-                  } finally {
-                    setRetryingJobId(null);
-                  }
-                }}
-              >
-                <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                Retry
-              </Button>
-            </div>
-          ))}
-          {projects.filter((p) => p.status === "failed").slice(0, 3).map((project) => (
-            <div key={project.id} className="p-3 rounded-lg border border-slate-200/70 dark:border-zinc-700 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">{project.title}</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Project failed - retry render</p>
-              </div>
-              <Button size="sm" variant="outline" disabled={retryingProjectId === project.id} onClick={() => handleRetry(project.id)}>
-                <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                Retry
-              </Button>
-            </div>
-          ))}
-          {jobs.filter((j) => j.status === "failed").length === 0 && projects.filter((p) => p.status === "failed").length === 0 && (
-            <p className="text-sm text-slate-500 dark:text-slate-400">No actions pending.</p>
-          )}
-        </div>
-      </div>
+            <RecentWinPanel project={recentWin} />
 
-      <div className="flex gap-4">
-      <div className="flex-1 min-w-0 rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 overflow-hidden transition-all duration-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
-        <div className="flex flex-row items-center justify-between p-6">
-          <h3 className="text-2xl font-semibold leading-none tracking-tight text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <ListTodo className="w-6 h-6 text-cyan-500" />
-            Queue
-          </h3>
-          {jobs.length > 0 && (
-            <Link href="/history">
-              <Button variant="ghost" size="sm">View All</Button>
-            </Link>
-          )}
-        </div>
-        <div className="p-6 pt-0">
-          {loading ? (
-            <div className="space-y-4">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="p-4 rounded-xl border border-slate-200/80 dark:border-zinc-700 animate-pulse">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-2 flex-1">
-                      <div className="h-4 w-32 bg-slate-200 dark:bg-zinc-800/80 rounded" />
-                      <div className="h-3 w-24 bg-slate-200 dark:bg-zinc-800/80 rounded" />
-                    </div>
-                    <div className="h-4 w-8 bg-slate-200 dark:bg-zinc-800/80 rounded" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : jobs.length === 0 ? (
-            <div className="py-8 text-center">
-              <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-zinc-800/80 flex items-center justify-center mx-auto mb-4">
-                <ListTodo className="w-6 h-6 text-slate-400" />
-              </div>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">No recent jobs yet.</p>
-              <Link href="/generate">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Plus className="w-4 h-4" />
-                  Create project
-                </Button>
-              </Link>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {jobs.slice(0, 5).map((job) => (
-                <JobRow
-                  key={job.id}
-                  job={job}
-                  projectTitle={job.project_id ? projectMap[job.project_id]?.title : undefined}
-                  onPreviewStart={(url, evt) => {
-                    const padding = 16;
-                    const width = 280;
-                    const height = 170;
-                    const maxX = window.innerWidth - width - padding;
-                    const maxY = window.innerHeight - height - padding;
-                    const x = Math.min(maxX, Math.max(padding, evt.clientX + 16));
-                    const y = Math.min(maxY, Math.max(padding, evt.clientY + 16));
-                    setPreview({ url, x, y });
-                  }}
-                  onPreviewMove={updatePreviewPosition}
-                  onPreviewEnd={() => setPreview(null)}
-                  onRetry={async () => {
+            <PulseMetricsStrip items={statItems} />
+
+            <DraftsPanel projects={draftProjects} />
+
+            <div id="needs-attention">
+              <ActionCenter21st
+                failedJobs={failedJobsSlice.map((job) => ({
+                  id: job.id,
+                  title:
+                    job.project_id && projectMap[job.project_id]?.title
+                      ? projectMap[job.project_id].title
+                      : job.type.replace(/_/g, " "),
+                  subtitle: "Job failed — retry to continue",
+                  retrying: retryingJobId === job.id,
+                  deleting: deletingJobId === job.id,
+                  onRetry: async () => {
                     setRetryingJobId(job.id);
                     try {
                       await retryJobMutation.mutateAsync(job.id);
-                      toast.success("Retry queued");
+                      notify.success("Retry queued");
                     } catch (e: unknown) {
-                      const message = e instanceof Error ? e.message : "Retry failed";
-                      toast.error(message);
+                      notify.error(e instanceof Error ? e.message : "Retry failed");
                     } finally {
                       setRetryingJobId(null);
                     }
-                  }}
-                  retrying={retryingJobId === job.id}
+                  },
+                  onDelete: () => handleDeleteFailedJob(job.id),
+                }))}
+                failedProjects={failedProjectsSlice.map((project) => ({
+                  id: project.id,
+                  title: project.title,
+                  subtitle: "Project failed — retry render",
+                  retrying: retryingProjectId === project.id,
+                  deleting: deletingProjectId === project.id,
+                  onRetry: () => handleRetry(project.id),
+                  onDelete: () => handleDeleteFailedProject(project.id),
+                }))}
+              />
+            </div>
+
+            <PublishStatusPanel projects={completedProjects} youtubeConnected={ytConnected} />
+
+            {ytConnected && (
+              <YoutubeChannelPanel21st
+                data={ytChannelStats}
+                isLoading={ytStatsLoading}
+                isFetching={ytStatsFetching}
+                isError={ytStatsError}
+                channels={ytChannels}
+                activeChannelId={ytChannelId || ytDefaultId || undefined}
+                onSelectChannel={(id) => setYtChannelId(id)}
+              />
+            )}
+
+            <details className="rounded-xl border border-slate-200/80 bg-white/80 p-3 text-sm text-slate-600 dark:border-zinc-700/90 dark:bg-zinc-900/80 dark:text-slate-300">
+              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Activity insights
+              </summary>
+              <div className="mt-3">
+                <AnalyticsPanel21st
+                  range={range}
+                  onRangeChange={setRange}
+                  buckets={analytics.buckets}
+                  maxCount={analytics.maxCount}
+                  totalInRange={analytics.totalInRange}
+                  throughputDelta={analytics.throughputDelta}
+                  topFailure={metrics.topFailureReason}
                 />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex-1 min-w-0 rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 overflow-hidden transition-all duration-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
-        <div className="flex flex-row items-center justify-between p-6">
-          <h3 className="text-2xl font-semibold leading-none tracking-tight text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <FolderOpen className="w-6 h-6 text-cyan-500" />
-            Recent
-          </h3>
-          <Link href="/projects">
-            <Button variant="ghost" size="sm">View All</Button>
-          </Link>
-        </div>
-        <div className="p-6 pt-0">
-          {projects.length === 0 ? (
-            <div className="py-8 text-center">
-              <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-zinc-800/80 flex items-center justify-center mx-auto mb-4">
-                <FolderOpen className="w-6 h-6 text-slate-400" />
               </div>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">No projects yet.</p>
-              <Link href="/generate">
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Plus className="w-4 h-4" />
-                  Create project
-                </Button>
-              </Link>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {projects.slice(0, 5).map((project) => (
-                <div key={project.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 dark:border-zinc-700 hover:bg-slate-50/80 dark:hover:bg-zinc-800/70 hover:shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)] hover:-translate-y-0.5 transition-all duration-200">
-                  <Link href={`/projects/${project.id}`} className="flex-1">
-                    <p className="font-medium text-slate-900 dark:text-slate-100">{project.title}</p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">{project.story_type} &middot; {project.scene_count} scenes</p>
-                  </Link>
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={project.status} />
-                    {project.status === "failed" && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRetry(project.id)}
-                        title="Retry"
-                        disabled={retryingProjectId === project.id}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      </div>
-      {preview && (
-        <div
-          className="fixed z-50 pointer-events-none"
-          style={{ left: preview.x, top: preview.y }}
-        >
-          <div className="w-[280px] h-[170px] rounded-xl overflow-hidden border border-slate-200/80 dark:border-zinc-700 bg-black shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.5)]">
-            <video
-              key={preview.url}
-              src={preview.url}
-              muted
-              loop
-              autoPlay
-              playsInline
-              className="w-full h-full object-cover"
-              onLoadedData={undefined}
-              onError={undefined}
-            />
+            </details>
           </div>
+
+          <aside className="min-w-0 xl:sticky xl:top-3 xl:self-start xl:min-h-0">
+            <QuickStartsPanel className="mb-4" />
+            <WorkTabs21st
+              className="w-full min-h-0"
+              active={workTab}
+              onChange={setWorkTab}
+              queueCount={jobs.length}
+              recentCount={projects.length}
+              queueLink={
+                jobs.length > 0 ? (
+                  <Link href="/history">
+                    <Button variant="ghost" size="sm" className="rounded-lg text-cyan-600 dark:text-cyan-400">
+                      View all activity
+                    </Button>
+                  </Link>
+                ) : null
+              }
+              recentLink={
+                <Link href="/projects">
+                  <Button variant="ghost" size="sm" className="rounded-lg text-cyan-600 dark:text-cyan-400">
+                    Open library
+                  </Button>
+                </Link>
+              }
+            >
+            {workTab === "queue" ? (
+              <>
+                {loading ? (
+                  <div className="space-y-3">
+                    {[1, 2, 3, 4].map((i) => (
+                      <DashboardJobRowSkeleton key={i} />
+                    ))}
+                  </div>
+                ) : jobs.length === 0 ? (
+                  <div className="py-10 text-center">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
+                      <ListTodo className="h-6 w-6 text-slate-400" />
+                    </div>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">No recent jobs yet.</p>
+                    <Button asChild variant="outline" size="sm" className="mt-4 gap-2 rounded-xl">
+                      <Link href="/generate">
+                        <Plus className="h-4 w-4" />
+                        Create project
+                      </Link>
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {jobs.slice(0, 8).map((job) => (
+                      <JobCard
+                        key={job.id}
+                        job={job}
+                        projectTitle={job.project_id ? projectMap[job.project_id]?.title : undefined}
+                        onRetry={async () => {
+                          setRetryingJobId(job.id);
+                          try {
+                            await retryJobMutation.mutateAsync(job.id);
+                            notify.success("Retry queued");
+                          } catch (e: unknown) {
+                            notify.error(e instanceof Error ? e.message : "Retry failed");
+                          } finally {
+                            setRetryingJobId(null);
+                          }
+                        }}
+                        retrying={retryingJobId === job.id}
+                        onDelete={() => handleDeleteFailedJob(job.id)}
+                        deleting={deletingJobId === job.id}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {projects.length === 0 ? (
+                  <div className="py-10 text-center">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
+                      <FolderOpen className="h-6 w-6 text-slate-400" />
+                    </div>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">No projects yet.</p>
+                    <Button asChild variant="outline" size="sm" className="mt-4 gap-2 rounded-xl">
+                      <Link href="/generate">
+                        <Plus className="h-4 w-4" />
+                        Create project
+                      </Link>
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {projects.slice(0, 8).map((project) => (
+                      <ProjectCard
+                        key={project.id}
+                        project={project}
+                        onRetry={(id) => handleRetry(id)}
+                        onDelete={(id) => handleDeleteFailedProject(id)}
+                        retrying={retryingProjectId === project.id}
+                        deleting={deletingProjectId === project.id}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            </WorkTabs21st>
+          </aside>
         </div>
-      )}
+      ) : null}
+
     </div>
   );
 }
-
-function extractMediaPath(raw: string): string {
-  if (!raw || typeof raw !== "string" || !raw.startsWith("http")) return "";
-  try {
-    const url = new URL(raw);
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length === 0) return "";
-    const mediaRoots = ["images", "videos", "audio", "music"];
-    if (parts[0] === "media" && parts[1]) return parts.slice(1).join("/");
-    if (mediaRoots.includes(parts[0])) return parts.join("/");
-    if (parts[1] && mediaRoots.includes(parts[1])) return parts.slice(1).join("/");
-    return "";
-  } catch {
-    return "";
-  }
-}
-
-function JobRow({
-  job,
-  projectTitle,
-  onPreviewStart,
-  onPreviewMove,
-  onPreviewEnd,
-  onRetry,
-  retrying,
-}: {
-  job: Job;
-  projectTitle?: string;
-  onPreviewStart: (url: string, evt: React.MouseEvent) => void;
-  onPreviewMove: (evt: React.MouseEvent) => void;
-  onPreviewEnd: () => void;
-  onRetry?: () => void | Promise<void>;
-  retrying?: boolean;
-}) {
-  const previewPath = (job.result?.video_path || "") as string;
-  const rawPreview = (job.result?.video_url || job.result?.video_path || "") as string;
-  const created = job.created_at ? new Date(job.created_at) : null;
-  return (
-    <div
-      className="group relative flex items-center justify-between p-4 rounded-xl border border-slate-200/80 dark:border-zinc-700 bg-white dark:bg-zinc-900/95 hover:shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)] hover:-translate-y-0.5 transition-all duration-200"
-      onMouseEnter={(evt) => {
-        const rawPath = previewPath || rawPreview;
-        const derivedPath = previewPath || extractMediaPath(rawPath);
-        if (rawPath) {
-          if (derivedPath) {
-            api.getMediaUrl(derivedPath)
-              .then((res) => {
-                onPreviewStart(res.url, evt);
-              })
-              .catch(() => {});
-          } else if (rawPath.startsWith("http")) {
-            onPreviewStart(rawPath, evt);
-          } else {
-            const fallback = getMediaUrl(rawPath);
-            if (fallback) onPreviewStart(fallback, evt);
-          }
-        }
-      }}
-      onMouseMove={onPreviewMove}
-      onMouseLeave={onPreviewEnd}
-    >
-      <div className="flex-1 space-y-2">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{job.type.replace("_", " ").replace(/\b\w/g, (c) => c.toUpperCase())}</p>
-          <StatusBadge status={job.status} />
-        </div>
-        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-          {created && <span>{created.toLocaleString()}</span>}
-          {projectTitle && (
-            <Link href={`/projects/${job.project_id}`} className="text-cyan-600 dark:text-cyan-400 hover:underline">
-              {projectTitle}
-            </Link>
-          )}
-        </div>
-        {(job.status === "in_progress" || job.status === "queued") && (
-          <LinearProgress value={job.progress} className="mt-1 h-1.5" />
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        {job.status === "failed" && onRetry && (
-          <Button variant="outline-animated" size="sm" onClick={(e) => { e.stopPropagation(); onRetry(); }} disabled={retrying ?? false} title="Retry">
-            {(retrying ?? false) ? <><div className="h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full animate-spin mr-1" /> Retrying...</> : <><RotateCcw className="h-3.5 w-3.5 mr-1" /> Retry</>}
-          </Button>
-        )}
-        <span className="text-xs tabular-nums text-slate-500 dark:text-slate-400">{job.progress}%</span>
-      </div>
-    </div>
-  );
-}
-

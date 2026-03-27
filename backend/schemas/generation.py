@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from backend.services.script_service import validate_story_template_field
 
@@ -51,8 +51,8 @@ class GenerateVideoRequest(BaseModel):
     storyboard_only: bool = False
     """When True, stop after LLM storyboard + Scene rows — no image/TTS generation."""
     control_mode: Literal["autopilot", "co_pilot", "manual"] = Field(
-        default="autopilot",
-        description="autopilot | co_pilot | manual",
+        default="co_pilot",
+        description="Legacy; studio-first flow uses co_pilot. autopilot | co_pilot | manual",
     )
     extra_settings: dict[str, Any] | None = None
 
@@ -67,8 +67,17 @@ class GenerateScriptRequest(BaseModel):
     temperature: float = 0.8
 
 
+class RewriteScriptRequest(BaseModel):
+    text: str
+    instruction: str
+    story_type: str = "general"
+    llm_provider: str = "openai"
+    llm_model: str | None = None
+    temperature: float = 0.7
+
+
 class VideoProductionScene(BaseModel):
-    """Single scene in a video production script (Sora/Runway style)."""
+    """Single scene in a cinematic storyboard (narration + still image prompt for ShortsForge)."""
     scene_number: int
     timestamp: str  # e.g. "0:00-0:05" or "0-5s"
     duration_seconds: float
@@ -77,7 +86,16 @@ class VideoProductionScene(BaseModel):
     lighting: str  # e.g. "Golden hour, soft key from left"
     quality: str  # e.g. "4K cinematic, shallow depth of field"
     script: str  # narration/dialogue
-    sora_prompt: str  # Full combined prompt for Sora/Runway/Kling
+    image_prompt: str = ""  # Single still-image prompt for scene art (vertical short / key frame)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_sora_prompt(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not (data.get("image_prompt") or "").strip():
+            legacy = data.get("sora_prompt")
+            if legacy:
+                data = {**data, "image_prompt": legacy}
+        return data
 
 
 class GenerateVideoProductionScriptRequest(BaseModel):
@@ -87,25 +105,6 @@ class GenerateVideoProductionScriptRequest(BaseModel):
     llm_provider: str = "openai"
     llm_model: str | None = None
     temperature: float = 0.7
-
-
-class DirectorBoardTimelineEntry(BaseModel):
-    """Single timeline entry for director board."""
-    start_sec: float
-    end_sec: float
-    phase_label: str | None = None
-    script: str
-    bullet_notes: list[str] = []
-
-
-class DirectorBoardGenerateRequest(BaseModel):
-    """Request to AI-generate cinematic, audio, and safety sections from story + timeline."""
-    overall_story: str
-    timeline_entries: list[DirectorBoardTimelineEntry]
-    total_duration: float = 8.0
-    llm_provider: str = "openai"
-    llm_model: str | None = None
-    temperature: float = 0.6
 
 
 class GenerateImageRequest(BaseModel):
@@ -128,56 +127,10 @@ class BatchGenerateRequest(BaseModel):
     base_settings: GenerateVideoRequest
 
 
-class SoraGenerateRequest(BaseModel):
-    prompt: str
-    model: str = "sora-2"
-    size: str = "1280x720"
-    seconds: str = "8"
-    input_image_url: str | None = None
-    input_image_file_id: str | None = None
-    remix_id: str | None = None
+class ViralIdeasRequest(BaseModel):
+    """Ask the LLM for timely short-form video angles plus suggested Create-form settings."""
 
-
-class SoraEditRequest(BaseModel):
-    video_id: str
-    prompt: str
-    model: str = "sora-2"
-
-
-class SoraExtendRequest(BaseModel):
-    video_id: str
-    prompt: str
-    model: str = "sora-2"
-    seconds: str = "8"
-
-
-class SoraRemixRequest(BaseModel):
-    prompt: str | None = None
-    model: str = "sora-2"
-    size: str | None = None
-    seconds: str | None = None
-
-
-class SoraCharacterCreateRequest(BaseModel):
-    name: str
-    video_id: str
-
-
-class SoraVideoOut(BaseModel):
-    id: str
-    status: str
-    model: str | None = None
-    progress: int = 0
-    seconds: str | None = None
-    size: str | None = None
-    created_at: int | None = None
-    completed_at: int | None = None
-    error: dict[str, Any] | None = None
-
-
-class SoraCharacterOut(BaseModel):
-    id: str
-    character_id: str
-    name: str
-    source_video_path: str | None = None
-    metadata_: dict[str, Any] | None = None
+    niche: str | None = Field(default=None, max_length=240)
+    count: int = Field(default=8, ge=3, le=12)
+    llm_provider: str = "openai"
+    llm_model: str | None = None

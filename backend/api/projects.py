@@ -57,9 +57,22 @@ async def list_projects(
         .group_by(Scene.project_id)
         .subquery()
     )
+    duration_sq = (
+        select(
+            Scene.project_id.label("project_id"),
+            func.coalesce(func.sum(Scene.duration), 0).label("total_duration"),
+        )
+        .group_by(Scene.project_id)
+        .subquery()
+    )
     query = (
-        select(Project, func.coalesce(scene_counts_sq.c.scene_count, 0).label("scene_count"))
+        select(
+            Project,
+            func.coalesce(scene_counts_sq.c.scene_count, 0).label("scene_count"),
+            func.coalesce(duration_sq.c.total_duration, 0).label("total_duration"),
+        )
         .outerjoin(scene_counts_sq, scene_counts_sq.c.project_id == Project.id)
+        .outerjoin(duration_sq, duration_sq.c.project_id == Project.id)
         .order_by(Project.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -68,6 +81,34 @@ async def list_projects(
         query = query.where(Project.status == status)
     result = await db.execute(query)
     rows = result.all()
+
+    project_ids = [p.id for p, _, _ in rows]
+    thumbnail_map: dict[str, str] = {}
+    if project_ids:
+        storage = get_storage()
+        first_scene_sq = (
+            select(
+                Scene.project_id,
+                func.min(Scene.order_index).label("min_idx"),
+            )
+            .where(Scene.project_id.in_(project_ids))
+            .group_by(Scene.project_id)
+            .subquery()
+        )
+        thumb_q = (
+            select(Scene.project_id, Asset.file_path)
+            .join(first_scene_sq, (Scene.project_id == first_scene_sq.c.project_id) & (Scene.order_index == first_scene_sq.c.min_idx))
+            .join(Asset, Asset.scene_id == Scene.id)
+            .where(Asset.type == "image", Asset.is_active == True)
+        )
+        thumb_result = await db.execute(thumb_q)
+        for pid, fpath in thumb_result.all():
+            if pid not in thumbnail_map and fpath:
+                try:
+                    thumbnail_map[pid] = await storage.get_url(fpath)
+                except Exception:
+                    pass
+
     return [
         ProjectListOut(
             id=p.id,
@@ -76,8 +117,10 @@ async def list_projects(
             status=p.status,
             created_at=p.created_at,
             scene_count=int(scene_count or 0),
+            thumbnail_url=thumbnail_map.get(p.id),
+            duration_sec=int(total_duration or 0) or None,
         )
-        for p, scene_count in rows
+        for p, scene_count, total_duration in rows
     ]
 
 

@@ -15,7 +15,7 @@ class TogetherImageProvider(ImageProvider):
 
     @property
     def available_models(self) -> list[str]:
-        return ["black-forest-labs/FLUX.1-schnell-Free", "black-forest-labs/FLUX.1-schnell"]
+        return ["black-forest-labs/FLUX.1-schnell", "black-forest-labs/FLUX.1-schnell-Free"]
 
     # FLUX.1-schnell supported resolutions
     _FLUX_SIZES = [(1024, 1024), (768, 1344), (1344, 768), (896, 1152), (1152, 896), (832, 1216), (1216, 832)]
@@ -28,7 +28,8 @@ class TogetherImageProvider(ImageProvider):
         style: str = "realistic",
         **kwargs: Any,
     ) -> bytes:
-        model = kwargs.get("model", "black-forest-labs/FLUX.1-schnell-Free")
+        model = kwargs.get("model", "black-forest-labs/FLUX.1-schnell")
+        steps = kwargs.get("steps", 4)
         # Use nearest supported FLUX size to avoid 400 errors
         size = (width, height)
         if size not in self._FLUX_SIZES:
@@ -47,6 +48,7 @@ class TogetherImageProvider(ImageProvider):
                     "prompt": prompt,
                     "width": width,
                     "height": height,
+                    "steps": steps,
                     "n": 1,
                     "response_format": "base64",
                 },

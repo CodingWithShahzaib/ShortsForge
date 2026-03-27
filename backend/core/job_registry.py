@@ -16,6 +16,22 @@ from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
+
+def _ws_pipeline_storyboard_only(scene_count: int) -> dict[str, Any]:
+    """Scene-level steps for UI: storyboard done; assets wait for Studio or render."""
+    return {
+        "scenes": [
+            {
+                "index": i,
+                "storyboard": "complete",
+                "image": "pending",
+                "tts": "pending",
+            }
+            for i in range(scene_count)
+        ]
+    }
+
+
 HandlerFn = Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
 
 _handlers: dict[str, HandlerFn] = {}
@@ -53,6 +69,8 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
     project_id = params["project_id"]
     job_id = params["job_id"]
     scenes = params.get("scenes")
+    if isinstance(scenes, list) and not scenes:
+        scenes = None
     settings = params.get("settings") or {}
     app_settings = get_settings()
 
@@ -116,7 +134,12 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                     scenes.append(sc_copy)
                 await session.commit()
                 await ws_manager.send_progress(
-                    job_id, "video_render", 0, "in_progress", "Storyboard ready, rendering video"
+                    job_id,
+                    "video_render",
+                    0,
+                    "in_progress",
+                    "Storyboard ready, rendering video",
+                    pipeline=_ws_pipeline_storyboard_only(len(storyboard.get("scenes", []))),
                 )
             elif scenes and not project.scenes:
                 scene_duration_default = settings.get("scene_duration", 5.0)
@@ -138,7 +161,12 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                     sc["duration"] = scene_duration
                 await session.commit()
                 await ws_manager.send_progress(
-                    job_id, "video_render", 0, "in_progress", "Scenes ready, rendering video"
+                    job_id,
+                    "video_render",
+                    0,
+                    "in_progress",
+                    "Scenes ready, rendering video",
+                    pipeline=_ws_pipeline_storyboard_only(len(scenes)),
                 )
 
             storyboard_only = params.get("storyboard_only", False)
@@ -150,13 +178,57 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                 )
                 proj_for_skip = r_pf.scalar_one()
                 if not proj_for_skip.scenes:
-                    raise ValueError(
-                        "storyboard_only requires at least one scene. "
-                        "Use a concept/custom script or pass pre-defined scenes."
+                    await ws_manager.send_progress(
+                        job_id,
+                        "video_render",
+                        0,
+                        "in_progress",
+                        "Generating script and storyboard",
                     )
+                    storyboard = await generate_story_and_storyboard(
+                        concept=proj_for_skip.title if not settings.get("custom_script") else None,
+                        script=settings.get("custom_script") or proj_for_skip.script,
+                        story_type=settings.get("story_type", proj_for_skip.story_type),
+                        scene_count=settings.get("scene_count", 5),
+                        image_style=settings.get("image_style") or app_settings.default_image_style,
+                        word_count=settings.get("word_count") or 400,
+                        generate_subtitles=settings.get("generate_subtitles", True),
+                        llm_provider=settings.get("llm_provider") or app_settings.default_llm_provider,
+                        llm_model=settings.get("llm_model") or app_settings.default_llm_model,
+                        story_template=settings.get("story_template", "default"),
+                    )
+                    proj_for_skip.title = storyboard.get("title", proj_for_skip.title)
+                    proj_for_skip.script = storyboard.get("script", proj_for_skip.script)
+                    proj_for_skip.settings = settings or proj_for_skip.settings
+
+                    scene_duration_default = settings.get("scene_duration", 5.0)
+                    for i, sc in enumerate(storyboard.get("scenes", [])):
+                        scene_duration = sc.get("duration", scene_duration_default)
+                        scene_obj = Scene(
+                            project_id=proj_for_skip.id,
+                            order_index=i,
+                            narration=sc.get("narration", ""),
+                            subtitle=sc.get("subtitle") or sc.get("narration", ""),
+                            image_prompt=sc.get("image_prompt", ""),
+                            transition_type=sc.get("transition") or settings.get("transition") or app_settings.default_transition,
+                            duration=scene_duration,
+                            scene_type="image",
+                        )
+                        session.add(scene_obj)
+                    await session.commit()
+                    await session.refresh(proj_for_skip)
+                    if not proj_for_skip.scenes:
+                        raise ValueError(
+                            "storyboard_only requires at least one scene. "
+                            "Use a concept/custom script or pass pre-defined scenes."
+                        )
                 await ws_manager.send_progress(
-                    job_id, "video_render", 99, "in_progress",
+                    job_id,
+                    "video_render",
+                    99,
+                    "in_progress",
                     "Storyboard ready — generate assets per scene, then compile",
+                    pipeline=_ws_pipeline_storyboard_only(len(proj_for_skip.scenes)),
                 )
                 result = {
                     "prepared": True,
@@ -176,6 +248,17 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
             prepare_only = params.get("prepare_only", False)
             inc = params.get("incremental_scene_ids") or []
             reg_set: set[str] | None = set(inc) if inc else None
+            # Cached per-scene video clips ignore new durations/settings unless we rebuild them.
+            # Full compile must re-encode from images so match_scenes_to_audio and scene timing apply.
+            # Incremental renders default to reusing clips for scenes not in the delta set.
+            if inc:
+                force_scene_clips = bool(params.get("force_regenerate_scene_clips", False))
+            else:
+                raw_f = params.get("force_regenerate_scene_clips")
+                if raw_f is not None:
+                    force_scene_clips = bool(raw_f)
+                else:
+                    force_scene_clips = bool((settings or {}).get("match_scenes_to_audio", False))
             result = await render_video(
                 project_id=project_id,
                 job_id=job_id,
@@ -184,6 +267,7 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                 settings=settings if settings else None,
                 stop_after_assets=prepare_only,
                 regenerate_scene_ids=reg_set,
+                force_regenerate_scene_clips=force_scene_clips,
             )
             r = await session.execute(select(Job).where(Job.id == job_id))
             j = r.scalar_one()
@@ -209,73 +293,6 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
             p.status = "failed"
             await session.commit()
             raise
-
-
-@register("sora_generate")
-async def handle_sora_generate(params: dict[str, Any]) -> dict[str, Any]:
-    from backend.config import get_settings
-    from backend.services import sora_service
-    from backend.database import async_session
-    from backend.models import Job
-
-    job_id = params["job_id"]
-    app_settings = get_settings()
-
-    try:
-        video = await sora_service.create_video(
-            prompt=params["prompt"],
-            model=params.get("model") or app_settings.default_video_model,
-            size=params.get("size", "1280x720"),
-            seconds=params.get("seconds", "8"),
-            input_image_url=params.get("input_image_url"),
-            input_image_file_id=params.get("input_image_file_id"),
-            remix_id=params.get("remix_id"),
-        )
-        result = await sora_service.poll_and_download(video["id"], job_id=job_id)
-        await _mark_job_completed(job_id, result)
-        return result
-    except Exception as exc:
-        await _mark_job_failed(job_id, str(exc))
-        raise
-
-
-@register("sora_edit")
-async def handle_sora_edit(params: dict[str, Any]) -> dict[str, Any]:
-    from backend.config import get_settings
-    from backend.services import sora_service
-
-    job_id = params["job_id"]
-    app_settings = get_settings()
-    try:
-        video = await sora_service.edit_video(
-            params["video_id"], params["prompt"], params.get("model") or app_settings.default_video_model,
-        )
-        result = await sora_service.poll_and_download(video["id"], job_id=job_id)
-        await _mark_job_completed(job_id, result)
-        return result
-    except Exception as exc:
-        await _mark_job_failed(job_id, str(exc))
-        raise
-
-
-@register("sora_extend")
-async def handle_sora_extend(params: dict[str, Any]) -> dict[str, Any]:
-    from backend.config import get_settings
-    from backend.services import sora_service
-
-    job_id = params["job_id"]
-    app_settings = get_settings()
-    try:
-        video = await sora_service.extend_video(
-            params["video_id"], params["prompt"],
-            params.get("model") or app_settings.default_video_model, params.get("seconds", "8"),
-        )
-        result = await sora_service.poll_and_download(video["id"], job_id=job_id)
-        await _mark_job_completed(job_id, result)
-        return result
-    except Exception as exc:
-        await _mark_job_failed(job_id, str(exc))
-        raise
 
 
 @register("asset_generate")
@@ -466,26 +483,6 @@ async def _run_asset_generate(
         project.version = (project.version or 1) + 1
         await session.commit()
         return result
-
-
-@register("sora_remix")
-async def handle_sora_remix(params: dict[str, Any]) -> dict[str, Any]:
-    from backend.config import get_settings
-    from backend.services import sora_service
-
-    job_id = params["job_id"]
-    app_settings = get_settings()
-    try:
-        video = await sora_service.remix_video(
-            params["video_id"], params.get("prompt"),
-            params.get("model") or app_settings.default_video_model, params.get("size"), params.get("seconds"),
-        )
-        result = await sora_service.poll_and_download(video["id"], job_id=job_id)
-        await _mark_job_completed(job_id, result)
-        return result
-    except Exception as exc:
-        await _mark_job_failed(job_id, str(exc))
-        raise
 
 
 # ── Shared helpers ────────────────────────────────────────────────────

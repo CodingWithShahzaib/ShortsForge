@@ -5,15 +5,26 @@ import { cn } from "@/lib/utils";
 
 type FieldProps = {
   id: string;
-  label: string;
+  label: React.ReactNode;
   hint?: string;
   error?: string;
   required?: boolean;
   className?: string;
+  /** When false, put `id` on the actual input/textarea inside children yourself (e.g. flex row with button). */
+  applyIdToChild?: boolean;
   children: React.ReactNode;
 };
 
-export function Field({ id, label, hint, error, required, className, children }: FieldProps) {
+export function Field({
+  id,
+  label,
+  hint,
+  error,
+  required,
+  className,
+  children,
+  applyIdToChild = true,
+}: FieldProps) {
   const hintId = hint ? `${id}-hint` : undefined;
   const errId = error ? `${id}-error` : undefined;
   const describedBy = [hintId, errId].filter(Boolean).join(" ") || undefined;
@@ -23,7 +34,7 @@ export function Field({ id, label, hint, error, required, className, children }:
       ? React.cloneElement(children, {
           "aria-invalid": !!error,
           "aria-describedby": describedBy,
-          id,
+          ...(applyIdToChild ? { id } : {}),
         } as Record<string, unknown>)
       : children;
 

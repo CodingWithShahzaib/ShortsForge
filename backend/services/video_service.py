@@ -21,6 +21,7 @@ from backend.services.subtitle_service import (
     generate_subtitles_from_audio,
     generate_ass_from_scene_texts,
 )
+from backend.services.overlay_service import resolve_overlay_file
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,8 @@ async def render_video(
     settings: dict[str, Any] | None = None,
     stop_after_assets: bool = False,
     regenerate_scene_ids: set[str] | None = None,
+    *,
+    force_regenerate_scene_clips: bool = False,
 ) -> dict[str, Any]:
     """Full video rendering pipeline with progress persistence.
 
@@ -146,6 +149,8 @@ async def render_video(
     local_output_dir = work_dir / "output"
     local_output_dir.mkdir(parents=True, exist_ok=True)
 
+    project_version: int | None = None
+
     # Load project + scenes from DB if not provided (e.g. retry)
     if scenes is None or settings is None:
         result = await session.execute(
@@ -156,11 +161,16 @@ async def render_video(
         project = result.scalar_one_or_none()
         if not project:
             raise ValueError(f"Project {project_id} not found")
+        project_version = project.version
         settings = project.settings or {}
         db_scenes = sorted(project.scenes, key=lambda s: s.order_index)
         scenes = [_scene_to_dict(s) for s in db_scenes]
         scene_models = {i: db_scenes[i] for i in range(len(db_scenes))}
     else:
+        proj_result = await session.execute(select(Project).where(Project.id == project_id))
+        project = proj_result.scalar_one_or_none()
+        if project:
+            project_version = project.version
         # New run: normalize scenes to dicts, load scene models for asset persistence
         scene_list = []
         for s in scenes:
@@ -195,6 +205,7 @@ async def render_video(
     }
     bg_music = settings.get("background_music")
     bg_volume = settings.get("background_music_volume", 0.15)
+    raw_overlay = settings.get("video_overlay")
 
     total_steps = len(scenes) * 3 + 4
     step = 0
@@ -358,7 +369,7 @@ async def render_video(
         image_asset = await _get_asset_by_type(existing_assets, "image")
 
         if force_reuse:
-            if video_asset:
+            if video_asset and not force_regenerate_scene_clips:
                 visual_path = await _ensure_local_file(video_asset.file_path, work_dir / "video")
                 await _progress(f"Reusing clip for scene {idx + 1}")
                 return visual_path
@@ -387,7 +398,7 @@ async def render_video(
                 f"Incremental render: scene {sid} has no video or image to reuse"
             )
 
-        if not force_new and video_asset:
+        if not force_new and video_asset and not force_regenerate_scene_clips:
             visual_path = await _ensure_local_file(video_asset.file_path, work_dir / "video")
             await _progress(f"Reusing clip for scene {idx + 1}")
             return visual_path
@@ -465,15 +476,36 @@ async def render_video(
         await ffmpeg.pad_or_trim_audio(audio_paths[idx], durations[idx], norm)
         audio_paths[idx] = norm
 
-    # --- Step 3: Concat video clips (no xfade overlap; matches padded audio timeline) ---
+    # --- Step 3: Concat video clips (xfade between scenes; per-scene Ken Burns stays in each clip) ---
     await _progress("Concatenating video clips")
     concat_video = str(work_dir / "concat_video.mp4")
-    await ffmpeg.concat_video_simple(visual_paths, concat_video)
+    n_sc = len(visual_paths)
+    if n_sc <= 1:
+        await ffmpeg.concat_video_simple(visual_paths, concat_video)
+    else:
+        # Transition into scene k (from k-1) is stored on scene k (index k), k >= 1
+        transition_between = [
+            scenes[i].get("transition") or scenes[i].get("transition_type") or "fade"
+            for i in range(1, len(scenes))
+        ]
+        xfade_d = ffmpeg.clamp_xfade_duration(durations, 0.5)
+        await ffmpeg.concat_with_transitions(
+            visual_paths,
+            transition_between,
+            concat_video,
+            transition_duration=xfade_d,
+        )
 
-    # --- Step 4: Concat audio ---
+    # --- Step 4: Concat audio (crossfade at scene joins to match xfade video length) ---
     await _progress("Concatenating audio")
     concat_audio = str(work_dir / "concat_audio.mp3")
-    await ffmpeg.concat_audio_files(audio_paths, concat_audio)
+    if len(audio_paths) <= 1:
+        await ffmpeg.concat_audio_files(audio_paths, concat_audio)
+    else:
+        xfade_d = ffmpeg.clamp_xfade_duration(durations, 0.5)
+        await ffmpeg.concat_audio_with_crossfade(
+            audio_paths, concat_audio, crossfade_duration=xfade_d
+        )
 
     # --- Step 5: Merge video + audio ---
     await _progress("Merging audio and video")
@@ -523,6 +555,18 @@ async def render_video(
         await ffmpeg.overlay_subtitles(current, sub_path, subtitled)
         current = subtitled
 
+    # --- Optional: full-frame overlay (PNG/WebP or looping video from media/overlays) ---
+    overlay_local = resolve_overlay_file(
+        str(raw_overlay) if raw_overlay is not None else None,
+    )
+    if overlay_local:
+        await _progress("Applying video overlay")
+        overlaid = str(work_dir / "with_overlay.mp4")
+        await ffmpeg.overlay_asset_on_video(
+            current, str(overlay_local), overlaid, width, height,
+        )
+        current = overlaid
+
     # --- Step 7: Background music ---
     if bg_music:
         await _progress("Adding background music")
@@ -547,4 +591,5 @@ async def render_video(
         "duration": final_duration,
         "scenes": len(scenes),
         "resolution": resolution,
+        "project_version": project_version,
     }

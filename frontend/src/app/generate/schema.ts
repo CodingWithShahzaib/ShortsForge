@@ -10,7 +10,6 @@ export const STORY_TEMPLATE_IDS = [
   "urgent_warning",
 ] as const;
 
-export const CONTROL_MODES = ["autopilot", "co_pilot", "manual"] as const;
 export const SUBTITLE_SOURCES = ["llm", "transcription"] as const;
 export const TRANSCRIPTION_PROVIDERS = ["openai", "groq"] as const;
 export const SUBTITLE_POSITIONS = ["bottom", "top", "center"] as const;
@@ -18,7 +17,6 @@ export const SUBTITLE_POSITIONS = ["bottom", "top", "center"] as const;
 export const generateVideoFormSchema = z.object({
   title: z.string(),
   custom_script: z.string(),
-  control_mode: z.enum(CONTROL_MODES).default("autopilot"),
   story_type: z.string(),
   story_template: z.enum(STORY_TEMPLATE_IDS).default("default"),
   llm_provider: z.string(),
@@ -67,7 +65,6 @@ export function buildGenerateDefaultValues(defaults: SettingsDefaultsSlice): Gen
   return {
     title: "",
     custom_script: "",
-    control_mode: "autopilot" as const,
     story_type: "general",
     story_template: "default",
     llm_provider: defaults.llm_provider,

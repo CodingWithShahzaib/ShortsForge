@@ -14,7 +14,7 @@ class Asset(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
     scene_id: Mapped[str] = mapped_column(String(32), ForeignKey("scenes.id"), nullable=False)
-    type: Mapped[str] = mapped_column(String(50), nullable=False)  # image, audio, video, sora_clip
+    type: Mapped[str] = mapped_column(String(50), nullable=False)  # image, audio, video, video_clip
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)

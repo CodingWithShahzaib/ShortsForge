@@ -9,8 +9,6 @@ class AppSettings(BaseModel):
     default_image_provider: str | None = None
     default_tts_provider: str | None = None
     default_tts_voice: str | None = None
-    default_video_provider: str | None = None
-    default_video_model: str | None = None
     default_resolution: str | None = None
     default_transition: str | None = None
     default_image_style: str | None = None

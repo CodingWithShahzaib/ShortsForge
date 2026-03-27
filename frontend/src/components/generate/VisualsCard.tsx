@@ -29,10 +29,10 @@ export const VisualsCard = memo(function VisualsCard({ imageProviders, resolutio
   const { control } = useFormContext<GenerateFormValues>();
 
   return (
-    <>
-      <div className="grid grid-cols-2 gap-4">
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Image Provider</label>
+          <label className="text-sm font-medium mb-1 block">Image Provider</label>
           <Controller
             control={control}
             name="image_provider"
@@ -55,7 +55,7 @@ export const VisualsCard = memo(function VisualsCard({ imageProviders, resolutio
           />
         </div>
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Style</label>
+          <label className="text-sm font-medium mb-1 block">Style</label>
           <Controller
             control={control}
             name="image_style"
@@ -76,9 +76,9 @@ export const VisualsCard = memo(function VisualsCard({ imageProviders, resolutio
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Resolution</label>
+          <label className="text-sm font-medium mb-1 block">Resolution</label>
           <Controller
             control={control}
             name="resolution"
@@ -99,7 +99,7 @@ export const VisualsCard = memo(function VisualsCard({ imageProviders, resolutio
           />
         </div>
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Transition</label>
+          <label className="text-sm font-medium mb-1 block">Transition</label>
           <Controller
             control={control}
             name="transition"
@@ -120,6 +120,6 @@ export const VisualsCard = memo(function VisualsCard({ imageProviders, resolutio
           />
         </div>
       </div>
-    </>
+    </div>
   );
 });

@@ -25,7 +25,7 @@ class Project(Base):
     story_type: Mapped[str] = mapped_column(String(100), default="general")
     script: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="draft")
-    control_mode: Mapped[str] = mapped_column(String(20), default="autopilot")
+    control_mode: Mapped[str] = mapped_column(String(20), default="co_pilot")
     version: Mapped[int] = mapped_column(Integer, default=1)
     settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

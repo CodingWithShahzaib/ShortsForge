@@ -33,16 +33,25 @@ class WebSocketManager:
             self.disconnect(ws)
 
     async def send_progress(
-        self, job_id: str, job_type: str, progress: int, status: str, detail: str = ""
+        self,
+        job_id: str,
+        job_type: str,
+        progress: int,
+        status: str,
+        detail: str = "",
+        pipeline: dict[str, Any] | None = None,
     ) -> None:
-        await self.broadcast({
+        msg: dict[str, Any] = {
             "type": "progress",
             "job_id": job_id,
             "job_type": job_type,
             "progress": progress,
             "status": status,
             "detail": detail,
-        })
+        }
+        if pipeline is not None:
+            msg["pipeline"] = pipeline
+        await self.broadcast(msg)
 
     async def send_completed(self, job_id: str, job_type: str, result: dict[str, Any] | None = None) -> None:
         await self.broadcast({

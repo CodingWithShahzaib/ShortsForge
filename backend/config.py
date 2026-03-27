@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     together_api_key: str = ""
     runware_api_key: str = ""
 
+    # YouTube OAuth2
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
+    youtube_token_key: str = ""
+
     # Redis
     redis_url: str = ""
     redis_max_connections: int = 10
@@ -61,15 +66,13 @@ class Settings(BaseSettings):
     s3_presign_expires: int = 3600
 
     # App
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
     max_concurrent_jobs: int = 3
     default_llm_provider: str = "openai"
     default_llm_model: str = "gpt-4o-mini"
     default_image_provider: str = "replicate"
     default_tts_provider: str = "edge"
     default_tts_voice: str = "en-US-ChristopherNeural"
-    default_video_provider: str = "sora"
-    default_video_model: str = "sora-2"
     default_resolution: str = "1080x1920"
     default_transition: str = "fade"
     default_image_style: str = "realistic"
@@ -103,6 +106,10 @@ class Settings(BaseSettings):
     @property
     def music_dir(self) -> Path:
         return Path(self.media_dir) / "music"
+
+    @property
+    def overlays_dir(self) -> Path:
+        return Path(self.media_dir) / "overlays"
 
 
 @lru_cache
