@@ -16,6 +16,7 @@ export default function HistoryPage() {
   const [filter, setFilter] = useState("all");
   const [pendingCancelId, setPendingCancelId] = useState<string | null>(null);
   const { data: fetchedJobs, isLoading: loading, error } = useJobsQuery();
+  const now = Date.now();
   const retryJobMutation = useRetryJobMutation();
   const cancelJobMutation = useCancelJobMutation();
 
@@ -39,11 +40,6 @@ export default function HistoryPage() {
   };
 
   const handleCancel = async (jobId: string) => {
-    if (pendingCancelId !== jobId) {
-      setPendingCancelId(jobId);
-      toast.message("Tap cancel again to confirm.");
-      return;
-    }
     try {
       await cancelJobMutation.mutateAsync(jobId);
       toast.success("Job cancelled");
@@ -54,6 +50,34 @@ export default function HistoryPage() {
       setPendingCancelId(null);
     }
   };
+
+  const getBucketLabel = (createdAt?: string | null) => {
+    if (!createdAt) return "Older";
+    const ageDays = Math.floor((now - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24));
+    if (ageDays <= 0) return "Today";
+    if (ageDays <= 7) return "Last 7 days";
+    return "Older";
+  };
+
+  const groupedJobs = useMemo(() => {
+    const groups: Record<string, typeof visibleJobs> = { "Today": [], "Last 7 days": [], "Older": [] };
+    visibleJobs.forEach((job) => {
+      const label = getBucketLabel(job.created_at);
+      groups[label] = groups[label] ?? [];
+      groups[label].push(job);
+    });
+    return groups;
+  }, [visibleJobs, now]);
+
+  const summaryCounts = useMemo(() => {
+    return visibleJobs.reduce(
+      (acc, job) => {
+        acc[job.status] = (acc[job.status] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>
+    );
+  }, [visibleJobs]);
 
   const statusIcon = (status: string) => {
     switch (status) {
@@ -69,7 +93,7 @@ export default function HistoryPage() {
     <div className="space-y-6 w-full text-slate-900 dark:text-slate-100">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2"><History className="h-8 w-8 text-cyan-500" /> Activity</h1>
+          <h1 className="text-3xl font-bold flex items-center gap-2"><History className="h-8 w-8 text-cyan-500" /> History</h1>
           <p className="text-slate-500 dark:text-slate-400 mt-1">{visibleJobs.length} jobs</p>
         </div>
         <Select value={filter} onValueChange={(value) => setFilter(value)}>
@@ -86,6 +110,33 @@ export default function HistoryPage() {
         </Select>
       </div>
 
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Queued</p>
+            <p className="text-lg font-semibold text-amber-500">{summaryCounts.queued || 0}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">In progress</p>
+            <p className="text-lg font-semibold text-cyan-500">{summaryCounts.in_progress || 0}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Completed</p>
+            <p className="text-lg font-semibold text-emerald-500">{summaryCounts.completed || 0}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Failed</p>
+            <p className="text-lg font-semibold text-rose-500">{summaryCounts.failed || 0}</p>
+          </CardContent>
+        </Card>
+      </div>
+
       {loading ? (
         <div className="flex justify-center py-20"><div className="h-8 w-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" /></div>
       ) : error ? (
@@ -98,62 +149,88 @@ export default function HistoryPage() {
       ) : visibleJobs.length === 0 ? (
         <Card><CardContent className="py-20 text-center text-slate-500 dark:text-slate-400">No jobs found</CardContent></Card>
       ) : (
-        <div className="space-y-3">
-          {visibleJobs.map((job) => (
-            <Card key={job.id}>
-              <CardContent className="py-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 flex-1">
-                    {statusIcon(job.status)}
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-sm">{job.type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</p>
-                        <StatusBadge status={job.status} />
+        <div className="space-y-6">
+          {Object.entries(groupedJobs).map(([label, items]) =>
+            items.length ? (
+              <div key={label} className="space-y-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
+                {items.map((job) => (
+                  <Card key={job.id}>
+                    <CardContent className="py-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3 flex-1">
+                          {statusIcon(job.status)}
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium text-sm">{job.type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</p>
+                              <StatusBadge status={job.status} />
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                              {job.created_at && new Date(job.created_at).toLocaleString()}
+                              {job.completed_at && ` — completed ${new Date(job.completed_at).toLocaleString()}`}
+                            </p>
+                            {(job.status === "in_progress" || job.status === "queued") && <LinearProgress value={job.progress} className="mt-2 h-1.5 max-w-xs" />}
+                            {job.error && (
+                              <p className="text-xs text-rose-500 mt-1">
+                                {typeof job.error === "object" && job.error !== null && "message" in job.error
+                                  ? String((job.error as { message?: string }).message || JSON.stringify(job.error))
+                                  : String(job.error)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm tabular-nums text-slate-500 dark:text-slate-400">{job.progress}%</span>
+                          {job.status === "failed" && (
+                            <Button
+                              variant="outline-animated"
+                              size="sm"
+                              onClick={() => handleRetry(job.id)}
+                              title="Retry"
+                              disabled={retryJobMutation.isPending}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5 mr-1" /> Retry
+                            </Button>
+                          )}
+                          {(job.status === "queued" || job.status === "in_progress") && pendingCancelId !== job.id && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => setPendingCancelId(job.id)}
+                              disabled={cancelJobMutation.isPending}
+                              title="Cancel"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {(job.status === "queued" || job.status === "in_progress") && pendingCancelId === job.id && (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => handleCancel(job.id)}
+                                disabled={cancelJobMutation.isPending}
+                              >
+                                Confirm
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setPendingCancelId(null)}
+                              >
+                                Keep
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        {job.created_at && new Date(job.created_at).toLocaleString()}
-                        {job.completed_at && ` — completed ${new Date(job.completed_at).toLocaleString()}`}
-                      </p>
-                      {(job.status === "in_progress" || job.status === "queued") && <LinearProgress value={job.progress} className="mt-2 h-1.5 max-w-xs" />}
-                      {job.error && (
-                        <p className="text-xs text-rose-500 mt-1">
-                          {typeof job.error === "object" && job.error !== null && "message" in job.error
-                            ? String((job.error as { message?: string }).message || JSON.stringify(job.error))
-                            : String(job.error)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm tabular-nums text-slate-500 dark:text-slate-400">{job.progress}%</span>
-                    {job.status === "failed" && (
-                      <Button
-                        variant="outline-animated"
-                        size="sm"
-                        onClick={() => handleRetry(job.id)}
-                        title="Retry"
-                        disabled={retryJobMutation.isPending}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5 mr-1" /> Retry
-                      </Button>
-                    )}
-                    {(job.status === "queued" || job.status === "in_progress") && (
-                      <Button
-                        variant={pendingCancelId === job.id ? "destructive" : "ghost"}
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => handleCancel(job.id)}
-                        disabled={cancelJobMutation.isPending}
-                        title={pendingCancelId === job.id ? "Confirm cancel" : "Cancel"}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : null
+          )}
         </div>
       )}
     </div>

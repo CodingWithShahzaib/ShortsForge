@@ -335,33 +335,43 @@ export default function GeneratePage() {
     <FormProvider {...form}>
       <div className="space-y-6 w-full text-slate-900 dark:text-slate-100 pb-24 lg:pb-6">
         <div>
-          <h1 className="text-3xl font-bold">Create</h1>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">Create AI-powered faceless short videos</p>
+          <h1 className="text-3xl font-bold">Generate</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Generate AI-powered faceless short videos</p>
         </div>
 
         <GeneratePresetsBar resolutionIds={resolutionIds} />
         <Card>
           <CardContent className="pt-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {sectionProgress.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => {
-                    setSectionsOpen((prev) => ({ ...prev, [s.id]: true }));
-                  }}
-                  className="text-left rounded-md border border-border px-3 py-2 text-sm hover:bg-accent transition-colors"
-                >
-                  <span className="flex items-center gap-2">
-                    {s.done ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                    ) : (
-                      <Circle className="h-4 w-4 text-slate-400" />
-                    )}
-                    {s.label}
-                  </span>
-                </button>
-              ))}
+              {sectionProgress.map((s) => {
+                const isOpen = sectionsOpen[s.id];
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setSectionsOpen((prev) => ({ ...prev, [s.id]: true }));
+                    }}
+                    className={`text-left rounded-md border px-3 py-2 text-sm transition-colors ${
+                      isOpen
+                        ? "border-cyan-500/60 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"
+                        : s.done
+                          ? "border-emerald-500/30 bg-emerald-500/5"
+                          : "border-border hover:bg-accent"
+                    }`}
+                    aria-current={isOpen ? "step" : undefined}
+                  >
+                    <span className="flex items-center gap-2">
+                      {s.done ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      ) : (
+                        <Circle className="h-4 w-4 text-slate-400" />
+                      )}
+                      {s.label}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -438,6 +448,53 @@ export default function GeneratePage() {
                 </CardContent>
               </Card>
             )}
+            <Card className="border-cyan-500/30 bg-cyan-500/5">
+              <CardHeader>
+                <CardTitle className="text-base">Ready to generate</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                Review your choices and start the run when you’re ready.
+              </CardContent>
+            </Card>
+            <GenerateStickyActions
+              contentSource={contentSource}
+              generating={generating}
+              onSubmitValid={onSubmitValid}
+            />
+
+            {activeJobs.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Active Jobs</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {activeJobs.map((job) => (
+                    <div key={job.id} className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-500 dark:text-slate-400">{job.type.replace(/_/g, " ")}</span>
+                        <span className="font-medium">{job.progress}%</span>
+                      </div>
+                      <LinearProgress value={job.progress} />
+                      {jobDetails[job.id] && (
+                        <p className="text-xs text-zinc-500 flex items-center gap-1.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                          {jobDetails[job.id]}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Summary</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <GenerateSummaryPanel control={form.control} />
+              </CardContent>
+            </Card>
             <GenerateStickyActions
               contentSource={contentSource}
               generating={generating}

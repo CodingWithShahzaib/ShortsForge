@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Settings, Key, Save, CheckCircle, AlertCircle, Database, Activity, Sparkles, Video } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { Settings, Key, Save, CheckCircle, AlertCircle, Database, Activity, Sparkles, Video, ChevronDown } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +45,23 @@ export default function SettingsPage() {
   const [redisStatus, setRedisStatus] = useState<any>(null);
   const [llmModels, setLlmModels] = useState<string[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
+  const [sectionsOpen, setSectionsOpen] = useState({
+    apiKeys: true,
+    aiDefaults: true,
+    videoDefaults: true,
+    redis: false,
+    infrastructure: false,
+    providerStatus: false,
+  });
+
+  const configuredProvidersCount = useMemo(
+    () => [...providers.llm, ...providers.image, ...providers.tts, ...providers.video].filter((p) => p.configured).length,
+    [providers]
+  );
+  const totalProvidersCount = useMemo(
+    () => [...providers.llm, ...providers.image, ...providers.tts, ...providers.video].length,
+    [providers]
+  );
 
   useEffect(() => {
     api.getSettings().then((s) => setForm((f) => ({ ...f, ...s }))).catch(() => {});
@@ -119,313 +136,413 @@ export default function SettingsPage() {
         </Button>
       </div>
 
-      {/* Redis Status */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Providers configured</p>
+            <p className="text-lg font-semibold text-cyan-500">{configuredProvidersCount}/{totalProvidersCount}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Redis status</p>
+            <p className={`text-lg font-semibold ${redisStatus?.status === "connected" ? "text-emerald-500" : redisStatus?.enabled ? "text-rose-500" : "text-slate-500"}`}>
+              {redisStatus?.status === "connected" ? "Connected" : redisStatus?.enabled ? "Error" : "In-Memory"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Defaults</p>
+            <p className="text-lg font-semibold text-violet-500">{form.default_resolution}</p>
+          </CardContent>
+        </Card>
+      </div>
+
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5" /> Redis Queue</CardTitle>
-          <CardDescription>
-            {redisStatus?.status === "connected"
-              ? "Redis is connected and processing jobs reliably"
-              : "Optional – enables persistent job queue, crash recovery, and multi-worker support"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <label className="text-sm font-medium mb-1 block">Redis URL</label>
-            <Input
-              placeholder="redis://localhost:6379/0 (leave empty for in-memory mode)"
-              value={form.redis_url}
-              onChange={(e) => update("redis_url", e.target.value)}
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Requires server restart to take effect</p>
+            <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5" /> Redis Queue</CardTitle>
+            <CardDescription>
+              {redisStatus?.status === "connected"
+                ? "Redis is connected and processing jobs reliably"
+                : "Optional – enables persistent job queue, crash recovery, and multi-worker support"}
+            </CardDescription>
           </div>
-          {redisStatus && (
-            <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Status</span>
-                <Badge variant={redisStatus.status === "connected" ? "default" : redisStatus.enabled ? "destructive" : "secondary"}>
-                  {redisStatus.status === "connected" ? (
-                    <><Activity className="h-3 w-3 mr-1" />Connected</>
-                  ) : redisStatus.enabled ? (
-                    <><AlertCircle className="h-3 w-3 mr-1" />Error</>
-                  ) : (
-                    "In-Memory Mode"
-                  )}
-                </Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-expanded={sectionsOpen.redis}
+            onClick={() => setSectionsOpen((s) => ({ ...s, redis: !s.redis }))}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${sectionsOpen.redis ? "rotate-180" : ""}`} />
+          </Button>
+        </CardHeader>
+        {sectionsOpen.redis && (
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Redis URL</label>
+              <Input
+                placeholder="redis://localhost:6379/0 (leave empty for in-memory mode)"
+                value={form.redis_url}
+                onChange={(e) => update("redis_url", e.target.value)}
+              />
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Requires server restart to take effect</p>
+            </div>
+            {redisStatus && (
+              <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Status</span>
+                  <Badge variant={redisStatus.status === "connected" ? "default" : redisStatus.enabled ? "destructive" : "secondary"}>
+                    {redisStatus.status === "connected" ? (
+                      <><Activity className="h-3 w-3 mr-1" />Connected</>
+                    ) : redisStatus.enabled ? (
+                      <><AlertCircle className="h-3 w-3 mr-1" />Error</>
+                    ) : (
+                      "In-Memory Mode"
+                    )}
+                  </Badge>
+                </div>
+                {redisStatus.status === "connected" && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
+                        <span className="text-slate-500 dark:text-slate-400">Version</span>
+                        <span className="font-mono">{redisStatus.version}</span>
+                      </div>
+                      <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
+                        <span className="text-slate-500 dark:text-slate-400">Memory</span>
+                        <span className="font-mono">{redisStatus.used_memory_human}</span>
+                      </div>
+                      <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
+                        <span className="text-slate-500 dark:text-slate-400">Clients</span>
+                        <span className="font-mono">{redisStatus.connected_clients}</span>
+                      </div>
+                      <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
+                        <span className="text-slate-500 dark:text-slate-400">Uptime</span>
+                        <span className="font-mono">{Math.floor((redisStatus.uptime_seconds || 0) / 3600)}h</span>
+                      </div>
+                    </div>
+                    {redisStatus.queue && (
+                      <div className="grid grid-cols-3 gap-3 text-sm">
+                        <div className="text-center p-2 rounded bg-cyan-50 dark:bg-cyan-950/30">
+                          <p className="text-lg font-bold text-cyan-600 dark:text-cyan-400">{redisStatus.queue.pending || 0}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Queued</p>
+                        </div>
+                        <div className="text-center p-2 rounded bg-amber-50 dark:bg-amber-950/30">
+                          <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{redisStatus.queue.processing || 0}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Processing</p>
+                        </div>
+                        <div className="text-center p-2 rounded bg-rose-50 dark:bg-rose-950/30">
+                          <p className="text-lg font-bold text-rose-600 dark:text-rose-400">Dead Letter</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">{redisStatus.queue.dead_letter || 0}</p>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                {redisStatus.status === "disconnected" && !redisStatus.enabled && (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Running in in-memory mode. Jobs will be lost on server restart.
+                    Set a Redis URL above and restart the server for persistent queuing.
+                  </p>
+                )}
+                {redisStatus.error && (
+                  <p className="text-sm text-red-500">{redisStatus.error}</p>
+                )}
               </div>
-              {redisStatus.status === "connected" && (
-                <>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
-                      <span className="text-slate-500 dark:text-slate-400">Version</span>
-                      <span className="font-mono">{redisStatus.version}</span>
-                    </div>
-                    <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
-                      <span className="text-slate-500 dark:text-slate-400">Memory</span>
-                      <span className="font-mono">{redisStatus.used_memory_human}</span>
-                    </div>
-                    <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
-                      <span className="text-slate-500 dark:text-slate-400">Clients</span>
-                      <span className="font-mono">{redisStatus.connected_clients}</span>
-                    </div>
-                    <div className="flex justify-between p-2 rounded bg-slate-50/80 dark:bg-zinc-800/70">
-                      <span className="text-slate-500 dark:text-slate-400">Uptime</span>
-                      <span className="font-mono">{Math.floor((redisStatus.uptime_seconds || 0) / 3600)}h</span>
-                    </div>
-                  </div>
-                  {redisStatus.queue && (
-                    <div className="grid grid-cols-3 gap-3 text-sm">
-                      <div className="text-center p-2 rounded bg-cyan-50 dark:bg-cyan-950/30">
-                        <p className="text-lg font-bold text-cyan-600 dark:text-cyan-400">{redisStatus.queue.pending || 0}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">Queued</p>
-                      </div>
-                      <div className="text-center p-2 rounded bg-amber-50 dark:bg-amber-950/30">
-                        <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{redisStatus.queue.processing || 0}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">Processing</p>
-                      </div>
-                      <div className="text-center p-2 rounded bg-rose-50 dark:bg-rose-950/30">
-                        <p className="text-lg font-bold text-rose-600 dark:text-rose-400">{redisStatus.queue.dead_letter || 0}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">Dead Letter</p>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-              {redisStatus.status === "disconnected" && !redisStatus.enabled && (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Running in in-memory mode. Jobs will be lost on server restart.
-                  Set a Redis URL above and restart the server for persistent queuing.
-                </p>
-              )}
-              {redisStatus.error && (
-                <p className="text-sm text-red-500">{redisStatus.error}</p>
-              )}
-            </div>
-          )}
-        </CardContent>
+            )}
+          </CardContent>
+        )}
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Key className="h-5 w-5" /> API Keys</CardTitle>
-          <CardDescription>Your keys are stored in the .env file on the server</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {apiKeys.map((item) => (
-            <div key={item.key}>
-              <label className="text-sm font-medium mb-1 block">{item.label}</label>
-              <Input type="password" placeholder={item.desc} value={(form as any)[item.key] || ""} onChange={(e) => update(item.key, e.target.value)} />
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> AI Generation Defaults</CardTitle>
-          <CardDescription>Account-wide defaults for script, image, video, and TTS generation</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Default Script Length (words)</label>
-              <Input
-                type="number"
-                min={150}
-                max={800}
-                value={form.default_word_count ?? 400}
-                onChange={(e) => update("default_word_count", e.target.value)}
-              />
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Used when generating from concept</p>
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Default Scene Count</label>
-              <Input
-                type="number"
-                min={2}
-                max={15}
-                value={form.default_scene_count ?? 5}
-                onChange={(e) => update("default_scene_count", e.target.value)}
-              />
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Scenes per video when generating from concept</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Script / Storyboard LLM</label>
-              <Select value={form.default_llm_provider} onValueChange={(value) => update("default_llm_provider", value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="openai">OpenAI</SelectItem>
-                  <SelectItem value="groq">Groq</SelectItem>
-                  <SelectItem value="openrouter">OpenRouter</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">LLM Model</label>
-              <Select value={form.default_llm_model} onValueChange={(value) => update("default_llm_model", value)} disabled={llmModelsLoading}>
-                <SelectTrigger>
-                  <SelectValue placeholder={llmModelsLoading ? "Loading models…" : "Model"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {(() => {
-                    const fallback = providers.llm.find((p) => p.name === form.default_llm_provider)?.models || ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"];
-                    const list = llmModels.length ? llmModels : fallback;
-                    const options = list.includes(form.default_llm_model) ? list : [form.default_llm_model, ...list];
-                    return options.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>);
-                  })()}
-                </SelectContent>
-              </Select>
-              {llmModelsLoading && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Fetching models from API…</p>}
-            </div>
-          </div>
+        <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <label className="text-sm font-medium mb-1 block">Image Generation Provider</label>
-            <Select value={form.default_image_provider} onValueChange={(value) => update("default_image_provider", value)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="replicate">Replicate</SelectItem>
-                <SelectItem value="fal">FAL AI</SelectItem>
-                <SelectItem value="together">Together AI</SelectItem>
-                <SelectItem value="pollinations">Pollinations (Free)</SelectItem>
-                <SelectItem value="openai_image">OpenAI</SelectItem>
-                <SelectItem value="runware">Runware</SelectItem>
-              </SelectContent>
-            </Select>
+            <CardTitle className="flex items-center gap-2"><Key className="h-5 w-5" /> API Keys</CardTitle>
+            <CardDescription>Your keys are stored in the .env file on the server</CardDescription>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Video Generation Provider</label>
-              <Select value={form.default_video_provider} onValueChange={(value) => update("default_video_provider", value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="sora">Sora (OpenAI)</SelectItem>
-                </SelectContent>
-              </Select>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-expanded={sectionsOpen.apiKeys}
+            onClick={() => setSectionsOpen((s) => ({ ...s, apiKeys: !s.apiKeys }))}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${sectionsOpen.apiKeys ? "rotate-180" : ""}`} />
+          </Button>
+        </CardHeader>
+        {sectionsOpen.apiKeys && (
+          <CardContent className="space-y-4">
+            {apiKeys.map((item) => (
+              <div key={item.key}>
+                <label className="text-sm font-medium mb-1 block">{item.label}</label>
+                <Input type="password" placeholder={item.desc} value={(form as any)[item.key] || ""} onChange={(e) => update(item.key, e.target.value)} />
+              </div>
+            ))}
+          </CardContent>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> AI Generation Defaults</CardTitle>
+            <CardDescription>Account-wide defaults for script, image, video, and TTS generation</CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-expanded={sectionsOpen.aiDefaults}
+            onClick={() => setSectionsOpen((s) => ({ ...s, aiDefaults: !s.aiDefaults }))}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${sectionsOpen.aiDefaults ? "rotate-180" : ""}`} />
+          </Button>
+        </CardHeader>
+        {sectionsOpen.aiDefaults && (
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Default Script Length (words)</label>
+                <Input
+                  type="number"
+                  min={150}
+                  max={800}
+                  value={form.default_word_count ?? 400}
+                  onChange={(e) => update("default_word_count", e.target.value)}
+                />
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Used when generating from concept</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Default Scene Count</label>
+                <Input
+                  type="number"
+                  min={2}
+                  max={15}
+                  value={form.default_scene_count ?? 5}
+                  onChange={(e) => update("default_scene_count", e.target.value)}
+                />
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Scenes per video when generating from concept</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Script / Storyboard LLM</label>
+                <Select value={form.default_llm_provider} onValueChange={(value) => update("default_llm_provider", value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai">OpenAI</SelectItem>
+                    <SelectItem value="groq">Groq</SelectItem>
+                    <SelectItem value="openrouter">OpenRouter</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">LLM Model</label>
+                <Select value={form.default_llm_model} onValueChange={(value) => update("default_llm_model", value)} disabled={llmModelsLoading}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={llmModelsLoading ? "Loading models…" : "Model"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(() => {
+                      const fallback = providers.llm.find((p) => p.name === form.default_llm_provider)?.models || ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"];
+                      const list = llmModels.length ? llmModels : fallback;
+                      const options = list.includes(form.default_llm_model) ? list : [form.default_llm_model, ...list];
+                      return options.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>);
+                    })()}
+                  </SelectContent>
+                </Select>
+                {llmModelsLoading && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Fetching models from API…</p>}
+              </div>
             </div>
             <div>
-              <label className="text-sm font-medium mb-1 block">Video Model</label>
-              <Select value={form.default_video_model} onValueChange={(value) => update("default_video_model", value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(providers.video.find((p) => p.name === form.default_video_provider)?.models || ["sora-2", "sora-2-pro", "sora-2-pro-2025-10-06"]).map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium mb-1 block">TTS Provider</label>
-              <Select value={form.default_tts_provider} onValueChange={(value) => update("default_tts_provider", value)}>
+              <label className="text-sm font-medium mb-1 block">Image Generation Provider</label>
+              <Select value={form.default_image_provider} onValueChange={(value) => update("default_image_provider", value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="edge">Edge TTS (Free)</SelectItem>
-                  <SelectItem value="openai_tts">OpenAI TTS</SelectItem>
-                  <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                  <SelectItem value="replicate">Replicate</SelectItem>
+                  <SelectItem value="fal">FAL AI</SelectItem>
+                  <SelectItem value="together">Together AI</SelectItem>
+                  <SelectItem value="pollinations">Pollinations (Free)</SelectItem>
+                  <SelectItem value="openai_image">OpenAI</SelectItem>
+                  <SelectItem value="runware">Runware</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Default TTS Voice ID</label>
-              <Input placeholder="en-US-ChristopherNeural" value={form.default_tts_voice} onChange={(e) => update("default_tts_voice", e.target.value)} />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Video className="h-5 w-5" /> Video Defaults</CardTitle>
-          <CardDescription>Default resolution, transition, and image style for new videos</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Resolution</label>
-              <Select value={form.default_resolution} onValueChange={(value) => update("default_resolution", value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Resolution" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(resolutions.length ? resolutions : [{ id: "1080x1920", name: "1080x1920 (9:16 Portrait)" }, { id: "1920x1080", name: "1920x1080 (16:9 Landscape)" }, { id: "1024x1024", name: "1024x1024 (1:1 Square)" }]).map((r) => (
-                    <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Transition</label>
-              <Select value={form.default_transition} onValueChange={(value) => update("default_transition", value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Transition" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(transitions.length ? transitions : [{ id: "fade", name: "Fade" }, { id: "dissolve", name: "Dissolve" }, { id: "wipeleft", name: "Wipe Left" }]).map((t) => (
-                    <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">Image Style</label>
-            <Select value={form.default_image_style} onValueChange={(value) => update("default_image_style", value)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Style" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="realistic">Realistic</SelectItem>
-                <SelectItem value="anime">Anime</SelectItem>
-                <SelectItem value="cinematic">Cinematic</SelectItem>
-                <SelectItem value="illustration">Illustration</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Infrastructure</CardTitle>
-          <CardDescription>FFmpeg path for video processing</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div>
-            <label className="text-sm font-medium mb-1 block">FFmpeg Path</label>
-            <Input placeholder="ffmpeg" value={form.ffmpeg_path} onChange={(e) => update("ffmpeg_path", e.target.value)} />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Provider Status</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-3">
-            {[...providers.llm, ...providers.image, ...providers.tts, ...providers.video].map((p) => (
-              <div key={p.name} className="flex items-center justify-between p-3 rounded-xl bg-slate-50/80 dark:bg-zinc-800/70 border border-slate-200/80 dark:border-zinc-700">
-                <span className="text-sm font-medium">{p.name}</span>
-                <Badge variant={p.configured ? "default" : "destructive"}>
-                  {p.configured ? <><CheckCircle className="h-3 w-3 mr-1" /> Active</> : <><AlertCircle className="h-3 w-3 mr-1" /> Not Set</>}
-                </Badge>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Video Generation Provider</label>
+                <Select value={form.default_video_provider} onValueChange={(value) => update("default_video_provider", value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sora">Sora (OpenAI)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-            ))}
+              <div>
+                <label className="text-sm font-medium mb-1 block">Video Model</label>
+                <Select value={form.default_video_model} onValueChange={(value) => update("default_video_model", value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(providers.video.find((p) => p.name === form.default_video_provider)?.models || ["sora-2", "sora-2-pro", "sora-2-pro-2025-10-06"]).map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">TTS Provider</label>
+                <Select value={form.default_tts_provider} onValueChange={(value) => update("default_tts_provider", value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="edge">Edge TTS (Free)</SelectItem>
+                    <SelectItem value="openai_tts">OpenAI TTS</SelectItem>
+                    <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Default TTS Voice ID</label>
+                <Input placeholder="en-US-ChristopherNeural" value={form.default_tts_voice} onChange={(e) => update("default_tts_voice", e.target.value)} />
+              </div>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2"><Video className="h-5 w-5" /> Video Defaults</CardTitle>
+            <CardDescription>Default resolution, transition, and image style for new videos</CardDescription>
           </div>
-        </CardContent>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-expanded={sectionsOpen.videoDefaults}
+            onClick={() => setSectionsOpen((s) => ({ ...s, videoDefaults: !s.videoDefaults }))}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${sectionsOpen.videoDefaults ? "rotate-180" : ""}`} />
+          </Button>
+        </CardHeader>
+        {sectionsOpen.videoDefaults && (
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Resolution</label>
+                <Select value={form.default_resolution} onValueChange={(value) => update("default_resolution", value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Resolution" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(resolutions.length ? resolutions : [{ id: "1080x1920", name: "1080x1920 (9:16 Portrait)" }, { id: "1920x1080", name: "1920x1080 (16:9 Landscape)" }, { id: "1024x1024", name: "1024x1024 (1:1 Square)" }]).map((r) => (
+                      <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Transition</label>
+                <Select value={form.default_transition} onValueChange={(value) => update("default_transition", value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Transition" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(transitions.length ? transitions : [{ id: "fade", name: "Fade" }, { id: "dissolve", name: "Dissolve" }, { id: "wipeleft", name: "Wipe Left" }]).map((t) => (
+                      <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Image Style</label>
+              <Select value={form.default_image_style} onValueChange={(value) => update("default_image_style", value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Style" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="realistic">Realistic</SelectItem>
+                  <SelectItem value="anime">Anime</SelectItem>
+                  <SelectItem value="cinematic">Cinematic</SelectItem>
+                  <SelectItem value="illustration">Illustration</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Infrastructure</CardTitle>
+            <CardDescription>FFmpeg path for video processing</CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-expanded={sectionsOpen.infrastructure}
+            onClick={() => setSectionsOpen((s) => ({ ...s, infrastructure: !s.infrastructure }))}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${sectionsOpen.infrastructure ? "rotate-180" : ""}`} />
+          </Button>
+        </CardHeader>
+        {sectionsOpen.infrastructure && (
+          <CardContent>
+            <div>
+              <label className="text-sm font-medium mb-1 block">FFmpeg Path</label>
+              <Input placeholder="ffmpeg" value={form.ffmpeg_path} onChange={(e) => update("ffmpeg_path", e.target.value)} />
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Provider Status</CardTitle>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-expanded={sectionsOpen.providerStatus}
+            onClick={() => setSectionsOpen((s) => ({ ...s, providerStatus: !s.providerStatus }))}
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${sectionsOpen.providerStatus ? "rotate-180" : ""}`} />
+          </Button>
+        </CardHeader>
+        {sectionsOpen.providerStatus && (
+          <CardContent>
+            <div className="grid grid-cols-2 gap-3">
+              {[...providers.llm, ...providers.image, ...providers.tts, ...providers.video].map((p) => (
+                <div key={p.name} className="flex items-center justify-between p-3 rounded-xl bg-slate-50/80 dark:bg-zinc-800/70 border border-slate-200/80 dark:border-zinc-700">
+                  <span className="text-sm font-medium">{p.name}</span>
+                  <Badge variant={p.configured ? "default" : "destructive"}>
+                    {p.configured ? <><CheckCircle className="h-3 w-3 mr-1" /> Active</> : <><AlertCircle className="h-3 w-3 mr-1" /> Not Set</>}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        )}
       </Card>
     </div>
   );

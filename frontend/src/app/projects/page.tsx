@@ -68,6 +68,7 @@ export default function ProjectsPage() {
       return [];
     }
   });
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [pendingDeleteProjectId, setPendingDeleteProjectId] = useState<string | null>(null);
   const [bulkDeleteArmed, setBulkDeleteArmed] = useState(false);
   const { data: fetchedProjects, isLoading: loading } = useProjectsQuery();
@@ -296,18 +297,6 @@ export default function ProjectsPage() {
             <SelectItem value="ready_for_edit">Ready to edit</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={storyTypeFilter} onValueChange={setStoryTypeFilter}>
-          <SelectTrigger aria-label="Filter by story type">
-            <SelectValue placeholder="Story type" />
-          </SelectTrigger>
-          <SelectContent>
-            {storyTypes.map((t) => (
-              <SelectItem key={t} value={t}>
-                {t === "all" ? "All story types" : t}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
           <SelectTrigger aria-label="Sort projects">
             <SelectValue placeholder="Sort by" />
@@ -319,6 +308,19 @@ export default function ProjectsPage() {
             <SelectItem value="scene_desc">Most scenes</SelectItem>
           </SelectContent>
         </Select>
+        <Button
+          type="button"
+          variant="outline"
+          className="justify-between"
+          onClick={() => setShowMoreFilters((s) => !s)}
+          aria-expanded={showMoreFilters}
+          aria-controls="projects-more-filters"
+        >
+          More filters
+          <span className="text-xs text-muted-foreground">
+            {(storyTypeFilter !== "all" || sceneBucket !== "all" || dateRange !== "all") ? "On" : "Off"}
+          </span>
+        </Button>
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
@@ -346,28 +348,6 @@ export default function ProjectsPage() {
         >
           Ready to edit
         </Button>
-        <Select value={sceneBucket} onValueChange={(v) => setSceneBucket(v as SceneBucket)}>
-          <SelectTrigger className="w-[160px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All scene counts</SelectItem>
-            <SelectItem value="small">Small (1-3)</SelectItem>
-            <SelectItem value="medium">Medium (4-8)</SelectItem>
-            <SelectItem value="large">Large (9+)</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRange)}>
-          <SelectTrigger className="w-[150px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All time</SelectItem>
-            <SelectItem value="7d">Last 7 days</SelectItem>
-            <SelectItem value="30d">Last 30 days</SelectItem>
-            <SelectItem value="90d">Last 90 days</SelectItem>
-          </SelectContent>
-        </Select>
         <Button variant="outline" size="sm" type="button" onClick={saveCurrentView}>
           Save view
         </Button>
@@ -386,6 +366,45 @@ export default function ProjectsPage() {
           </Select>
         )}
       </div>
+
+      {showMoreFilters && (
+        <div id="projects-more-filters" className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Select value={storyTypeFilter} onValueChange={setStoryTypeFilter}>
+            <SelectTrigger aria-label="Filter by story type">
+              <SelectValue placeholder="Story type" />
+            </SelectTrigger>
+            <SelectContent>
+              {storyTypes.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {t === "all" ? "All story types" : t}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={sceneBucket} onValueChange={(v) => setSceneBucket(v as SceneBucket)}>
+            <SelectTrigger>
+              <SelectValue placeholder="Scene count" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All scene counts</SelectItem>
+              <SelectItem value="small">Small (1-3)</SelectItem>
+              <SelectItem value="medium">Medium (4-8)</SelectItem>
+              <SelectItem value="large">Large (9+)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRange)}>
+            <SelectTrigger>
+              <SelectValue placeholder="Date range" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All time</SelectItem>
+              <SelectItem value="7d">Last 7 days</SelectItem>
+              <SelectItem value="30d">Last 30 days</SelectItem>
+              <SelectItem value="90d">Last 90 days</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {selectedIds.length > 0 && (
         <Card className="border-cyan-500/30">
@@ -439,7 +458,11 @@ export default function ProjectsPage() {
                 <div className="flex items-start justify-between gap-2">
                   <button
                     type="button"
-                    className="h-5 w-5 rounded border border-input bg-background mt-0.5 flex items-center justify-center"
+                    className={`h-5 w-5 rounded border mt-0.5 flex items-center justify-center transition-colors ${
+                      selectedSet.has(project.id)
+                        ? "border-cyan-400 bg-cyan-500/15"
+                        : "border-input bg-background hover:border-cyan-400/60"
+                    }`}
                     aria-label={`Select ${project.title}`}
                     aria-pressed={selectedSet.has(project.id)}
                     onClick={() => toggleSelect(project.id)}

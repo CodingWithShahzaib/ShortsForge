@@ -30,16 +30,16 @@ export const CollapsibleCard = memo(function CollapsibleCard({
   };
 
   return (
-    <Card>
+    <Card className={open ? "border-cyan-500/40 shadow-[0_0_0_1px_rgba(34,211,238,0.1)]" : ""}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+          <CardTitle className={`flex items-center gap-2 text-base sm:text-lg ${open ? "text-cyan-600 dark:text-cyan-400" : ""}`}>
             {icon}
             {title}
           </CardTitle>
           <Button
             type="button"
-            variant="ghost"
+            variant={open ? "secondary" : "ghost"}
             size="sm"
             className="shrink-0 h-8 w-8 p-0"
             aria-expanded={open}

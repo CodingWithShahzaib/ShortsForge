@@ -11,11 +11,11 @@ import { useProjectStore } from "@/stores/projectStore";
 
 const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Pulse" },
-  { href: "/generate", icon: Video, label: "Create" },
+  { href: "/generate", icon: Video, label: "Generate" },
   { href: "/sora", icon: Film, label: "Studio" },
-  { href: "/projects", icon: FolderOpen, label: "Library" },
+  { href: "/projects", icon: FolderOpen, label: "Projects" },
   { href: "/scripts", icon: FileText, label: "Scripts" },
-  { href: "/history", icon: History, label: "Activity" },
+  { href: "/history", icon: History, label: "History" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ];
 

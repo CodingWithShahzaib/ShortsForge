@@ -85,9 +85,9 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col overflow-hidden relative">
         <IsoLevelWarp
           color="6, 182, 212"
-          density={40}
-          speed={0.04}
-          className="fixed top-14 left-64 right-0 bottom-0 opacity-100 dark:opacity-90 -z-10"
+          density={36}
+          speed={0.035}
+          className="fixed top-14 left-64 right-0 bottom-0 opacity-80 dark:opacity-50 -z-10"
         />
         <Header />
         <main className="flex-1 overflow-y-auto p-6 min-w-0 w-full relative z-0">{children}</main>
