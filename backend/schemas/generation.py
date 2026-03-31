@@ -19,6 +19,7 @@ class GenerateVideoSceneInput(BaseModel):
 
 
 class GenerateVideoRequest(BaseModel):
+    project_id: str | None = None
     title: str = "AI Video"
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
@@ -41,18 +42,47 @@ class GenerateVideoRequest(BaseModel):
     subtitle_size: int = Field(default=48, ge=24, le=96)
     subtitle_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$")
     subtitle_position: Literal["bottom", "top", "center"] = "bottom"
+    subtitle_words_per_group: int = Field(default=4, ge=2, le=12)
+    subtitle_background_opacity: float = Field(default=0.65, ge=0.0, le=1.0)
+    subtitle_shadow_enabled: bool = True
+    subtitle_shadow_strength: float = Field(default=0.85, ge=0.0, le=2.0)
+    subtitle_safe_zone_enabled: bool = True
+    subtitle_safe_zone_platform: Literal["tiktok", "instagram_reel", "youtube_short"] = "tiktok"
+    subtitle_word_pop_enabled: bool = False
     background_music: str | None = None
     background_music_volume: float = Field(default=0.15, ge=0.0, le=1.0)
-    scene_count: int = Field(default=5, ge=2, le=15)
+    ducking_enabled: bool = True
+    ducking_amount: float = Field(default=-12.0, ge=-30.0, le=-1.0)
+    scene_count: int = Field(default=5, ge=2, le=100)
     word_count: int = Field(default=400, ge=150, le=800)
+    scene_narration_style: Literal["short", "balanced", "long"] = "balanced"
     scene_duration: float = Field(default=5.0, ge=1.0, le=60.0)
+    scene_duration_min: int = Field(default=2, ge=1, le=12)
+    scene_duration_max: int = Field(default=4, ge=1, le=20)
+    inter_scene_pause_ms: int = Field(default=600, ge=0, le=1200)
+    transition_overlap_ms: int = Field(default=250, ge=0, le=800)
+    use_production_storyboard: bool = True
+    match_scenes_to_audio: bool = True
+    visual_continuity: str = ""
+    ken_burns_enabled: bool = True
+    ken_burns_zoom_percent: float = Field(default=2.5, ge=0.0, le=8.0)
+    ken_burns_motion: Literal["zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down", "auto"] = "auto"
+    film_grain_enabled: bool = False
+    film_grain_intensity: float = Field(default=0.05, ge=0.0, le=0.25)
+    vignette_enabled: bool = True
+    vignette_intensity: float = Field(default=0.15, ge=0.0, le=0.5)
+    lut_enabled: bool = False
+    lut_path: str | None = None
+    transition_duration_sec: float = Field(default=0.3, ge=0.0, le=2.0)
     prepare_only: bool = False
     """When True, stop after per-scene image+TTS assets (no final FFmpeg composite)."""
     storyboard_only: bool = False
     """When True, stop after LLM storyboard + Scene rows — no image/TTS generation."""
+    pipeline_mode: Literal["manual", "auto"] = "manual"
+    target_stage: Literal["storyboard", "assets", "compile"] | None = None
     control_mode: Literal["autopilot", "co_pilot", "manual"] = Field(
         default="co_pilot",
-        description="Legacy; studio-first flow uses co_pilot. autopilot | co_pilot | manual",
+        description="Internal workflow mode. Keep value names unchanged: autopilot | co_pilot | manual",
     )
     extra_settings: dict[str, Any] | None = None
 
@@ -65,6 +95,22 @@ class GenerateScriptRequest(BaseModel):
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
     temperature: float = 0.8
+
+
+class GenerateStoryboardRequest(BaseModel):
+    concept: str = ""
+    script: str = ""
+    story_type: str = "general"
+    story_template: StoryTemplateField = "default"
+    scene_count: int = Field(default=5, ge=2, le=100)
+    image_style: str = "realistic"
+    resolution: str = "1080x1920"
+    transition: str = "fade"
+    word_count: int = Field(default=400, ge=150, le=800)
+    scene_narration_style: Literal["short", "balanced", "long"] = "balanced"
+    generate_subtitles: bool = True
+    llm_provider: str = "openai"
+    llm_model: str | None = None
 
 
 class RewriteScriptRequest(BaseModel):
@@ -101,10 +147,15 @@ class VideoProductionScene(BaseModel):
 class GenerateVideoProductionScriptRequest(BaseModel):
     concept: str
     story_type: str = "general"
-    scene_count: int = 5
+    scene_count: int = Field(default=5, ge=2, le=100)
+    image_style: str = "realistic"
+    resolution: str = "1080x1920"
+    transition: str = "fade"
+    scene_narration_style: Literal["short", "balanced", "long"] = "balanced"
     llm_provider: str = "openai"
     llm_model: str | None = None
     temperature: float = 0.7
+    visual_continuity: str | None = None
 
 
 class GenerateImageRequest(BaseModel):

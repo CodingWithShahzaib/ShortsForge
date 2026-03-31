@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, case
@@ -15,10 +15,31 @@ from sqlalchemy.orm import selectinload
 from backend.core.storage import build_key, get_storage, guess_content_type
 from backend.core.task_manager import task_manager
 from backend.database import get_db
-from backend.models import Project, Scene, Asset, Job, ProjectAsset
+from backend.models import (
+    Asset,
+    Job,
+    Project,
+    ProjectAsset,
+    ProjectVideoSettings,
+    Scene,
+    SceneAssetOverride,
+)
 from backend.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut, ProjectListOut,
     SceneCreate, SceneUpdate, SceneOut, JobOut, ProjectAssetOut,
+)
+from backend.schemas.video_settings import (
+    ProjectVideoSettingsOut,
+    ProjectVideoSettingsUpdate,
+    SceneAssetOverrideOut,
+    SceneAssetOverrideUpdate,
+    SceneRegenerateRequest,
+)
+from backend.services.project_video_settings_service import (
+    apply_project_video_settings_update,
+    apply_scene_asset_override_update,
+    ensure_project_video_settings_row,
+    ensure_scene_asset_override,
 )
 
 router = APIRouter()
@@ -40,6 +61,48 @@ async def _attach_scene_asset_urls(scene: Scene) -> None:
     for asset in scene.assets:
         if asset.file_path:
             asset.url = await storage.get_url(asset.file_path)
+
+
+async def _load_project_with_related(db: AsyncSession, project_id: str) -> Project | None:
+    result = await db.execute(
+        select(Project).where(Project.id == project_id).options(
+            selectinload(Project.scenes).selectinload(Scene.assets),
+            selectinload(Project.scenes).selectinload(Scene.asset_override),
+            selectinload(Project.project_assets),
+            selectinload(Project.video_settings),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _load_scene_with_related(db: AsyncSession, project_id: str, scene_id: str) -> Scene | None:
+    result = await db.execute(
+        select(Scene)
+        .where(Scene.id == scene_id, Scene.project_id == project_id)
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
+    )
+    return result.scalar_one_or_none()
+
+
+def _scene_asset_storage_folder(asset_type: str) -> str:
+    if asset_type == "audio":
+        return "audio"
+    if asset_type == "video":
+        return "videos"
+    return "images"
+
+
+def _detect_scene_upload_type(filename: str, declared_type: str | None = None) -> str:
+    if declared_type in {"image", "audio", "video"}:
+        return declared_type
+    ext = Path(filename).suffix.lower()
+    if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return "image"
+    if ext in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
+        return "audio"
+    if ext in {".mp4", ".mov", ".webm", ".mkv"}:
+        return "video"
+    raise HTTPException(400, f"Unsupported upload format: {ext}")
 
 
 @router.get("/", response_model=list[ProjectListOut])
@@ -167,6 +230,8 @@ async def create_project(
     data: ProjectCreate,
     db: AsyncSession = Depends(get_db),
 ):
+    from backend.config import get_settings
+
     project = Project(
         title=data.title,
         story_type=data.story_type,
@@ -176,13 +241,28 @@ async def create_project(
     )
     db.add(project)
     await db.flush()
+    ensure_project_video_settings_row(project, get_settings())
     if data.scenes:
+        from backend.services.script_service import normalize_scene_narration
+
+        normalized = normalize_scene_narration(
+            [
+                {
+                    "narration": sc.narration,
+                    "subtitle": sc.subtitle,
+                    "script": sc.narration,
+                }
+                for sc in data.scenes
+            ],
+            script=data.script,
+        )
         for i, sc in enumerate(data.scenes):
+            norm = normalized[i] if i < len(normalized) else {}
             scene = Scene(
                 project_id=project.id,
                 order_index=i,
-                narration=sc.narration,
-                subtitle=sc.subtitle or sc.narration,
+                narration=(norm.get("narration") or "").strip() or sc.narration,
+                subtitle=(norm.get("subtitle") or "").strip() or sc.subtitle or sc.narration,
                 image_prompt=sc.image_prompt,
                 transition_type=sc.transition_type,
                 duration=sc.duration,
@@ -199,7 +279,9 @@ async def create_project(
     result = await db.execute(
         select(Project).where(Project.id == project.id).options(
             selectinload(Project.scenes).selectinload(Scene.assets),
+            selectinload(Project.scenes).selectinload(Scene.asset_override),
             selectinload(Project.project_assets),
+            selectinload(Project.video_settings),
         )
     )
     project = result.scalar_one()
@@ -209,15 +291,64 @@ async def create_project(
 
 @router.get("/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
+    from backend.config import get_settings
+    from backend.services.script_service import normalize_scene_narration
+
     result = await db.execute(
         select(Project).where(Project.id == project_id).options(
             selectinload(Project.scenes).selectinload(Scene.assets),
+            selectinload(Project.scenes).selectinload(Scene.asset_override),
             selectinload(Project.project_assets),
+            selectinload(Project.video_settings),
         )
     )
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
+    ordered_scenes = sorted(project.scenes, key=lambda s: s.order_index)
+    normalized = normalize_scene_narration(
+        [
+            {
+                "narration": s.narration or "",
+                "subtitle": s.subtitle or "",
+                "script": s.narration or s.subtitle or "",
+            }
+            for s in ordered_scenes
+        ],
+        script=project.script,
+    )
+    repaired = False
+    for idx, scene in enumerate(ordered_scenes):
+        if idx >= len(normalized):
+            break
+        fixed = normalized[idx]
+        new_narration = (fixed.get("narration") or "").strip()
+        new_subtitle = (fixed.get("subtitle") or "").strip()
+        if new_narration and (scene.narration or "").strip() != new_narration:
+            scene.narration = new_narration
+            repaired = True
+        if new_subtitle and (scene.subtitle or "").strip() != new_subtitle:
+            scene.subtitle = new_subtitle
+            repaired = True
+        if scene.asset_override is None:
+            ensure_scene_asset_override(scene)
+            repaired = True
+    if project.video_settings is None:
+        ensure_project_video_settings_row(project, get_settings())
+        repaired = True
+    if repaired:
+        project.version = (project.version or 1) + 1
+        await db.commit()
+        await db.refresh(project)
+        result = await db.execute(
+            select(Project).where(Project.id == project_id).options(
+                selectinload(Project.scenes).selectinload(Scene.assets),
+                selectinload(Project.scenes).selectinload(Scene.asset_override),
+                selectinload(Project.project_assets),
+                selectinload(Project.video_settings),
+            )
+        )
+        project = result.scalar_one()
     await _attach_project_asset_urls(project)
     return project
 
@@ -237,7 +368,9 @@ async def update_project(
         fresh = await db.execute(
             select(Project).where(Project.id == project_id).options(
                 selectinload(Project.scenes).selectinload(Scene.assets),
+                selectinload(Project.scenes).selectinload(Scene.asset_override),
                 selectinload(Project.project_assets),
+                selectinload(Project.video_settings),
             )
         )
         p_cur = fresh.scalar_one()
@@ -258,7 +391,9 @@ async def update_project(
     result = await db.execute(
         select(Project).where(Project.id == project_id).options(
             selectinload(Project.scenes).selectinload(Scene.assets),
+            selectinload(Project.scenes).selectinload(Scene.asset_override),
             selectinload(Project.project_assets),
+            selectinload(Project.video_settings),
         )
     )
     project = result.scalar_one()
@@ -276,6 +411,39 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 
+@router.get("/{project_id}/video-settings", response_model=ProjectVideoSettingsOut)
+async def get_project_video_settings(project_id: str, db: AsyncSession = Depends(get_db)):
+    from backend.config import get_settings
+
+    project = await _load_project_with_related(db, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    row = ensure_project_video_settings_row(project, get_settings())
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.post("/{project_id}/video-settings", response_model=ProjectVideoSettingsOut)
+async def update_project_video_settings(
+    project_id: str,
+    data: ProjectVideoSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.config import get_settings
+
+    project = await _load_project_with_related(db, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    row = apply_project_video_settings_update(project, data, get_settings())
+    project.version = (project.version or 1) + 1
+    db.add(project)
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
 @router.post("/{project_id}/scenes", response_model=SceneOut, status_code=201)
 async def add_scene(
     project_id: str, data: SceneCreate, db: AsyncSession = Depends(get_db),
@@ -287,9 +455,11 @@ async def add_scene(
         select(func.count(Scene.id)).where(Scene.project_id == project_id)
     )
     idx = count_q.scalar() or 0
+    narration = ((data.narration or "").strip() or (data.subtitle or "").strip()) or None
+    subtitle = ((data.subtitle or "").strip() or (data.narration or "").strip()) or None
     scene = Scene(
         project_id=project_id, order_index=idx,
-        narration=data.narration, subtitle=data.subtitle or data.narration,
+        narration=narration, subtitle=subtitle,
         image_prompt=data.image_prompt,
         transition_type=data.transition_type, duration=data.duration,
         scene_type=data.scene_type,
@@ -304,7 +474,7 @@ async def add_scene(
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene.id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one()
     await _attach_scene_asset_urls(scene)
@@ -339,12 +509,20 @@ async def update_scene(
         )
     for field, value in payload.items():
         setattr(scene, field, value)
+    # Keep narration/subtitle consistent so TTS always has recoverable spoken text.
+    if "narration" in payload or "subtitle" in payload:
+        narration = (scene.narration or "").strip()
+        subtitle = (scene.subtitle or "").strip()
+        if not narration and subtitle:
+            scene.narration = subtitle
+        elif narration and not subtitle:
+            scene.subtitle = narration
     project.version = cur_v + 1
     await db.commit()
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene_id, Scene.project_id == project_id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one()
     await _attach_scene_asset_urls(scene)
@@ -363,6 +541,41 @@ async def delete_scene(
         raise HTTPException(404, "Scene not found")
     await db.delete(scene)
     await db.commit()
+
+
+@router.get("/{project_id}/scenes/{scene_id}/override", response_model=SceneAssetOverrideOut)
+async def get_scene_override(
+    project_id: str,
+    scene_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    scene = await _load_scene_with_related(db, project_id, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    row = ensure_scene_asset_override(scene)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.post("/{project_id}/scenes/{scene_id}/override", response_model=SceneAssetOverrideOut)
+async def update_scene_override(
+    project_id: str,
+    scene_id: str,
+    data: SceneAssetOverrideUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    scene = await _load_scene_with_related(db, project_id, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    row = apply_scene_asset_override_update(scene, data)
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    project = project_result.scalar_one()
+    project.version = (project.version or 1) + 1
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
 
 
 @router.put("/{project_id}/scenes/reorder")
@@ -396,7 +609,7 @@ async def upload_scene_image(
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene_id, Scene.project_id == project_id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one_or_none()
     if not scene:
@@ -431,6 +644,14 @@ async def upload_scene_image(
         is_active=True,
     )
     db.add(asset)
+    override_row = ensure_scene_asset_override(scene)
+    override_row.manual_image_path = key
+    override_row.image_status = "manual_override"
+    override_row.manual_video_path = None
+    override_row.video_status = "none"
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    project = project_result.scalar_one()
+    project.version = (project.version or 1) + 1
     await db.commit()
     await db.refresh(asset)
     return {
@@ -443,19 +664,91 @@ async def upload_scene_image(
     }
 
 
-@router.post("/{project_id}/scenes/{scene_id}/regenerate-image")
+@router.post("/{project_id}/scenes/{scene_id}/upload-asset")
+async def upload_scene_asset(
+    project_id: str,
+    scene_id: str,
+    db: AsyncSession = Depends(get_db),
+    asset_type: str | None = Form(None),
+    file: UploadFile = File(...),
+):
+    scene = await _load_scene_with_related(db, project_id, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    if not file.filename:
+        raise HTTPException(400, "No file provided")
+
+    resolved_type = _detect_scene_upload_type(file.filename, asset_type)
+    ext = Path(file.filename).suffix.lower()
+    name = f"{uuid.uuid4().hex}{ext}"
+    content = await file.read()
+    key = build_key(
+        _scene_asset_storage_folder(resolved_type),
+        f"projects/{project_id}/scenes/{scene_id}/{name}",
+    )
+    storage = get_storage()
+    await storage.save_bytes(key, content, guess_content_type(name))
+
+    for existing in list(scene.assets):
+        if existing.type == "video":
+            await db.delete(existing)
+    for existing in scene.assets:
+        if existing.type == resolved_type:
+            existing.is_active = False
+    await db.flush()
+
+    asset = Asset(
+        scene_id=scene_id,
+        type=resolved_type,
+        file_path=key,
+        provider="upload",
+        source="user_uploaded",
+        is_active=True,
+    )
+    db.add(asset)
+
+    override_row = ensure_scene_asset_override(scene)
+    if resolved_type == "image":
+        override_row.manual_image_path = key
+        override_row.image_status = "manual_override"
+    elif resolved_type == "audio":
+        override_row.manual_audio_path = key
+        override_row.audio_status = "manual_override"
+    else:
+        override_row.manual_video_path = key
+        override_row.video_status = "manual_override"
+
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    project = project_result.scalar_one()
+    project.version = (project.version or 1) + 1
+    await db.commit()
+    await db.refresh(asset)
+
+    return {
+        "id": asset.id,
+        "scene_id": scene_id,
+        "type": resolved_type,
+        "file_path": key,
+        "provider": "upload",
+        "source": "user_uploaded",
+        "url": await storage.get_url(key),
+        "override": SceneAssetOverrideOut.model_validate(override_row).model_dump(mode="json"),
+    }
+
+
+@router.post("/{project_id}/scenes/{scene_id}/regenerate-image", response_model=SceneOut)
 async def regenerate_scene_image(
     project_id: str,
     scene_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """Regenerate the image for a scene from its image_prompt using project settings."""
-    from backend.services.image_service import generate_image
+    from backend.services.image_service import DEFAULT_TEXT_NEGATIVE_PROMPT, generate_image
 
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene_id, Scene.project_id == project_id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one_or_none()
     if not scene:
@@ -476,6 +769,8 @@ async def regenerate_scene_image(
     nprompt = ov.get("negative_prompt")
     if isinstance(nprompt, str) and nprompt.strip():
         gen_kwargs["negative_prompt"] = nprompt.strip()
+    else:
+        gen_kwargs["negative_prompt"] = DEFAULT_TEXT_NEGATIVE_PROMPT
     seed = ov.get("seed")
     if seed is not None and seed != "":
         try:
@@ -523,12 +818,15 @@ async def regenerate_scene_image(
         },
     )
     db.add(asset)
+    override_row = ensure_scene_asset_override(scene)
+    override_row.manual_image_path = None
+    override_row.image_status = "ai_generated"
     await db.commit()
 
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene_id, Scene.project_id == project_id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one()
     await _attach_scene_asset_urls(scene)
@@ -540,19 +838,14 @@ class GenerateSceneAssetBody(BaseModel):
     prompt_override: str | None = None
 
 
-@router.post("/{project_id}/scenes/{scene_id}/assets/generate", response_model=JobOut)
-async def queue_generate_scene_asset(
+async def _queue_scene_asset_job(
+    db: AsyncSession,
+    *,
     project_id: str,
     scene_id: str,
-    body: GenerateSceneAssetBody,
-    db: AsyncSession = Depends(get_db),
-):
-    r = await db.execute(
-        select(Scene).where(Scene.id == scene_id, Scene.project_id == project_id)
-    )
-    if not r.scalar_one_or_none():
-        raise HTTPException(404, "Scene not found")
-
+    asset_type: Literal["image", "audio"],
+    prompt_override: str | None = None,
+) -> Job:
     job = Job(
         project_id=project_id,
         type="asset_generate",
@@ -567,8 +860,8 @@ async def queue_generate_scene_asset(
         "project_id": project_id,
         "scene_id": scene_id,
         "job_id": job.id,
-        "asset_type": body.asset_type,
-        "prompt_override": body.prompt_override,
+        "asset_type": asset_type,
+        "prompt_override": prompt_override,
     }
 
     async def _run():
@@ -579,6 +872,70 @@ async def queue_generate_scene_asset(
         job.id, "asset_generate", redis_params, fallback_coro=_run,
     )
     return job
+
+
+@router.post("/{project_id}/scenes/{scene_id}/assets/generate", response_model=JobOut)
+async def queue_generate_scene_asset(
+    project_id: str,
+    scene_id: str,
+    body: GenerateSceneAssetBody,
+    db: AsyncSession = Depends(get_db),
+):
+    r = await db.execute(
+        select(Scene).where(Scene.id == scene_id, Scene.project_id == project_id)
+    )
+    if not r.scalar_one_or_none():
+        raise HTTPException(404, "Scene not found")
+    return await _queue_scene_asset_job(
+        db,
+        project_id=project_id,
+        scene_id=scene_id,
+        asset_type=body.asset_type,
+        prompt_override=body.prompt_override,
+    )
+
+
+@router.post("/{project_id}/scenes/{scene_id}/regenerate")
+async def regenerate_scene_assets(
+    project_id: str,
+    scene_id: str,
+    body: SceneRegenerateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    scene = await _load_scene_with_related(db, project_id, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+
+    if body.preserve_manual_overrides and scene.asset_override:
+        if body.mode in {"image", "both"} and scene.asset_override.image_status == "manual_override":
+            scene.asset_override.manual_image_path = scene.asset_override.manual_image_path
+        if body.mode in {"audio", "both"} and scene.asset_override.audio_status == "manual_override":
+            scene.asset_override.manual_audio_path = scene.asset_override.manual_audio_path
+
+    queued_jobs: list[Job] = []
+    if body.mode in {"image", "both"}:
+        queued_jobs.append(
+            await _queue_scene_asset_job(
+                db,
+                project_id=project_id,
+                scene_id=scene_id,
+                asset_type="image",
+            )
+        )
+    if body.mode in {"audio", "both"}:
+        queued_jobs.append(
+            await _queue_scene_asset_job(
+                db,
+                project_id=project_id,
+                scene_id=scene_id,
+                asset_type="audio",
+            )
+        )
+    return {
+        "scene_id": scene_id,
+        "mode": body.mode,
+        "jobs": [JobOut.model_validate(job).model_dump(mode="json") for job in queued_jobs],
+    }
 
 
 class PutActiveAssetBody(BaseModel):
@@ -595,7 +952,7 @@ async def set_active_scene_asset(
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene_id, Scene.project_id == project_id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one_or_none()
     if not scene:
@@ -606,6 +963,16 @@ async def set_active_scene_asset(
     for a in scene.assets:
         if a.type == target.type:
             a.is_active = (a.id == body.asset_id)
+    override_row = ensure_scene_asset_override(scene)
+    if target.type == "image":
+        override_row.manual_image_path = target.file_path if target.source == "user_uploaded" else None
+        override_row.image_status = "manual_override" if target.source == "user_uploaded" else "ai_generated"
+    elif target.type == "audio":
+        override_row.manual_audio_path = target.file_path if target.source == "user_uploaded" else None
+        override_row.audio_status = "manual_override" if target.source == "user_uploaded" else "ai_generated"
+    elif target.type == "video":
+        override_row.manual_video_path = target.file_path if target.source == "user_uploaded" else None
+        override_row.video_status = "manual_override" if target.source == "user_uploaded" else "ai_generated"
     r_proj = await db.execute(select(Project).where(Project.id == project_id))
     project = r_proj.scalar_one()
     project.version = (project.version or 1) + 1
@@ -613,7 +980,7 @@ async def set_active_scene_asset(
     result = await db.execute(
         select(Scene)
         .where(Scene.id == scene_id, Scene.project_id == project_id)
-        .options(selectinload(Scene.assets))
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one()
     await _attach_scene_asset_urls(scene)
@@ -638,7 +1005,9 @@ async def regenerate_script_section(
     result = await db.execute(
         select(Project).where(Project.id == project_id).options(
             selectinload(Project.scenes).selectinload(Scene.assets),
+            selectinload(Project.scenes).selectinload(Scene.asset_override),
             selectinload(Project.project_assets),
+            selectinload(Project.video_settings),
         )
     )
     project = result.scalar_one_or_none()
@@ -684,7 +1053,9 @@ async def regenerate_script_section(
     result = await db.execute(
         select(Project).where(Project.id == project_id).options(
             selectinload(Project.scenes).selectinload(Scene.assets),
+            selectinload(Project.scenes).selectinload(Scene.asset_override),
             selectinload(Project.project_assets),
+            selectinload(Project.video_settings),
         )
     )
     project = result.scalar_one()

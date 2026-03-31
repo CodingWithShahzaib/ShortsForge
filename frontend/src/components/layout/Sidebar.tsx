@@ -22,7 +22,7 @@ import { APP_SECTION_COLORS, appSectionPalette, getAppSectionIndex } from "@/com
 import { motion } from "framer-motion";
 
 const navItems = [
-  { href: "/", icon: LayoutDashboard, label: "Pulse" },
+  { href: "/", icon: LayoutDashboard, label: "Home" },
   { href: "/generate", icon: Video, label: "Create" },
   { href: "/projects", icon: FolderOpen, label: "Library" },
   { href: "/scripts", icon: FileText, label: "Scripts" },
@@ -75,7 +75,7 @@ export function Sidebar() {
 
       <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-3 py-4" aria-label="Main">
         <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-          Navigate
+          Main menu
         </p>
         {navItems.map((item, index) => {
           const isActive =
@@ -115,7 +115,7 @@ export function Sidebar() {
           <div className="mb-3 flex items-center gap-2 rounded-lg bg-cyan-500/8 px-2.5 py-2 text-xs text-slate-600 dark:text-zinc-300">
             <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-cyan-500" />
             <span className="min-w-0 truncate">
-              {activeJobs.size} job{activeJobs.size > 1 ? "s" : ""} running
+              {activeJobs.size} task{activeJobs.size > 1 ? "s" : ""} running
             </span>
           </div>
         )}

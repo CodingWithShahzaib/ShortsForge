@@ -2,13 +2,11 @@
 
 import { AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { StudioStepHint } from "@/components/studio/studio-recovery";
-
-const STEP_LABEL: Record<StudioStepHint, string> = {
-  0: "Script",
-  1: "Assets",
-  3: "Compile",
-};
+import {
+  getStudioRecoveryActionLabel,
+  getStudioRecoveryStepLabel,
+  type StudioStepHint,
+} from "@/components/studio/studio-recovery";
 
 export interface StudioRecoveryBannerProps {
   message: string;
@@ -25,6 +23,9 @@ export function StudioRecoveryBanner({
   onDismiss,
   retrying,
 }: StudioRecoveryBannerProps) {
+  const stepLabel = getStudioRecoveryStepLabel(stepHint);
+  const actionLabel = getStudioRecoveryActionLabel(stepHint);
+
   return (
     <div
       role="alert"
@@ -33,7 +34,7 @@ export function StudioRecoveryBanner({
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
       <div className="min-w-0 flex-1 space-y-1">
         <p className="font-medium text-foreground">
-          {STEP_LABEL[stepHint]} step did not finish
+          {stepLabel} stage did not finish
         </p>
         <p className="text-muted-foreground wrap-break-word text-xs leading-relaxed">{message}</p>
       </div>
@@ -46,7 +47,7 @@ export function StudioRecoveryBanner({
           loadingLabel="Retrying…"
           onClick={() => void onRetry()}
         >
-          Retry
+          {actionLabel}
         </Button>
         <button
           type="button"

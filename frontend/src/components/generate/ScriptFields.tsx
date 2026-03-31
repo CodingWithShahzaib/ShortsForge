@@ -13,9 +13,15 @@ type Props = {
   generating: boolean;
   canGenerate: boolean;
   onGenerate: () => void;
+  generateLabel?: string;
 };
 
-export const ScriptFields = memo(function ScriptFields({ generating, canGenerate, onGenerate }: Props) {
+export const ScriptFields = memo(function ScriptFields({
+  generating,
+  canGenerate,
+  onGenerate,
+  generateLabel = "Create scenes",
+}: Props) {
   const {
     register,
     watch,
@@ -73,7 +79,7 @@ export const ScriptFields = memo(function ScriptFields({ generating, canGenerate
               </>
             ) : (
               <>
-                <Play className="h-4 w-4 shrink-0" /> Generate Video
+                <Play className="h-4 w-4 shrink-0" /> {generateLabel}
               </>
             )}
           </Button>
@@ -89,7 +95,7 @@ export const ScriptFields = memo(function ScriptFields({ generating, canGenerate
             className="inline-flex items-center gap-1 text-cyan-600 dark:text-cyan-400 hover:underline"
           >
             <FileText className="h-3.5 w-3.5" />
-            Refine in Scripts
+            Refine in Script studio
           </Link>
         )}
       </div>

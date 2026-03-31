@@ -13,6 +13,7 @@ import { QueryProvider } from "@/providers/query-provider";
 import { AppAmbientBackground } from "@/components/layout/AppAmbientBackground";
 import { VideoPreviewModalHost } from "@/components/video/video-preview-modal-host";
 import type { WsMessage } from "@/lib/types";
+import { wsErrorMessage } from "@/lib/job-ws";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queries";
 
@@ -40,10 +41,10 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
     (msg: WsMessage) => {
       updateJobFromWs(msg);
       if (msg.type === "completed") {
-        notify.success(`${msg.job_type.replace(/_/g, " ")} completed!`);
+        notify.success(`${msg.job_type.replace(/_/g, " ")} is done.`);
         scheduleCoalescedRefresh();
       } else if (msg.type === "error") {
-        notify.error(msg.error || "Job failed");
+        notify.error(wsErrorMessage(msg));
         scheduleCoalescedRefresh();
       }
     },
@@ -74,6 +75,15 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
         image_style: s.default_image_style ?? "realistic",
         word_count: s.default_word_count ?? 400,
         scene_count: s.default_scene_count ?? 5,
+        scene_narration_style: s.default_scene_narration_style ?? "balanced",
+        inter_scene_pause_ms: s.default_inter_scene_pause_ms ?? 600,
+        transition_overlap_ms: s.default_transition_overlap_ms ?? 250,
+        use_production_storyboard: s.default_use_production_storyboard ?? true,
+        match_scenes_to_audio: s.default_match_scenes_to_audio ?? true,
+        visual_continuity: s.default_visual_continuity ?? "",
+        ...(s.video_style ? { video_style: s.video_style } : {}),
+        ...(s.subtitles ? { subtitles: s.subtitles } : {}),
+        ...(s.audio ? { audio: s.audio } : {}),
       });
     }).catch(() => {});
   }, [setProviders, setTransitions, setResolutions, setDefaults]);

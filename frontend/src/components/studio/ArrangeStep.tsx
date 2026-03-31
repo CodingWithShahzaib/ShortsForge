@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Slider as RadixSlider } from "@radix-ui/themes";
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +14,7 @@ import {
   Link2,
   RefreshCw,
   Save,
+  Upload,
   Volume2,
 } from "lucide-react";
 import {
@@ -37,11 +39,21 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import { cn } from "@/lib/utils";
-import type { Project, Scene, Transition } from "@/lib/types";
+import type {
+  Project,
+  SafeZoneConfig,
+  SafeZonePlatform,
+  Scene,
+  SubtitleSettings,
+  Transition,
+} from "@/lib/types";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BodyPortal } from "@/components/ui/drag-overlay-portal";
 import {
   Card,
@@ -59,9 +71,22 @@ import {
   sceneStartTimes,
 } from "@/components/projects/scene-timeline-utils";
 import { getAudioDurationFromUrl } from "@/lib/audio-duration";
+import {
+  SAFE_ZONE_PRESETS,
+  SafeZoneOverlay,
+  resolveSafeZoneConfig,
+} from "@/components/studio/SafeZoneOverlay";
 
 const SCENE_DUR_MIN = 0.5;
 const SCENE_DUR_MAX = 15;
+const INTER_SCENE_PAUSE_MIN = 0;
+const INTER_SCENE_PAUSE_MAX = 1200;
+const TRANSITION_OVERLAP_MIN = 0;
+const TRANSITION_OVERLAP_MAX = 800;
+const SAFE_ZONE_CONTENT_MIN_WIDTH = 0.22;
+const SAFE_ZONE_CONTENT_MIN_HEIGHT = 0.24;
+const SAFE_ZONE_CAPTION_MIN_WIDTH = 0.2;
+const SAFE_ZONE_CAPTION_MIN_HEIGHT = 0.08;
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                         */
@@ -93,6 +118,16 @@ const FALLBACK_TRANSITIONS: Transition[] = [
 const CARD_W = 160;
 const DEFAULT_TIMECODE = "0:00.0";
 
+type SceneDraft = {
+  narration?: string;
+  image_prompt?: string;
+  duration?: number;
+  transition_type?: string;
+};
+
+type SafeZoneNumericField = Exclude<keyof SafeZoneConfig, "platform">;
+type GuidePresetId = SafeZonePlatform | "custom";
+
 function formatTimecode(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_TIMECODE;
   let mins = Math.floor(seconds / 60);
@@ -103,6 +138,92 @@ function formatTimecode(seconds: number): string {
   }
   const secText = secs.toFixed(1).padStart(4, "0");
   return `${mins}:${secText}`;
+}
+
+function toBoundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+function safeZoneConfigKey(config: SafeZoneConfig | null | undefined): string {
+  return JSON.stringify(config ?? null);
+}
+
+function roundSafeZoneValue(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function clampSafeZoneConfigField(
+  config: SafeZoneConfig,
+  field: SafeZoneNumericField,
+  rawValue: number,
+): SafeZoneConfig {
+  const next = { ...config };
+  const value = roundSafeZoneValue(rawValue);
+
+  switch (field) {
+    case "top_pct":
+      next.top_pct = Math.min(0.5, Math.max(0, value));
+      next.top_pct = Math.min(
+        next.top_pct,
+        1 - SAFE_ZONE_CONTENT_MIN_HEIGHT - next.bottom_pct,
+      );
+      break;
+    case "bottom_pct":
+      next.bottom_pct = Math.min(0.7, Math.max(0, value));
+      next.bottom_pct = Math.min(
+        next.bottom_pct,
+        1 - SAFE_ZONE_CONTENT_MIN_HEIGHT - next.top_pct,
+      );
+      break;
+    case "left_pct":
+      next.left_pct = Math.min(0.4, Math.max(0, value));
+      next.left_pct = Math.min(
+        next.left_pct,
+        1 - SAFE_ZONE_CONTENT_MIN_WIDTH - next.right_pct,
+      );
+      break;
+    case "right_pct":
+      next.right_pct = Math.min(0.4, Math.max(0, value));
+      next.right_pct = Math.min(
+        next.right_pct,
+        1 - SAFE_ZONE_CONTENT_MIN_WIDTH - next.left_pct,
+      );
+      break;
+    case "caption_band_left_pct":
+      next.caption_band_left_pct = Math.min(0.45, Math.max(0, value));
+      next.caption_band_left_pct = Math.min(
+        next.caption_band_left_pct,
+        1 - SAFE_ZONE_CAPTION_MIN_WIDTH - next.caption_band_right_pct,
+      );
+      break;
+    case "caption_band_right_pct":
+      next.caption_band_right_pct = Math.min(0.45, Math.max(0, value));
+      next.caption_band_right_pct = Math.min(
+        next.caption_band_right_pct,
+        1 - SAFE_ZONE_CAPTION_MIN_WIDTH - next.caption_band_left_pct,
+      );
+      break;
+    case "caption_band_top_pct":
+      next.caption_band_top_pct = Math.min(1, Math.max(0, value));
+      next.caption_band_top_pct = Math.min(
+        next.caption_band_top_pct,
+        next.caption_band_bottom_pct - SAFE_ZONE_CAPTION_MIN_HEIGHT,
+      );
+      break;
+    case "caption_band_bottom_pct":
+      next.caption_band_bottom_pct = Math.min(1, Math.max(0, value));
+      next.caption_band_bottom_pct = Math.max(
+        next.caption_band_bottom_pct,
+        next.caption_band_top_pct + SAFE_ZONE_CAPTION_MIN_HEIGHT,
+      );
+      break;
+    default:
+      return next;
+  }
+
+  return next;
 }
 
 /* ------------------------------------------------------------------ */
@@ -173,17 +294,20 @@ function VerticalSortableCard({
   startTimeSec,
   isSelected,
   onSelect,
+  suppressSelect,
 }: {
   scene: Scene;
   index: number;
   startTimeSec: number;
   isSelected: boolean;
   onSelect: () => void;
+  suppressSelect: boolean;
 }) {
   const {
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -206,20 +330,22 @@ function VerticalSortableCard({
   return (
     <motion.div
       ref={setNodeRef}
-      style={{ ...style, touchAction: "none" }}
-      {...attributes}
-      {...listeners}
+      style={{ ...style, touchAction: "pan-y" }}
       initial={false}
       animate={{ opacity: isDragging ? 0.4 : 1, scale: 1 }}
       transition={{ duration: 0.12 }}
       className={cn(
-        "group flex cursor-grab items-center gap-3 rounded-xl border p-3 transition active:cursor-grabbing",
+        "group flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition",
         isSelected
           ? "border-primary/50 bg-primary/6 shadow-sm shadow-primary/10"
           : "border-border/40 bg-card/80 hover:border-primary/40",
         isDragging && "ring-1 ring-primary/25",
       )}
-      onClick={onSelect}
+      onClick={() => {
+        if (!suppressSelect) {
+          onSelect();
+        }
+      }}
     >
       <div className="relative h-16 w-12 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/20">
         {src ? (
@@ -264,12 +390,17 @@ function VerticalSortableCard({
 
       <button
         type="button"
+        ref={setActivatorNodeRef}
         aria-label={`Drag to reorder scene ${index + 1}`}
+        {...attributes}
+        {...listeners}
         className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/80 text-muted-foreground transition",
+          "flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg border border-border/60 bg-background/80 text-muted-foreground transition active:cursor-grabbing",
           "hover:text-foreground hover:border-primary/40",
-          "active:cursor-grabbing",
+          isDragging && "cursor-grabbing",
         )}
+        style={{ touchAction: "none" }}
+        onClick={(event) => event.stopPropagation()}
       >
         <GripHorizontal className="h-4 w-4" />
       </button>
@@ -282,37 +413,118 @@ function VerticalSortableCard({
 /* ------------------------------------------------------------------ */
 
 function SceneInspector({
-  project,
   scene,
-  onRefresh,
+  draft,
+  onDraftChange,
+  onSaveScene,
+  showSafeZone,
+  safeZonePlatform,
+  safeZoneConfig,
+  onSafeZoneChange,
+  onSafeZoneCommit,
+  onSafeZoneReset,
+  onSaveSafeZoneAsDefaults,
+  safeZoneSaving,
+  safeZoneDefaultsSaving,
 }: {
-  project: Project;
   scene: Scene;
-  onRefresh: () => void;
+  draft?: SceneDraft;
+  onDraftChange: (sceneId: string, patch: SceneDraft) => void;
+  onSaveScene: (sceneId: string) => Promise<boolean>;
+  showSafeZone: boolean;
+  safeZonePlatform: "tiktok" | "instagram_reel" | "youtube_short";
+  safeZoneConfig: SafeZoneConfig | null;
+  onSafeZoneChange: (config: SafeZoneConfig) => void;
+  onSafeZoneCommit: (config: SafeZoneConfig) => void;
+  onSafeZoneReset: () => void;
+  onSaveSafeZoneAsDefaults: (config: SafeZoneConfig) => void;
+  safeZoneSaving: boolean;
+  safeZoneDefaultsSaving: boolean;
 }) {
-  const [narration, setNarration] = useState(scene.narration ?? "");
-  const [imagePrompt, setImagePrompt] = useState(scene.image_prompt ?? "");
+  const [narration, setNarration] = useState(
+    draft?.narration ?? scene.narration ?? "",
+  );
+  const [imagePrompt, setImagePrompt] = useState(
+    draft?.image_prompt ?? scene.image_prompt ?? "",
+  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setNarration(scene.narration ?? "");
-    setImagePrompt(scene.image_prompt ?? "");
-  }, [scene.id, scene.narration, scene.image_prompt, scene.duration, scene.transition_type]);
+    setNarration(draft?.narration ?? scene.narration ?? "");
+    setImagePrompt(draft?.image_prompt ?? scene.image_prompt ?? "");
+  }, [scene.id, scene.narration, scene.image_prompt, draft?.narration, draft?.image_prompt]);
 
   const imgAsset = pickLatestAsset(scene.assets, "image");
   const imgSrc = assetMediaSrc(imgAsset);
+  const activeSafeZoneConfig = resolveSafeZoneConfig(
+    safeZonePlatform,
+    safeZoneConfig,
+  );
+  const selectedGuidePreset = (
+    (Object.keys(SAFE_ZONE_PRESETS) as SafeZonePlatform[]).find((presetPlatform) => {
+      const presetConfig = resolveSafeZoneConfig(
+        safeZonePlatform,
+        SAFE_ZONE_PRESETS[presetPlatform],
+      );
+      return safeZoneConfigKey(presetConfig) === safeZoneConfigKey(activeSafeZoneConfig);
+    }) ?? "custom"
+  ) as GuidePresetId;
+
+  const applySafeZoneField = (
+    field: SafeZoneNumericField,
+    nextValue: string,
+    commit: boolean,
+  ) => {
+    const parsed = Number(nextValue);
+    if (!Number.isFinite(parsed)) return;
+    const nextConfig = clampSafeZoneConfigField(
+      activeSafeZoneConfig,
+      field,
+      parsed / 100,
+    );
+    onSafeZoneChange(nextConfig);
+    if (commit) {
+      onSafeZoneCommit(nextConfig);
+    }
+  };
+
+  const applySafeZoneSlider = (
+    field: SafeZoneNumericField,
+    values: number[],
+    commit: boolean,
+  ) => {
+    const nextValue = values[0];
+    if (!Number.isFinite(nextValue)) return;
+    const nextConfig = clampSafeZoneConfigField(
+      activeSafeZoneConfig,
+      field,
+      nextValue / 100,
+    );
+    onSafeZoneChange(nextConfig);
+    if (commit) {
+      onSafeZoneCommit(nextConfig);
+    }
+  };
+
+  const snapToPreset = (presetPlatform: typeof safeZonePlatform) => {
+    const nextConfig = resolveSafeZoneConfig(
+      safeZonePlatform,
+      SAFE_ZONE_PRESETS[presetPlatform],
+    );
+    onSafeZoneChange(nextConfig);
+    onSafeZoneCommit(nextConfig);
+  };
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.updateScene(project.id, scene.id, {
+      onDraftChange(scene.id, {
         narration,
         image_prompt: imagePrompt,
       });
-      notify.success("Scene updated");
-      onRefresh();
-    } catch (e: any) {
-      notify.error(e?.message ?? "Failed to save scene");
+      await onSaveScene(scene.id);
+    } catch (e: unknown) {
+      notify.error(e instanceof Error ? e.message : "Failed to save scene");
     } finally {
       setSaving(false);
     }
@@ -338,20 +550,250 @@ function SceneInspector({
 
       {/* Image preview */}
       <div className="rounded-xl border border-border/30 bg-card/80 p-2">
-        <div className="relative w-full overflow-hidden rounded-lg border border-white/10 bg-black/20 h-[280px] md:h-[320px]">
+        <div className="relative flex h-[280px] w-full items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/40 md:h-[320px]">
           {imgSrc ? (
-            <img
-              src={imgSrc}
-              alt="Scene preview"
-              className="h-full w-full object-contain bg-black/40"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-muted-foreground/40">
-              <ImageIcon className="h-12 w-12" />
-            </div>
-          )}
+            <>
+              <img
+                src={imgSrc}
+                alt=""
+                aria-hidden="true"
+                className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl"
+              />
+              <div className="absolute inset-0 bg-black/35" />
+            </>
+          ) : null}
+          <div className="relative aspect-9/16 h-[92%] max-w-full overflow-hidden rounded-[20px] border border-white/10 bg-black shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+            {imgSrc ? (
+              <img
+                src={imgSrc}
+                alt="Scene preview"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-muted-foreground/40">
+                <ImageIcon className="h-12 w-12" />
+              </div>
+            )}
+            {showSafeZone ? (
+              <SafeZoneOverlay
+                platform={safeZonePlatform}
+                config={safeZoneConfig}
+                editable
+                onChange={onSafeZoneChange}
+                onCommit={onSafeZoneCommit}
+              />
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2">
+          <p className="text-[11px] text-muted-foreground">
+            Drag the frame and subtitle band. Use the corner handles to resize.
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {safeZoneSaving ? "Saving guide..." : "Guide follows project subtitle settings"}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              onClick={onSafeZoneReset}
+              disabled={!showSafeZone || safeZoneSaving}
+            >
+              Reset guides
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => onSaveSafeZoneAsDefaults(activeSafeZoneConfig)}
+              disabled={!showSafeZone || safeZoneSaving || safeZoneDefaultsSaving}
+            >
+              {safeZoneDefaultsSaving ? "Saving defaults..." : "Save as defaults"}
+            </Button>
+          </div>
         </div>
       </div>
+
+      {showSafeZone ? (
+        <div className="rounded-xl border border-border/30 bg-background/75 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Guide Controls
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Snap to a preset geometry or fine-tune the insets in percent.
+              </p>
+            </div>
+            <Tabs
+              value={selectedGuidePreset}
+              onValueChange={(value) => {
+                const presetValue = value as GuidePresetId;
+                switch (presetValue) {
+                  case "tiktok":
+                  case "instagram_reel":
+                  case "youtube_short":
+                    snapToPreset(presetValue);
+                    break;
+                  case "custom":
+                  default:
+                    break;
+                }
+              }}
+            >
+              <TabsList className="h-auto flex-wrap p-1">
+                <TabsTrigger value="tiktok" className="px-3 py-1.5 text-[11px]">
+                  TikTok
+                </TabsTrigger>
+                <TabsTrigger value="instagram_reel" className="px-3 py-1.5 text-[11px]">
+                  Reels
+                </TabsTrigger>
+                <TabsTrigger value="youtube_short" className="px-3 py-1.5 text-[11px]">
+                  Shorts
+                </TabsTrigger>
+                <TabsTrigger value="custom" disabled className="px-3 py-1.5 text-[11px]">
+                  Custom
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-border/30 bg-card/60 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-200">
+                Frame Insets
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {(
+                  [
+                    ["top_pct", "Top", activeSafeZoneConfig.top_pct],
+                    ["bottom_pct", "Bottom", activeSafeZoneConfig.bottom_pct],
+                    ["left_pct", "Left", activeSafeZoneConfig.left_pct],
+                    ["right_pct", "Right", activeSafeZoneConfig.right_pct],
+                  ] as const
+                ).map(([field, label, value]) => (
+                  <label key={field} className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-muted-foreground">{label}</span>
+                      <span className="rounded-full border border-border/50 bg-background/70 px-2 py-0.5 text-[11px] font-semibold text-foreground">
+                        {(value * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <RadixSlider
+                      value={[value * 100]}
+                      min={0}
+                      max={50}
+                      step={0.5}
+                      size="2"
+                      variant="surface"
+                      color="cyan"
+                      radius="full"
+                      onValueChange={(values) =>
+                        applySafeZoneSlider(field, values, false)
+                      }
+                      onValueCommit={(values) =>
+                        applySafeZoneSlider(field, values, true)
+                      }
+                      disabled={safeZoneSaving}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={50}
+                      step={0.5}
+                      value={(value * 100).toFixed(1)}
+                      onChange={(e) =>
+                        applySafeZoneField(field, e.target.value, false)
+                      }
+                      onBlur={(e) =>
+                        applySafeZoneField(field, e.target.value, true)
+                      }
+                      disabled={safeZoneSaving}
+                      className="h-9"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border/30 bg-card/60 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-200">
+                Subtitle Insets
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {(
+                  [
+                    [
+                      "caption_band_top_pct",
+                      "Top",
+                      activeSafeZoneConfig.caption_band_top_pct,
+                    ],
+                    [
+                      "caption_band_bottom_pct",
+                      "Bottom",
+                      activeSafeZoneConfig.caption_band_bottom_pct,
+                    ],
+                    [
+                      "caption_band_left_pct",
+                      "Left",
+                      activeSafeZoneConfig.caption_band_left_pct,
+                    ],
+                    [
+                      "caption_band_right_pct",
+                      "Right",
+                      activeSafeZoneConfig.caption_band_right_pct,
+                    ],
+                  ] as const
+                ).map(([field, label, value]) => (
+                  <label key={field} className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-muted-foreground">{label}</span>
+                      <span className="rounded-full border border-border/50 bg-background/70 px-2 py-0.5 text-[11px] font-semibold text-foreground">
+                        {(value * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <RadixSlider
+                      value={[value * 100]}
+                      min={0}
+                      max={95}
+                      step={0.5}
+                      size="2"
+                      variant="surface"
+                      color="amber"
+                      radius="full"
+                      onValueChange={(values) =>
+                        applySafeZoneSlider(field, values, false)
+                      }
+                      onValueCommit={(values) =>
+                        applySafeZoneSlider(field, values, true)
+                      }
+                      disabled={safeZoneSaving}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={95}
+                      step={0.5}
+                      value={(value * 100).toFixed(1)}
+                      onChange={(e) =>
+                        applySafeZoneField(field, e.target.value, false)
+                      }
+                      onBlur={(e) =>
+                        applySafeZoneField(field, e.target.value, true)
+                      }
+                      disabled={safeZoneSaving}
+                      className="h-9"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Narration + image prompt */}
       <div className="flex min-h-0 flex-1 flex-col gap-3 pb-2">
@@ -361,7 +803,11 @@ function SceneInspector({
           </span>
           <textarea
             value={narration}
-            onChange={(e) => setNarration(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setNarration(next);
+              onDraftChange(scene.id, { narration: next });
+            }}
             rows={3}
             className="w-full resize-none rounded-md border border-border/50 bg-background/80 px-3 py-2 text-sm outline-none transition focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
           />
@@ -373,7 +819,11 @@ function SceneInspector({
           </span>
           <textarea
             value={imagePrompt}
-            onChange={(e) => setImagePrompt(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setImagePrompt(next);
+              onDraftChange(scene.id, { image_prompt: next });
+            }}
             rows={6}
             className="w-full resize-none rounded-md border border-border/50 bg-background/80 px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
           />
@@ -390,20 +840,34 @@ function SceneInspector({
 function SceneQuickTools({
   project,
   scene,
+  draft,
+  onDraftChange,
+  onSaveScene,
   onRefresh,
 }: {
   project: Project;
   scene: Scene;
+  draft?: SceneDraft;
+  onDraftChange: (sceneId: string, patch: SceneDraft) => void;
+  onSaveScene: (sceneId: string) => Promise<boolean>;
   onRefresh: () => void;
 }) {
-  const [duration, setDuration] = useState(sceneDurationSec(scene));
+  const [duration, setDuration] = useState(
+    draft?.duration ?? sceneDurationSec(scene),
+  );
   const [transitionType, setTransitionType] = useState(
-    scene.transition_type || "fade",
+    draft?.transition_type ?? (scene.transition_type || "fade"),
   );
   const [saving, setSaving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [generatingTts, setGeneratingTts] = useState(false);
   const [matchingAudio, setMatchingAudio] = useState(false);
+  const [regenerateMode, setRegenerateMode] = useState<"image" | "audio" | "both">("image");
+  const [ttsText, setTtsText] = useState(
+    (scene.narration || scene.subtitle || "").trim(),
+  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const uploadRef = useRef<HTMLInputElement | null>(null);
 
   const apiTransitions = useSettingsStore((s) => s.transitions);
   const transitionOptions = useMemo(() => {
@@ -423,9 +887,10 @@ function SceneQuickTools({
   }, [apiTransitions, scene.transition_type, transitionType]);
 
   useEffect(() => {
-    setDuration(sceneDurationSec(scene));
-    setTransitionType(scene.transition_type || "fade");
-  }, [scene.id, scene.duration, scene.transition_type]);
+    setDuration(draft?.duration ?? sceneDurationSec(scene));
+    setTransitionType(draft?.transition_type ?? (scene.transition_type || "fade"));
+    setTtsText((scene.narration || scene.subtitle || "").trim());
+  }, [scene.id, scene.duration, scene.transition_type, draft?.duration, draft?.transition_type]);
 
   const audioAsset = pickLatestAsset(scene.assets, "audio");
   const audioSrc = assetMediaSrc(audioAsset);
@@ -433,14 +898,13 @@ function SceneQuickTools({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.updateScene(project.id, scene.id, {
+      onDraftChange(scene.id, {
         duration,
         transition_type: transitionType,
       });
-      notify.success("Scene updated");
-      onRefresh();
-    } catch (e: any) {
-      notify.error(e?.message ?? "Failed to save scene");
+      await onSaveScene(scene.id);
+    } catch (e: unknown) {
+      notify.error(e instanceof Error ? e.message : "Failed to save scene");
     } finally {
       setSaving(false);
     }
@@ -449,13 +913,29 @@ function SceneQuickTools({
   const handleRegenerate = async () => {
     setRegenerating(true);
     try {
-      await api.regenerateSceneImage(project.id, scene.id);
-      notify.success("Image regeneration started");
+      await api.regenerateSceneAssets(project.id, scene.id, { mode: regenerateMode });
+      notify.success(`Queued ${regenerateMode} regeneration`);
       onRefresh();
-    } catch (e: any) {
-      notify.error(e?.message ?? "Failed to regenerate image");
+    } catch (e: unknown) {
+      notify.error(
+        e instanceof Error ? e.message : "Failed to regenerate scene assets",
+      );
     } finally {
       setRegenerating(false);
+    }
+  };
+
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      await api.uploadSceneAsset(project.id, scene.id, file);
+      notify.success("Asset uploaded");
+      onRefresh();
+    } catch (e: unknown) {
+      notify.error(e instanceof Error ? e.message : "Asset upload failed");
+    } finally {
+      event.target.value = "";
     }
   };
 
@@ -488,6 +968,30 @@ function SceneQuickTools({
     }
   };
 
+  const queueSceneTts = async () => {
+    const narrationText = (scene.narration || scene.subtitle || "").trim();
+    const override = ttsText.trim();
+    if (!narrationText && !override) {
+      notify.error("No narration available. Enter TTS text first.");
+      return;
+    }
+    setGeneratingTts(true);
+    try {
+      await api.queueSceneAssetGenerate(project.id, scene.id, {
+        asset_type: "audio",
+        prompt_override: override || undefined,
+      });
+      notify.success("TTS generation queued");
+      onRefresh();
+    } catch (e: unknown) {
+      notify.error(
+        e instanceof Error ? e.message : "Failed to queue TTS generation",
+      );
+    } finally {
+      setGeneratingTts(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="space-y-4">
@@ -504,7 +1008,11 @@ function SceneQuickTools({
             max={SCENE_DUR_MAX}
             step={0.5}
             value={duration}
-            onChange={(e) => setDuration(parseFloat(e.target.value))}
+            onChange={(e) => {
+              const next = parseFloat(e.target.value);
+              setDuration(next);
+              onDraftChange(scene.id, { duration: next });
+            }}
             className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-md"
           />
         </label>
@@ -516,7 +1024,11 @@ function SceneQuickTools({
           <div className="relative">
             <select
               value={transitionType}
-              onChange={(e) => setTransitionType(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setTransitionType(next);
+                onDraftChange(scene.id, { transition_type: next });
+              }}
               className="w-full appearance-none rounded-lg border border-border/60 bg-background/80 px-3 py-2 pr-8 text-sm outline-none transition focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
               title={transitionOptions.find((t) => t.id === transitionType)?.description}
             >
@@ -534,6 +1046,20 @@ function SceneQuickTools({
       <div className="h-px w-full bg-border/40" />
 
       <div className="grid grid-cols-1 gap-2">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Regenerate mode
+          </span>
+          <select
+            value={regenerateMode}
+            onChange={(e) => setRegenerateMode(e.target.value as "image" | "audio" | "both")}
+            className="w-full rounded-lg border border-border/60 bg-background/80 px-3 py-2 text-sm outline-none transition focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+          >
+            <option value="image">Image only</option>
+            <option value="audio">Audio only</option>
+            <option value="both">Image + audio</option>
+          </select>
+        </label>
         <Button
           variant="secondary"
           size="sm"
@@ -548,6 +1074,33 @@ function SceneQuickTools({
         <Button
           variant="secondary"
           size="sm"
+          className="h-9 w-full gap-1.5 justify-center"
+          onClick={() => uploadRef.current?.click()}
+        >
+          <Upload className="h-3.5 w-3.5" />
+          Upload media
+        </Button>
+        <input
+          ref={uploadRef}
+          type="file"
+          className="hidden"
+          accept="image/*,audio/*,video/*"
+          onChange={(e) => void handleUpload(e)}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-9 w-full gap-1.5 justify-center"
+          onClick={() => void queueSceneTts()}
+          loading={generatingTts}
+          loadingLabel="Generating…"
+        >
+          <Volume2 className="h-3.5 w-3.5" />
+          Generate TTS
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={playAudio}
           disabled={!audioSrc}
           className="h-9 w-full gap-1.5 justify-center"
@@ -556,6 +1109,21 @@ function SceneQuickTools({
           Play Audio
         </Button>
       </div>
+
+      {!((scene.narration || scene.subtitle || "").trim()) ? (
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            TTS text (narration missing)
+          </label>
+          <textarea
+            value={ttsText}
+            onChange={(e) => setTtsText(e.target.value)}
+            rows={3}
+            placeholder="Enter text to synthesize audio for this scene"
+            className="w-full resize-none rounded-md border border-border/50 bg-background/80 px-3 py-2 text-sm outline-none transition focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+          />
+        </div>
+      ) : null}
 
       <Button
         type="button"
@@ -645,23 +1213,44 @@ export default function ArrangeStep({
   );
 
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [sceneDrafts, setSceneDrafts] = useState<Record<string, SceneDraft>>({});
+  const [suppressSceneSelect, setSuppressSceneSelect] = useState(false);
+  const suppressSelectTimeoutRef = useRef<number | null>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 10 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
+    if (suppressSelectTimeoutRef.current) {
+      window.clearTimeout(suppressSelectTimeoutRef.current);
+    }
+    setSuppressSceneSelect(true);
     setActiveDragId(event.active.id as string);
   }, []);
 
   const handleDragCancel = useCallback((_event: DragCancelEvent) => {
     setActiveDragId(null);
+    if (suppressSelectTimeoutRef.current) {
+      window.clearTimeout(suppressSelectTimeoutRef.current);
+    }
+    suppressSelectTimeoutRef.current = window.setTimeout(() => {
+      setSuppressSceneSelect(false);
+      suppressSelectTimeoutRef.current = null;
+    }, 180);
   }, []);
 
   const handleDragEnd = useCallback(
     async (e: DragEndEvent) => {
       setActiveDragId(null);
+      if (suppressSelectTimeoutRef.current) {
+        window.clearTimeout(suppressSelectTimeoutRef.current);
+      }
+      suppressSelectTimeoutRef.current = window.setTimeout(() => {
+        setSuppressSceneSelect(false);
+        suppressSelectTimeoutRef.current = null;
+      }, 180);
       const { active, over } = e;
       if (!over || active.id === over.id) return;
       const oldIdx = orderedIds.indexOf(active.id as string);
@@ -674,13 +1263,21 @@ export default function ArrangeStep({
       try {
         await api.reorderScenes(project.id, next);
         onRefresh();
-      } catch (err: any) {
-        notify.error(err?.message ?? "Reorder failed");
+      } catch (err: unknown) {
+        notify.error(err instanceof Error ? err.message : "Reorder failed");
         setOrderedIds(scenes.map((s) => s.id));
       }
     },
     [orderedIds, project.id, scenes, onRefresh],
   );
+
+  useEffect(() => {
+    return () => {
+      if (suppressSelectTimeoutRef.current) {
+        window.clearTimeout(suppressSelectTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const activeDragScene = useMemo(() => {
     if (!activeDragId) return null;
@@ -692,7 +1289,219 @@ export default function ArrangeStep({
     return orderedScenes.findIndex((s) => s.id === activeDragId);
   }, [activeDragId, orderedScenes]);
 
+  useEffect(() => {
+    const sceneIds = new Set(scenes.map((s) => s.id));
+    setSceneDrafts((prev) => {
+      const next: Record<string, SceneDraft> = {};
+      for (const [sceneId, draft] of Object.entries(prev)) {
+        if (sceneIds.has(sceneId)) {
+          next[sceneId] = draft;
+        }
+      }
+      return next;
+    });
+  }, [scenes]);
+
+  const updateSceneDraft = useCallback((sceneId: string, patch: SceneDraft) => {
+    setSceneDrafts((prev) => ({
+      ...prev,
+      [sceneId]: {
+        ...(prev[sceneId] || {}),
+        ...patch,
+      },
+    }));
+  }, []);
+
+  const saveSceneDraft = useCallback(
+    async (sceneId: string) => {
+      const scene = orderedScenes.find((s) => s.id === sceneId);
+      if (!scene) throw new Error("Scene not found");
+
+      const draft = sceneDrafts[sceneId] || {};
+      const payload: {
+        narration?: string;
+        image_prompt?: string;
+        duration?: number;
+        transition_type?: string;
+      } = {};
+
+      if (
+        draft.narration !== undefined &&
+        draft.narration !== (scene.narration ?? "")
+      ) {
+        payload.narration = draft.narration;
+      }
+      if (
+        draft.image_prompt !== undefined &&
+        draft.image_prompt !== (scene.image_prompt ?? "")
+      ) {
+        payload.image_prompt = draft.image_prompt;
+      }
+      if (draft.duration !== undefined && draft.duration !== scene.duration) {
+        payload.duration = draft.duration;
+      }
+      if (
+        draft.transition_type !== undefined &&
+        draft.transition_type !== (scene.transition_type || "fade")
+      ) {
+        payload.transition_type = draft.transition_type;
+      }
+
+      if (Object.keys(payload).length === 0) {
+        notify.info("No changes to save.");
+        return false;
+      }
+
+      await api.updateScene(project.id, sceneId, payload);
+      notify.success("Scene updated");
+      setSceneDrafts((prev) => {
+        const next = { ...prev };
+        delete next[sceneId];
+        return next;
+      });
+      onRefresh();
+      return true;
+    },
+    [onRefresh, orderedScenes, project.id, sceneDrafts],
+  );
+
   const [matchingAll, setMatchingAll] = useState(false);
+  const [showSafeZone, setShowSafeZone] = useState(true);
+  const defaultSubtitleSettings = useSettingsStore((s) => s.defaults.subtitles);
+  const setDefaults = useSettingsStore((s) => s.setDefaults);
+  const [interScenePauseMs, setInterScenePauseMs] = useState<number>(() =>
+    toBoundedInt(project.settings?.inter_scene_pause_ms, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX)
+  );
+  const [transitionOverlapMs, setTransitionOverlapMs] = useState<number>(() =>
+    toBoundedInt(project.settings?.transition_overlap_ms, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX)
+  );
+  const [savingPacing, setSavingPacing] = useState(false);
+  const hasAnyAudio = useMemo(
+    () =>
+      orderedScenes.some((s) => !!pickLatestAsset(s.assets, "audio")),
+    [orderedScenes],
+  );
+  const selectedHasAudio = Boolean(
+    selectedScene && pickLatestAsset(selectedScene.assets, "audio"),
+  );
+  const selectedHasImage = Boolean(
+    selectedScene && pickLatestAsset(selectedScene.assets, "image"),
+  );
+  const safeZonePlatform =
+    project.video_settings?.subtitles.safe_zone_platform ||
+    "tiktok";
+  const resolvedSubtitleSettings: SubtitleSettings =
+    project.video_settings?.subtitles ?? defaultSubtitleSettings;
+  const projectSafeZoneConfig =
+    project.video_settings?.subtitles.safe_zone_config ?? null;
+  const projectSafeZoneConfigKey = safeZoneConfigKey(
+    projectSafeZoneConfig,
+  );
+  const [safeZoneConfig, setSafeZoneConfig] = useState<SafeZoneConfig | null>(() =>
+    resolveSafeZoneConfig(
+      safeZonePlatform,
+      projectSafeZoneConfig,
+    ),
+  );
+  const [safeZoneSaving, setSafeZoneSaving] = useState(false);
+  const [safeZoneDefaultsSaving, setSafeZoneDefaultsSaving] = useState(false);
+
+  useEffect(() => {
+    setInterScenePauseMs(
+      toBoundedInt(project.settings?.inter_scene_pause_ms, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX)
+    );
+    setTransitionOverlapMs(
+      toBoundedInt(project.settings?.transition_overlap_ms, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX)
+    );
+  }, [project.id, project.settings?.inter_scene_pause_ms, project.settings?.transition_overlap_ms]);
+
+  useEffect(() => {
+    setSafeZoneConfig(
+      resolveSafeZoneConfig(
+        safeZonePlatform,
+        projectSafeZoneConfig,
+      ),
+    );
+  }, [
+    project.id,
+    projectSafeZoneConfig,
+    safeZonePlatform,
+    projectSafeZoneConfigKey,
+  ]);
+
+  const commitSafeZoneConfig = useCallback(
+    async (nextConfig: SafeZoneConfig) => {
+      const currentConfig = resolveSafeZoneConfig(
+        safeZonePlatform,
+        projectSafeZoneConfig,
+      );
+      if (safeZoneConfigKey(nextConfig) === safeZoneConfigKey(currentConfig)) {
+        return;
+      }
+      setSafeZoneSaving(true);
+      try {
+        await api.updateProjectVideoSettings(project.id, {
+          subtitles: {
+            ...resolvedSubtitleSettings,
+            safe_zone_platform: safeZonePlatform,
+            safe_zone_config: nextConfig,
+          },
+        });
+        onRefresh();
+      } catch (err: unknown) {
+        setSafeZoneConfig(currentConfig);
+        notify.error(
+          err instanceof Error
+            ? err.message
+            : "Failed to save subtitle guide settings",
+        );
+      } finally {
+        setSafeZoneSaving(false);
+      }
+    },
+    [
+      onRefresh,
+      project.id,
+      projectSafeZoneConfig,
+      resolvedSubtitleSettings,
+      safeZonePlatform,
+    ],
+  );
+
+  const resetSafeZoneConfig = useCallback(() => {
+    const preset = resolveSafeZoneConfig(safeZonePlatform, null);
+    setSafeZoneConfig(preset);
+    void commitSafeZoneConfig(preset);
+  }, [commitSafeZoneConfig, safeZonePlatform]);
+
+  const saveSafeZoneAsDefaults = useCallback(
+    async (nextConfig: SafeZoneConfig) => {
+      setSafeZoneDefaultsSaving(true);
+      try {
+        await api.updateSettings({
+          default_subtitle_safe_zone_platform: safeZonePlatform,
+          default_subtitle_safe_zone_config: nextConfig,
+        });
+        setDefaults({
+          subtitles: {
+            ...defaultSubtitleSettings,
+            safe_zone_platform: safeZonePlatform,
+            safe_zone_config: nextConfig,
+          },
+        });
+        notify.success("Saved guide defaults for new projects");
+      } catch (err: unknown) {
+        notify.error(
+          err instanceof Error
+            ? err.message
+            : "Failed to save default guide settings",
+        );
+      } finally {
+        setSafeZoneDefaultsSaving(false);
+      }
+    },
+    [defaultSubtitleSettings, safeZonePlatform, setDefaults],
+  );
 
   const matchAllScenesToAudio = useCallback(async () => {
     setMatchingAll(true);
@@ -729,6 +1538,29 @@ export default function ArrangeStep({
     }
   }, [onRefresh, orderedScenes, project.id]);
 
+  const savePacingSettings = useCallback(async () => {
+    const pause = toBoundedInt(interScenePauseMs, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX);
+    const overlap = toBoundedInt(transitionOverlapMs, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX);
+    setSavingPacing(true);
+    try {
+      await api.updateProject(project.id, {
+        settings: {
+          ...(project.settings || {}),
+          inter_scene_pause_ms: pause,
+          transition_overlap_ms: overlap,
+        },
+      });
+      setInterScenePauseMs(pause);
+      setTransitionOverlapMs(overlap);
+      notify.success("Project pacing saved");
+      onRefresh();
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Failed to save pacing settings");
+    } finally {
+      setSavingPacing(false);
+    }
+  }, [interScenePauseMs, onRefresh, project.id, project.settings, transitionOverlapMs]);
+
   if (!scenes.length) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-24 text-muted-foreground">
@@ -741,18 +1573,6 @@ export default function ArrangeStep({
       </div>
     );
   }
-
-  const hasAnyAudio = useMemo(
-    () =>
-      orderedScenes.some((s) => !!pickLatestAsset(s.assets, "audio")),
-    [orderedScenes],
-  );
-  const selectedHasAudio = Boolean(
-    selectedScene && pickLatestAsset(selectedScene.assets, "audio"),
-  );
-  const selectedHasImage = Boolean(
-    selectedScene && pickLatestAsset(selectedScene.assets, "image"),
-  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -771,6 +1591,49 @@ export default function ArrangeStep({
           Compile Video
           <ArrowRight className="h-4 w-4" />
         </Button>
+      </div>
+
+      <div className="shrink-0 rounded-2xl border border-border/50 bg-card/80 px-4 py-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="inline-flex rounded-full bg-primary/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+              Arrange
+            </div>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight">Tune pacing, transitions, and scene order</h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              This is the review pass before compile. Reorder beats, fine-tune durations, and make sure each scene feels ready for the final cut.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 lg:min-w-[340px] lg:grid-cols-4">
+            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Scenes</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{orderedScenes.length}</p>
+            </div>
+            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Audio</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{hasAnyAudio ? "Ready" : "Missing"}</p>
+            </div>
+            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Selected image</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{selectedHasImage ? "Ready" : "Missing"}</p>
+            </div>
+            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Selected audio</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{selectedHasAudio ? "Ready" : "Missing"}</p>
+            </div>
+            <div className="flex items-center gap-2 rounded-full border border-border/40 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+              <input
+                id="safe-zone-toggle"
+                type="checkbox"
+                checked={showSafeZone}
+                onChange={(e) => setShowSafeZone(e.target.checked)}
+              />
+              <label htmlFor="safe-zone-toggle" className="cursor-pointer">
+                Show safe zone overlay
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden lg:grid-cols-12 lg:items-stretch lg:gap-4">
@@ -810,6 +1673,7 @@ export default function ArrangeStep({
                       index={i}
                       startTimeSec={startTimes[i] ?? 0}
                       isSelected={sc.id === selectedId}
+                      suppressSelect={suppressSceneSelect}
                       onSelect={() => setSelectedId(sc.id)}
                     />
                   ))}
@@ -857,9 +1721,19 @@ export default function ArrangeStep({
                   transition={{ duration: 0.2 }}
                 >
                   <SceneInspector
-                    project={project}
                     scene={selectedScene}
-                    onRefresh={onRefresh}
+                    draft={sceneDrafts[selectedScene.id]}
+                    onDraftChange={updateSceneDraft}
+                    onSaveScene={saveSceneDraft}
+                    showSafeZone={showSafeZone}
+                    safeZonePlatform={safeZonePlatform}
+                    safeZoneConfig={safeZoneConfig}
+                    onSafeZoneChange={setSafeZoneConfig}
+                    onSafeZoneCommit={commitSafeZoneConfig}
+                    onSafeZoneReset={resetSafeZoneConfig}
+                    onSaveSafeZoneAsDefaults={(config) => void saveSafeZoneAsDefaults(config)}
+                    safeZoneSaving={safeZoneSaving}
+                    safeZoneDefaultsSaving={safeZoneDefaultsSaving}
                   />
                 </motion.div>
               )}
@@ -867,81 +1741,126 @@ export default function ArrangeStep({
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-1 flex-col gap-3 lg:col-span-3">
-          <Card className="rounded-xl border-border/30 bg-card/80">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Scene tools</CardTitle>
+        <section className="flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 lg:col-span-3">
+          <Card className="shrink-0 rounded-xl border-border/30 bg-card/80">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Tools & pacing</CardTitle>
               <CardDescription className="text-[11px]">
-                Adjust the selected scene without leaving the list.
+                Scene controls, batch actions, and compile pacing in one panel.
               </CardDescription>
             </CardHeader>
-            <CardContent className="pt-0">
-              {selectedScene ? (
-                <SceneQuickTools
-                  project={project}
-                  scene={selectedScene}
-                  onRefresh={onRefresh}
-                />
-              ) : (
-                <p className="text-xs text-muted-foreground">Select a scene to edit.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-xl border-border/30 bg-card/80">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Batch tools</CardTitle>
-              <CardDescription className="text-[11px]">
-                Apply changes across all scenes.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-full gap-1.5"
-                disabled={matchingAll || !hasAnyAudio}
-                onClick={() => void matchAllScenesToAudio()}
-                title={
-                  hasAnyAudio
-                    ? "Set each scene duration to match its voiceover"
-                    : "Add voiceover in Assets first"
-                }
-              >
-                {matchingAll ? (
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            <CardContent className="space-y-4 pt-0">
+              <div className="space-y-1.5">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Scene tools</h4>
+                {selectedScene ? (
+                  <SceneQuickTools
+                    project={project}
+                    scene={selectedScene}
+                    draft={sceneDrafts[selectedScene.id]}
+                    onDraftChange={updateSceneDraft}
+                    onSaveScene={saveSceneDraft}
+                    onRefresh={onRefresh}
+                  />
                 ) : (
-                  <Link2 className="h-3.5 w-3.5" />
+                  <p className="text-xs text-muted-foreground">Select a scene to edit.</p>
                 )}
-                Match all to audio
-              </Button>
-            </CardContent>
-          </Card>
+              </div>
 
-          <Card className="rounded-xl border-border/30 bg-card/80">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Selected scene</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="space-y-2 text-xs text-muted-foreground">
-                <div className="flex items-center justify-between">
-                  <span>Has image</span>
-                  <span className={cn("font-semibold", selectedHasImage ? "text-foreground" : "text-muted-foreground")}>
-                    {selectedHasImage ? "Yes" : "No"}
-                  </span>
+              <Separator />
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Batch tools</h4>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-1.5"
+                  disabled={matchingAll || !hasAnyAudio}
+                  onClick={() => void matchAllScenesToAudio()}
+                  title={
+                    hasAnyAudio
+                      ? "Set each scene duration to match its voiceover"
+                      : "Add voiceover in Assets first"
+                  }
+                >
+                  {matchingAll ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Link2 className="h-3.5 w-3.5" />
+                  )}
+                  Match all to audio
+                </Button>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Project pacing</h4>
+                  <p className="text-[11px] text-muted-foreground">Controls compile timing for this project.</p>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>Has audio</span>
-                  <span className={cn("font-semibold", selectedHasAudio ? "text-foreground" : "text-muted-foreground")}>
-                    {selectedHasAudio ? "Yes" : "No"}
-                  </span>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Inter-scene pause (ms)
+                  </label>
+                  <Input
+                    type="number"
+                    min={INTER_SCENE_PAUSE_MIN}
+                    max={INTER_SCENE_PAUSE_MAX}
+                    step={50}
+                    value={interScenePauseMs}
+                    onChange={(e) => setInterScenePauseMs(toBoundedInt(e.target.value, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX))}
+                  />
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>Transition</span>
-                  <span className="font-semibold text-foreground">
-                    {selectedScene?.transition_type?.replace(/_/g, " ") || "fade"}
-                  </span>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Transition overlap (ms)
+                  </label>
+                  <Input
+                    type="number"
+                    min={TRANSITION_OVERLAP_MIN}
+                    max={TRANSITION_OVERLAP_MAX}
+                    step={50}
+                    value={transitionOverlapMs}
+                    onChange={(e) => setTransitionOverlapMs(toBoundedInt(e.target.value, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX))}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => void savePacingSettings()}
+                  loading={savingPacing}
+                  loadingLabel="Saving…"
+                >
+                  Save pacing
+                </Button>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Selected scene</h4>
+                <div className="space-y-2 text-xs text-muted-foreground">
+                  <div className="flex items-center justify-between">
+                    <span>Has image</span>
+                    <span className={cn("font-semibold", selectedHasImage ? "text-foreground" : "text-muted-foreground")}>
+                      {selectedHasImage ? "Yes" : "No"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Has audio</span>
+                    <span className={cn("font-semibold", selectedHasAudio ? "text-foreground" : "text-muted-foreground")}>
+                      {selectedHasAudio ? "Yes" : "No"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Transition</span>
+                    <span className="font-semibold text-foreground">
+                      {selectedScene?.transition_type?.replace(/_/g, " ") || "fade"}
+                    </span>
+                  </div>
                 </div>
               </div>
             </CardContent>

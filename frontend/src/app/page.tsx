@@ -163,7 +163,7 @@ export default function DashboardPage() {
     try {
       setRetryingProjectId(id);
       await retryProjectMutation.mutateAsync(id);
-      notify.success("Retry queued");
+      notify.success("Retry added to queue");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Retry failed";
       notify.error(message);
@@ -283,8 +283,8 @@ export default function DashboardPage() {
     if (activeJobsCount > 0) {
       items.push({
         id: "track-jobs",
-        title: "Track active jobs",
-        description: `${activeJobsCount} job${activeJobsCount === 1 ? "" : "s"} running or queued.`,
+        title: "Track active tasks",
+        description: `${activeJobsCount} task${activeJobsCount === 1 ? "" : "s"} running or waiting.`,
         ctaLabel: "View activity",
         href: "/history",
       });
@@ -313,9 +313,9 @@ export default function DashboardPage() {
   return (
     <div className="min-w-0 w-full max-w-none space-y-5 text-slate-900 dark:text-slate-100">
       <PulseHero21st
-        title="Pulse"
+        title="Home"
         subtitle="From script to reel in minutes."
-        activeJobsLabel={`${activeJobsCount} active job${activeJobsCount === 1 ? "" : "s"}`}
+        activeJobsLabel={`${activeJobsCount} active task${activeJobsCount === 1 ? "" : "s"}`}
         lastUpdatedLabel={lastUpdatedLabel}
         loading={loading}
         onRefresh={refreshDashboard}
@@ -393,14 +393,14 @@ export default function DashboardPage() {
                     job.project_id && projectMap[job.project_id]?.title
                       ? projectMap[job.project_id].title
                       : job.type.replace(/_/g, " "),
-                  subtitle: "Job failed — retry to continue",
+                  subtitle: "Task failed — retry to continue",
                   retrying: retryingJobId === job.id,
                   deleting: deletingJobId === job.id,
                   onRetry: async () => {
                     setRetryingJobId(job.id);
                     try {
                       await retryJobMutation.mutateAsync(job.id);
-                      notify.success("Retry queued");
+                      notify.success("Retry added to queue");
                     } catch (e: unknown) {
                       notify.error(e instanceof Error ? e.message : "Retry failed");
                     } finally {
@@ -491,7 +491,7 @@ export default function DashboardPage() {
                     <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 dark:bg-zinc-800">
                       <ListTodo className="h-6 w-6 text-slate-400" />
                     </div>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">No recent jobs yet.</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">No recent tasks yet.</p>
                     <Button asChild variant="outline" size="sm" className="mt-4 gap-2 rounded-xl">
                       <Link href="/generate">
                         <Plus className="h-4 w-4" />
@@ -510,7 +510,7 @@ export default function DashboardPage() {
                           setRetryingJobId(job.id);
                           try {
                             await retryJobMutation.mutateAsync(job.id);
-                            notify.success("Retry queued");
+                            notify.success("Retry added to queue");
                           } catch (e: unknown) {
                             notify.error(e instanceof Error ? e.message : "Retry failed");
                           } finally {

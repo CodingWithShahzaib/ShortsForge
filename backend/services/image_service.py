@@ -44,6 +44,38 @@ from backend.providers.image import (
 logger = logging.getLogger(__name__)
 
 FALLBACK_CHAIN = ["together", "replicate", "pollinations", "openai_image", "fal", "runware"]
+DEFAULT_TEXT_NEGATIVE_PROMPT = "text, words, letters, signature, watermark, title, logo"
+NATIVE_NEGATIVE_PROMPT_PROVIDERS = {"replicate", "fal", "runware"}
+
+
+def _merge_negative_prompt(user_negative_prompt: str | None) -> str:
+    extra = (user_negative_prompt or "").strip()
+    return (
+        f"{DEFAULT_TEXT_NEGATIVE_PROMPT}, {extra}"
+        if extra
+        else DEFAULT_TEXT_NEGATIVE_PROMPT
+    )
+
+
+def prepare_image_generation_request(
+    prompt: str,
+    provider_name: str | None,
+    kwargs: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Normalize provider-specific prompt behavior, especially text suppression."""
+    provider_key = (provider_name or "").strip().lower()
+    merged_kwargs = dict(kwargs)
+    merged_negative_prompt = _merge_negative_prompt(
+        merged_kwargs.get("negative_prompt") if isinstance(merged_kwargs.get("negative_prompt"), str) else None
+    )
+    if provider_key in NATIVE_NEGATIVE_PROMPT_PROVIDERS:
+        merged_kwargs["negative_prompt"] = merged_negative_prompt
+        return prompt, merged_kwargs
+    merged_prompt = prompt.strip()
+    if merged_negative_prompt:
+        merged_prompt = f"{merged_prompt}, no text, no words, clean image, no watermark, no signature"
+    merged_kwargs.pop("negative_prompt", None)
+    return merged_prompt, merged_kwargs
 
 
 def get_image_provider(provider_name: str | None = None) -> ImageProvider:
@@ -81,7 +113,12 @@ async def generate_image(
     **kwargs: Any,
 ) -> str:
     """Generate an image and return the file path."""
-    cached = image_cache.get(prompt, provider or "default", width=width, height=height)
+    normalized_prompt, normalized_kwargs = prepare_image_generation_request(
+        prompt,
+        provider,
+        dict(kwargs),
+    )
+    cached = image_cache.get(normalized_prompt, provider or "default", width=width, height=height)
     if cached and _is_valid_image(cached) and save:
         storage = get_storage()
         name = f"{uuid.uuid4().hex}.png"
@@ -90,9 +127,9 @@ async def generate_image(
         return key
 
     img_provider = get_image_provider(provider)
-    data = await _generate_with_fallback(img_provider, prompt, width, height, style, provider, **kwargs)
+    data = await _generate_with_fallback(img_provider, normalized_prompt, width, height, style, provider, **normalized_kwargs)
 
-    image_cache.put(prompt, provider or "default", data, width=width, height=height)
+    image_cache.put(normalized_prompt, provider or "default", data, width=width, height=height)
 
     if save:
         storage = get_storage()

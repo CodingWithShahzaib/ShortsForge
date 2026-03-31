@@ -25,6 +25,17 @@ class FalImageProvider(ImageProvider):
         **kwargs: Any,
     ) -> bytes:
         model = kwargs.get("model", "fal-ai/flux/schnell")
+        negative_prompt = kwargs.get("negative_prompt")
+        seed = kwargs.get("seed")
+        payload: dict[str, Any] = {
+            "prompt": prompt,
+            "image_size": {"width": width, "height": height},
+            "num_images": 1,
+        }
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if seed is not None:
+            payload["seed"] = seed
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 f"https://queue.fal.run/{model}",
@@ -32,11 +43,7 @@ class FalImageProvider(ImageProvider):
                     "Authorization": f"Key {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "prompt": prompt,
-                    "image_size": {"width": width, "height": height},
-                    "num_images": 1,
-                },
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()

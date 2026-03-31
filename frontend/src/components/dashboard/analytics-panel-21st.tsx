@@ -18,7 +18,7 @@ import {
 import type { ActivityBucket } from "@/lib/dashboard-metrics";
 import type { DashboardRange } from "@/lib/dashboard-metrics";
 import { motion } from "framer-motion";
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Tooltip, XAxis, YAxis } from "recharts";
 import { cn } from "@/lib/utils";
 
 export type AnalyticsPanel21stProps = {
@@ -79,6 +79,8 @@ export function AnalyticsPanel21st({
   }, [buckets]);
 
   const rangeLabel = range === "7" ? "Last 7 days" : "Last 30 days";
+  const chartWidth = Math.max(chartData.length * (range === "30" ? 44 : 56), 320);
+  const chartHeight = 176;
 
   return (
     <motion.div
@@ -198,10 +200,9 @@ export function AnalyticsPanel21st({
                 "relative h-44 min-h-[176px] rounded-2xl border border-slate-200/70 bg-white/70 px-2 py-2 shadow-[0_6px_18px_rgba(15,23,42,0.06)] dark:border-zinc-700/70 dark:bg-zinc-900/60",
                 barMinWidth
               )}
-              style={{ minWidth: "100%" }}
+              style={{ minWidth: `${chartWidth}px` }}
             >
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 4 }}>
+              <AreaChart width={chartWidth} height={chartHeight} data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 4 }}>
                   <defs>
                     <linearGradient id="colorCompleted" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#22c55e" stopOpacity="0.55" />
@@ -264,7 +265,6 @@ export function AnalyticsPanel21st({
                     animationDuration={600}
                   />
                 </AreaChart>
-              </ResponsiveContainer>
             </div>
             {totalInRange === 0 && (
               <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-white/70 text-xs text-slate-500 dark:bg-zinc-900/60 dark:text-slate-400">

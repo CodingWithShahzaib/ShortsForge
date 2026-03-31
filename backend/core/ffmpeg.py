@@ -59,17 +59,26 @@ async def get_duration(file_path: str) -> float:
     return await asyncio.to_thread(_get_duration_sync, file_path)
 
 
+def build_audio_trim_filter(target_seconds: float, start_seconds: float = 0.0) -> str:
+    """Build FFmpeg audio trim/pad filter with optional start offset."""
+    safe_target = max(0.1, float(target_seconds))
+    safe_start = max(0.0, float(start_seconds))
+    end = safe_start + safe_target
+    t_start = f"{safe_start:.6f}"
+    t_end = f"{end:.6f}"
+    t_target = f"{safe_target:.6f}"
+    return f"atrim={t_start}:{t_end},asetpts=PTS-STARTPTS,apad=whole_dur={t_target}"
+
+
 async def pad_or_trim_audio(
     audio_path: str,
     target_seconds: float,
     output_path: str,
+    *,
+    start_seconds: float = 0.0,
 ) -> str:
     """Trim or pad audio to exactly target_seconds (silence pad if shorter)."""
-    if target_seconds <= 0:
-        target_seconds = 0.1
-    t = f"{target_seconds:.6f}"
-    # atrim then apad so total length matches target (speech sync with image clips)
-    af = f"atrim=0:{t},apad=whole_dur={t}"
+    af = build_audio_trim_filter(target_seconds, start_seconds)
     args = [
         "-i", audio_path,
         "-af", af,
@@ -95,6 +104,7 @@ def normalize_transition(name: str | None) -> str:
         "slide_down": "slidedown",
         "slide_left": "slideleft",
         "slide_right": "slideright",
+        "cross_fade": "crossfade",
         "circle_open": "circleopen",
         "circle_close": "circleclose",
         "zoomin": "zoom_in",
@@ -102,7 +112,7 @@ def normalize_transition(name: str | None) -> str:
         "ken_burns_in": "zoom_in",
         "ken_burns_out": "zoom_out",
         "pan": "pan_left",
-        "none": "fade",
+        "none": "none",
     }
     return aliases.get(n, n)
 
@@ -222,16 +232,27 @@ async def create_image_clip(
     height: int = 1920,
     transition: str = "none",
     fps: int = 30,
+    motion_effect: str | None = None,
+    ken_burns_enabled: bool = False,
+    ken_burns_zoom_percent: float = 2.5,
 ) -> str:
     """Create a video clip from a still image with optional Ken Burns effect."""
     transition = normalize_transition(transition)
+    motion = normalize_transition(motion_effect or "")
+    if motion not in ("zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down"):
+        if transition in ("zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down"):
+            motion = transition
+        elif ken_burns_enabled:
+            motion = "zoom_in"
+    zoom_gain = max(0.0, min(float(ken_burns_zoom_percent or 0.0), 8.0)) / 100.0
 
     filter_parts = [f"scale={width}:{height}:force_original_aspect_ratio=decrease",
                     f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"]
 
-    if transition in ("zoom_in", "zoom_out"):
-        zoom_start = "1" if transition == "zoom_in" else "1.3"
-        zoom_end = "1.3" if transition == "zoom_in" else "1"
+    if motion in ("zoom_in", "zoom_out"):
+        zoom_end_value = max(1.01, 1.0 + zoom_gain)
+        zoom_start = "1" if motion == "zoom_in" else f"{zoom_end_value:.4f}"
+        zoom_end = f"{zoom_end_value:.4f}" if motion == "zoom_in" else "1"
         filter_parts = [
             f"scale={width*2}:{height*2}:force_original_aspect_ratio=decrease",
             f"pad={width*2}:{height*2}:(ow-iw)/2:(oh-ih)/2:black",
@@ -239,16 +260,16 @@ async def create_image_clip(
             f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
             f":d={int(duration*fps)}:s={width}x{height}:fps={fps}",
         ]
-    elif transition in ("pan_left", "pan_right"):
-        direction = "on" if transition == "pan_right" else f"({int(duration*fps)}-on)"
+    elif motion in ("pan_left", "pan_right"):
+        direction = "on" if motion == "pan_right" else f"({int(duration*fps)}-on)"
         filter_parts = [
             f"scale={int(width*1.3)}:{height}:force_original_aspect_ratio=decrease",
             f"pad={int(width*1.3)}:{height}:(ow-iw)/2:(oh-ih)/2:black",
             f"zoompan=z=1:x='{direction}*{int(width*0.3)}/{int(duration*fps)}'"
             f":y='0':d={int(duration*fps)}:s={width}x{height}:fps={fps}",
         ]
-    elif transition in ("pan_up", "pan_down"):
-        direction = "on" if transition == "pan_down" else f"({int(duration*fps)}-on)"
+    elif motion in ("pan_up", "pan_down"):
+        direction = "on" if motion == "pan_down" else f"({int(duration*fps)}-on)"
         filter_parts = [
             f"scale={width}:{int(height*1.3)}:force_original_aspect_ratio=decrease",
             f"pad={width}:{int(height*1.3)}:(ow-iw)/2:(oh-ih)/2:black",
@@ -269,7 +290,21 @@ async def create_image_clip(
         "-pix_fmt", "yuv420p",
         output_path,
     ]
-    await run_ffmpeg(args)
+    try:
+        await run_ffmpeg(args)
+    except Exception:
+        if motion_effect or ken_burns_enabled:
+            fallback = [
+                "-loop", "1", "-i", image_path,
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
+                "-t", str(duration),
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                output_path,
+            ]
+            await run_ffmpeg(fallback)
+        else:
+            raise
     return output_path
 
 
@@ -277,7 +312,7 @@ async def concat_with_transitions(
     clip_paths: list[str],
     transition_types: list[str],
     output_path: str,
-    transition_duration: float = 0.5,
+    transition_duration: float | list[float] = 0.5,
     on_progress: Callable[[float], Coroutine[Any, Any, None]] | None = None,
 ) -> str:
     """Concatenate video clips with xfade transitions using filter_complex."""
@@ -287,9 +322,18 @@ async def concat_with_transitions(
         return output_path
 
     durations = [await get_duration(p) for p in clip_paths]
-    t_dur = clamp_xfade_duration(durations, transition_duration)
     n = len(clip_paths)
-    total_dur = sum(durations) - t_dur * (n - 1)
+    if isinstance(transition_duration, list):
+        boundary_durations = [
+            max(0.0, min(float(transition_duration[i]), 2.0))
+            if i < len(transition_duration)
+            else 0.0
+            for i in range(n - 1)
+        ]
+    else:
+        t_dur = clamp_xfade_duration(durations, float(transition_duration))
+        boundary_durations = [t_dur for _ in range(n - 1)]
+    total_dur = max(0.1, sum(durations) - sum(boundary_durations))
 
     inputs = []
     for p in clip_paths:
@@ -300,13 +344,17 @@ async def concat_with_transitions(
     for i in range(1, n):
         trans = transition_types[i - 1] if i - 1 < len(transition_types) else "fade"
         xfade_trans = map_transition_to_xfade(trans)
-        offset = sum(durations[:i]) - t_dur * i
+        d_i = boundary_durations[i - 1]
+        offset = sum(durations[:i]) - sum(boundary_durations[:i])
         out_label = f"[v{i}]"
         next_input = f"[{i}:v]"
-        filter_parts.append(
-            f"{current}{next_input}xfade=transition={xfade_trans}"
-            f":duration={t_dur:.4f}:offset={offset:.4f}{out_label}"
-        )
+        if d_i <= 0:
+            filter_parts.append(f"{current}{next_input}concat=n=2:v=1:a=0{out_label}")
+        else:
+            filter_parts.append(
+                f"{current}{next_input}xfade=transition={xfade_trans}"
+                f":duration={d_i:.4f}:offset={offset:.4f}{out_label}"
+            )
         current = out_label
 
     filter_complex = ";".join(filter_parts)
@@ -338,6 +386,8 @@ def map_transition_to_xfade(name: str | None) -> str:
         "circleopen": "circleopen",
         "circleclose": "circleclose",
         "circlecrop": "circlecrop",
+        "crossfade": "fade",
+        "glitch": "fade",
         # Ken Burns / pan: blend with a directional crossfade (motion is already in the clip)
         "zoom_in": "fade",
         "zoom_out": "fade",
@@ -345,6 +395,8 @@ def map_transition_to_xfade(name: str | None) -> str:
         "pan_right": "slideright",
         "pan_up": "slideup",
         "pan_down": "slidedown",
+        "none": "fade",
+        "cut": "fade",
     }
     return mapping.get(t, "fade")
 
@@ -352,7 +404,7 @@ def map_transition_to_xfade(name: str | None) -> str:
 async def concat_audio_with_crossfade(
     audio_paths: list[str],
     output_path: str,
-    crossfade_duration: float,
+    crossfade_duration: float | list[float],
 ) -> str:
     """Chain scene audio with acrossfade so total length matches xfade video concat."""
     if len(audio_paths) == 1:
@@ -363,17 +415,34 @@ async def concat_audio_with_crossfade(
     for p in audio_paths:
         inputs.extend(["-i", p])
 
-    d = crossfade_duration
     n = len(audio_paths)
+    if isinstance(crossfade_duration, list):
+        boundary_durations = [
+            max(0.0, min(float(crossfade_duration[i]), 2.0))
+            if i < len(crossfade_duration)
+            else 0.0
+            for i in range(n - 1)
+        ]
+    else:
+        d = max(0.001, min(float(crossfade_duration), 2.0))
+        boundary_durations = [d for _ in range(n - 1)]
     if n == 2:
-        fc = f"[0:a][1:a]acrossfade=d={d:.4f}:c1=tri:c2=tri[aout]"
+        d = boundary_durations[0]
+        if d <= 0:
+            fc = "[0:a][1:a]concat=n=2:v=0:a=1[aout]"
+        else:
+            fc = f"[0:a][1:a]acrossfade=d={d:.4f}:c1=tri:c2=tri[aout]"
     else:
         parts: list[str] = []
         cur = "[0:a]"
         for i in range(1, n):
             nxt = f"[{i}:a]"
             out = f"[a{i}]" if i < n - 1 else "[aout]"
-            parts.append(f"{cur}{nxt}acrossfade=d={d:.4f}:c1=tri:c2=tri{out}")
+            d = boundary_durations[i - 1]
+            if d <= 0:
+                parts.append(f"{cur}{nxt}concat=n=2:v=0:a=1{out}")
+            else:
+                parts.append(f"{cur}{nxt}acrossfade=d={d:.4f}:c1=tri:c2=tri{out}")
             cur = out
         fc = ";".join(parts)
 
@@ -407,14 +476,55 @@ async def mix_background_music(
     music_path: str,
     output_path: str,
     music_volume: float = 0.15,
+    ducking_enabled: bool = False,
+    ducking_amount: float = -12.0,
 ) -> str:
+    duck_gain = max(-30.0, min(-1.0, float(ducking_amount)))
+    threshold = max(0.003, min(0.12, 10 ** (duck_gain / 20.0) * 0.12))
+    filter_complex = (
+        f"[1:a]volume={music_volume}[bg];"
+        f"[bg][0:a]sidechaincompress=threshold={threshold:.4f}:ratio=10:attack=20:release=250[ducked];"
+        f"[0:a][ducked]amix=inputs=2:duration=first[aout]"
+        if ducking_enabled
+        else f"[1:a]volume={music_volume}[bg];[0:a][bg]amix=inputs=2:duration=first[aout]"
+    )
     args = [
         "-i", video_path, "-i", music_path,
         "-filter_complex",
-        f"[1:a]volume={music_volume}[bg];[0:a][bg]amix=inputs=2:duration=first[aout]",
+        filter_complex,
         "-map", "0:v", "-map", "[aout]",
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-shortest",
+        output_path,
+    ]
+    await run_ffmpeg(args)
+    return output_path
+
+
+async def apply_visual_overlays(
+    video_path: str,
+    output_path: str,
+    *,
+    film_grain_enabled: bool = False,
+    film_grain_intensity: float = 0.05,
+    vignette_enabled: bool = False,
+    vignette_intensity: float = 0.15,
+) -> str:
+    filter_parts: list[str] = []
+    if film_grain_enabled:
+        noise_strength = max(1, min(30, int(round(float(film_grain_intensity) * 255))))
+        filter_parts.append(f"noise=alls={noise_strength}:allf=t+u")
+    if vignette_enabled:
+        angle = max(0.05, min(1.2, float(vignette_intensity) * 3.0))
+        filter_parts.append(f"vignette=angle={angle:.3f}")
+    if not filter_parts:
+        shutil.copy2(video_path, output_path)
+        return output_path
+    args = [
+        "-i", video_path,
+        "-vf", ",".join(filter_parts),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "copy",
         output_path,
     ]
     await run_ffmpeg(args)

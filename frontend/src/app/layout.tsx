@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
   title: "ShortsForge - AI Video Generator",
-  description: "From script to reel in minutes. AI-powered faceless video pipeline with LLM storyboards, images, TTS, and FFmpeg.",
+  description: "Create short videos in minutes from a script, scenes, images, voice, and final export.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

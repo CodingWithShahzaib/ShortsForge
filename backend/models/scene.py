@@ -31,7 +31,14 @@ class Scene(Base):
     assets: Mapped[list["Asset"]] = relationship(
         "Asset", back_populates="scene", cascade="all, delete-orphan",
     )
+    asset_override: Mapped["SceneAssetOverride | None"] = relationship(
+        "SceneAssetOverride",
+        back_populates="scene",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 from backend.models.project import Project  # noqa: E402
 from backend.models.asset import Asset  # noqa: E402
+from backend.models.video_settings import SceneAssetOverride  # noqa: E402

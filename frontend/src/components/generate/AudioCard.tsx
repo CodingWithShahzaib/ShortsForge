@@ -1,18 +1,47 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Type, Music, Upload, Headphones } from "lucide-react";
+import { Type, Music, Upload, Headphones, Trash2 } from "lucide-react";
 import type { GenerateFormValues } from "@/app/generate/schema";
+import { useDeleteMusicMutation } from "@/lib/queries/generateCatalog";
 import type { Voice } from "@/lib/types";
 import { prefersReducedMotion } from "@/lib/micro-interactions";
+import { notify } from "@/lib/notify";
+import { appConfirm } from "@/stores/confirmDialogStore";
 
 type Provider = { name: string; configured: boolean };
 
 type MusicTrack = { id: string; name: string; path: string; url?: string };
+
+function extractTrackFilename(value: string) {
+  const normalized = value.split("?")[0]?.split("#")[0] ?? value;
+  const lastSegment = normalized.split("/").pop() ?? normalized;
+  return lastSegment.trim();
+}
+
+function getMusicTrackLabel(track: MusicTrack) {
+  const rawName = track.name?.trim() || extractTrackFilename(track.path || track.id);
+  const decodedName = rawName.replace(/^[a-f0-9]{32}__(.+)$/i, "$1");
+  if (/^[a-f0-9]{32}(?:\.[a-z0-9]+)?$/i.test(decodedName)) {
+    const extension = decodedName.includes(".") ? decodedName.slice(decodedName.lastIndexOf(".")) : "";
+    return `Uploaded track${extension}`;
+  }
+  return decodedName;
+}
+
+function getFallbackMusicLabel(value: string) {
+  const filename = extractTrackFilename(value);
+  const decodedName = filename.replace(/^[a-f0-9]{32}__(.+)$/i, "$1");
+  if (/^[a-f0-9]{32}(?:\.[a-z0-9]+)?$/i.test(decodedName)) {
+    const extension = decodedName.includes(".") ? decodedName.slice(decodedName.lastIndexOf(".")) : "";
+    return `Uploaded track${extension}`;
+  }
+  return decodedName || "Selected track";
+}
 
 type Props = {
   ttsProviders: Provider[];
@@ -36,6 +65,7 @@ export const AudioCard = memo(function AudioCard({
   const {
     control,
     register,
+    setValue,
     formState: { errors, touchedFields, submitCount },
   } = useFormContext<GenerateFormValues>();
   const backgroundMusic = useWatch({ control, name: "background_music" });
@@ -43,12 +73,60 @@ export const AudioCard = memo(function AudioCard({
   const subtitleEnabled = useWatch({ control, name: "subtitle_enabled" });
   const subtitleSource = useWatch({ control, name: "subtitle_source" });
   const showError = (name: keyof GenerateFormValues) => !!(submitCount > 0 || touchedFields[name]) && !!errors[name];
+  const deleteMusicMut = useDeleteMusicMutation();
+  const [musicSelectOpen, setMusicSelectOpen] = useState(false);
+  const [deletingTrackId, setDeletingTrackId] = useState<string | null>(null);
+  const selectedMusicTrack = musicList.find((track) => track.path === backgroundMusic || track.id === backgroundMusic);
+  const selectedMusicValue = !backgroundMusic
+    ? "none"
+    : selectedMusicTrack
+      ? selectedMusicTrack.path || selectedMusicTrack.id
+      : backgroundMusic;
+  const missingSelectedMusicLabel = backgroundMusic && !selectedMusicTrack
+    ? getFallbackMusicLabel(backgroundMusic)
+    : null;
+
+  useEffect(() => {
+    if (uploadingMusic) {
+      setMusicSelectOpen(false);
+    }
+  }, [uploadingMusic]);
+
+  const handleDeleteTrack = async (track: MusicTrack) => {
+    const confirmed = await appConfirm({
+      title: "Delete audio track?",
+      description: `Remove "${getMusicTrackLabel(track)}" from your uploaded audio library? This cannot be undone.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+
+    const deleteId = track.id || extractTrackFilename(track.path);
+    if (!deleteId) {
+      notify.error("Could not delete this audio track.");
+      return;
+    }
+
+    setDeletingTrackId(deleteId);
+    try {
+      await deleteMusicMut.mutateAsync(deleteId);
+      if (backgroundMusic === track.path || backgroundMusic === track.id) {
+        setValue("background_music", "", { shouldDirty: true, shouldValidate: true });
+      }
+      notify.success("Audio deleted");
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : "Failed to delete audio");
+    } finally {
+      setDeletingTrackId(null);
+    }
+  };
 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-sm font-medium mb-1 block">TTS Provider</label>
+          <label className="text-sm font-medium mb-1 block">Voice engine</label>
           <Controller
             control={control}
             name="tts_provider"
@@ -141,7 +219,9 @@ export const AudioCard = memo(function AudioCard({
             name="background_music"
             render={({ field }) => (
               <Select
-                value={field.value ? field.value : "none"}
+                open={musicSelectOpen}
+                onOpenChange={setMusicSelectOpen}
+                value={selectedMusicValue}
                 onValueChange={(v) => field.onChange(v === "none" ? "" : v)}
               >
                 <SelectTrigger>
@@ -149,9 +229,34 @@ export const AudioCard = memo(function AudioCard({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
+                  {missingSelectedMusicLabel ? (
+                    <SelectItem value={backgroundMusic}>
+                      {missingSelectedMusicLabel}
+                    </SelectItem>
+                  ) : null}
                   {musicList.map((m) => (
-                    <SelectItem key={m.path || m.id} value={m.path || m.id}>
-                      {m.name}
+                    <SelectItem
+                      key={m.path || m.id}
+                      value={m.path || m.id}
+                      action={
+                        <button
+                          type="button"
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={`Delete ${getMusicTrackLabel(m)}`}
+                          title={`Delete ${getMusicTrackLabel(m)}`}
+                          disabled={deletingTrackId === (m.id || extractTrackFilename(m.path))}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setMusicSelectOpen(false);
+                            void handleDeleteTrack(m);
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      }
+                    >
+                      {getMusicTrackLabel(m)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -216,7 +321,7 @@ export const AudioCard = memo(function AudioCard({
         <div className="contents">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Subtitle Source</label>
+                  <label className="text-sm font-medium mb-1 block">Caption source</label>
                   <Controller
                     control={control}
                     name="subtitle_source"
@@ -226,14 +331,14 @@ export const AudioCard = memo(function AudioCard({
                           <SelectValue placeholder="Select source" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="llm">LLM-generated (per scene)</SelectItem>
-                          <SelectItem value="transcription">Audio transcription</SelectItem>
+                          <SelectItem value="llm">AI-generated (per scene)</SelectItem>
+                          <SelectItem value="transcription">Speech-to-text from audio</SelectItem>
                         </SelectContent>
                       </Select>
                     )}
                   />
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    LLM generates captions per scene; transcription uses speech-to-text.
+                    AI captions are generated per scene, or you can create captions from speech.
                   </p>
                   {showError("subtitle_source") ? (
                     <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_source?.message}</p>
@@ -248,7 +353,7 @@ export const AudioCard = memo(function AudioCard({
                         <div className="flex items-center gap-2 pt-2">
                           <input type="checkbox" id="gen-sub" className="rounded" {...register("generate_subtitles")} />
                           <label htmlFor="gen-sub" className="text-sm font-medium cursor-pointer">
-                            Generate subtitles with LLM
+                            Generate captions with AI
                           </label>
                         </div>
                       )}
@@ -256,7 +361,7 @@ export const AudioCard = memo(function AudioCard({
                         <div className="grid grid-cols-2 gap-3 pt-2">
                           <div>
                             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                              Transcription provider
+                              Speech-to-text engine
                             </label>
                             <Controller
                               control={control}
@@ -290,7 +395,7 @@ export const AudioCard = memo(function AudioCard({
                             {showError("transcription_language") ? (
                               <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.transcription_language?.message}</p>
                             ) : (
-                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">ISO 639-1 (e.g. en, es, fr)</p>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Language code (e.g. en, es, fr)</p>
                             )}
                           </div>
                         </div>
@@ -388,11 +493,28 @@ export const AudioCard = memo(function AudioCard({
                   ) : null}
                 </div>
               </div>
+              <div className="max-w-xs">
+                <label className="text-sm font-medium mb-1 block">Words per caption</label>
+                <Input
+                  type="number"
+                  min={2}
+                  max={12}
+                  className={showError("subtitle_words_per_group") ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                  {...register("subtitle_words_per_group", { valueAsNumber: true })}
+                />
+                {showError("subtitle_words_per_group") ? (
+                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.subtitle_words_per_group?.message}</p>
+                ) : (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Applies to both AI and speech-to-text captions. Lower = punchier. Higher = denser.
+                  </p>
+                )}
+              </div>
             </div>
       ) : null}
       {subtitleEnabled && subtitleSource === "transcription" && !showError("transcription_language") ? (
         <p className="text-xs text-muted-foreground">
-          Tip: use a locale like <code>en</code> or <code>en-US</code> for better transcript alignment.
+          Tip: use a code like <code>en</code> or <code>en-US</code> for better caption timing.
         </p>
       ) : null}
     </div>

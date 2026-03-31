@@ -168,8 +168,8 @@ function ProjectSceneSortableThumb({
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; text: string; dot: string; label: string }> = {
-    generating: { bg: "bg-amber-500/10", text: "text-amber-400", dot: "bg-amber-400", label: "Generating" },
-    completed: { bg: "bg-emerald-500/10", text: "text-emerald-400", dot: "bg-emerald-400", label: "Completed" },
+    generating: { bg: "bg-amber-500/10", text: "text-amber-400", dot: "bg-amber-400", label: "Creating" },
+    completed: { bg: "bg-emerald-500/10", text: "text-emerald-400", dot: "bg-emerald-400", label: "Done" },
     failed: { bg: "bg-red-500/10", text: "text-red-400", dot: "bg-red-400", label: "Failed" },
     draft: { bg: "bg-zinc-500/10", text: "text-zinc-400", dot: "bg-zinc-400", label: "Draft" },
   };
@@ -379,7 +379,7 @@ export default function ProjectDetailPage() {
         p ? { ...p, status: "generating", settings: mergedSettings } : null,
       );
     } catch (e: unknown) {
-      notify.error(e instanceof Error ? e.message : "Compile failed");
+      notify.error(e instanceof Error ? e.message : "Export failed");
     } finally {
       setCompiling(false);
     }
@@ -411,7 +411,7 @@ export default function ProjectDetailPage() {
       await api.retryProject(projectId);
       setProject((p) => (p ? { ...p, status: "generating" } : null));
       refreshLatestJob().catch(() => {});
-      notify.success("Retry queued");
+      notify.success("Retry added to queue");
     } catch (e) {
       notify.error((e as Error).message);
     } finally {
@@ -424,7 +424,7 @@ export default function ProjectDetailPage() {
     try {
       await api.cancelProject(projectId);
       setProject((p) => (p ? { ...p, status: "failed" } : null));
-      notify.success("Generation stopped");
+      notify.success("Creation stopped");
     } catch (e) {
       notify.error((e as Error).message);
     } finally {
@@ -552,7 +552,7 @@ export default function ProjectDetailPage() {
               className="group flex items-center gap-2 text-zinc-500 hover:text-zinc-200 transition-colors"
             >
               <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-              <span className="text-sm hidden sm:inline">Projects</span>
+              <span className="text-sm hidden sm:inline">Library</span>
             </button>
 
             <ChevronRight className="h-3.5 w-3.5 text-zinc-700" />
@@ -616,7 +616,7 @@ export default function ProjectDetailPage() {
                 ) : (
                   <Clapperboard className="h-3.5 w-3.5 mr-1.5" />
                 )}
-                Compile
+                Export
               </Button>
             </div>
           </div>
@@ -647,7 +647,7 @@ export default function ProjectDetailPage() {
               <>
                 <div className="h-3 w-px bg-zinc-800" />
                 <span className="flex items-center gap-1.5 text-emerald-400">
-                  <Check className="h-3 w-3" /> Video compiled
+                  <Check className="h-3 w-3" /> Video ready
                 </span>
               </>
             )}
@@ -684,7 +684,7 @@ export default function ProjectDetailPage() {
                     </div>
                   </div>
                   <div className="text-center relative">
-                    <p className="text-sm font-medium text-zinc-200">Generating your video</p>
+                    <p className="text-sm font-medium text-zinc-200">Creating your video</p>
                     <p className="text-xs text-zinc-500 mt-1 max-w-xs">
                       Scenes and assets are being created. This updates automatically.
                     </p>
@@ -749,9 +749,9 @@ export default function ProjectDetailPage() {
                     </div>
                   </div>
                   <div className="text-center space-y-2 relative">
-                    <h2 className="text-lg font-semibold text-zinc-100">No compiled video yet</h2>
+                    <h2 className="text-lg font-semibold text-zinc-100">No final video yet</h2>
                     <p className="text-sm text-zinc-500 max-w-sm">
-                      Review your scenes below, then hit <span className="text-cyan-400 font-medium">Compile</span> to render the final video.
+                      Review your scenes below, then click <span className="text-cyan-400 font-medium">Export</span> to create the final video.
                     </p>
                   </div>
                 </div>
@@ -980,14 +980,14 @@ export default function ProjectDetailPage() {
             {/* Compile & export — project-wide (not tied to scene selection) */}
             <div className="rounded-2xl border border-white/8 bg-zinc-900/50 p-5 space-y-4">
               <div>
-                <h3 className="text-sm font-semibold text-zinc-200">Compile &amp; export</h3>
+                <h3 className="text-sm font-semibold text-zinc-200">Export settings</h3>
                 <p className="text-[11px] text-zinc-600 mt-0.5">
-                  Compile options apply on the next render. Export uses your latest compiled video.
+                  These options apply on the next render. Export uses your latest final video.
                 </p>
               </div>
 
               <div className="space-y-4">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Compile</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Render</p>
                 <label className="flex items-center gap-3 group cursor-pointer">
                   <div className="relative">
                     <input
@@ -1022,11 +1022,11 @@ export default function ProjectDetailPage() {
                       <div className="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-4" />
                     </div>
                     <span className="text-sm text-zinc-400 group-hover:text-zinc-300 transition-colors">
-                      Match scenes to audio
+                      Sync scenes to audio
                     </span>
                   </label>
                   <p className="text-[11px] text-zinc-600 leading-snug pl-12">
-                    Each scene’s on-screen length matches its narration audio. Compile re-encodes scene clips so this takes effect (not just the final file from before).
+                    Each scene stays on-screen for the full narration. Re-render applies this to all scene clips.
                   </p>
                 </div>
               </div>

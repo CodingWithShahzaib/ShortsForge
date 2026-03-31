@@ -68,6 +68,13 @@ def _normalize_story_template(v: Any) -> str:
     return "default"
 
 
+def _normalize_scene_narration_style(v: Any) -> str:
+    s = str(v or "").strip().lower()
+    if s in {"short", "balanced", "long"}:
+        return s
+    return "balanced"
+
+
 def _pick_resolution(v: Any, allowed: list[str]) -> str | None:
     if not allowed:
         return None
@@ -108,8 +115,9 @@ def normalize_viral_idea_settings(
     st = _normalize_story_type(raw.get("story_type"))
     out["story_type"] = st
     out["story_template"] = _normalize_story_template(raw.get("story_template"))
-    out["scene_count"] = _clamp_int(raw.get("scene_count"), 2, 15, 5)
+    out["scene_count"] = _clamp_int(raw.get("scene_count"), 2, 100, 5)
     out["word_count"] = _clamp_int(raw.get("word_count"), 150, 800, 400)
+    out["scene_narration_style"] = _normalize_scene_narration_style(raw.get("scene_narration_style"))
     out["scene_duration"] = _clamp_float(raw.get("scene_duration"), 1.0, 60.0, 5.0)
     img = str(raw.get("image_style") or "").strip()
     out["image_style"] = img if img in ALLOWED_IMAGE_STYLES else "cinematic"
@@ -164,6 +172,7 @@ async def fetch_viral_ideas(
         f'        "story_template": "one of: {templates_csv}",\n'
         '        "scene_count": 4-8,\n'
         '        "word_count": 280-520,\n'
+        '        "scene_narration_style": "short, balanced, or long",\n'
         '        "scene_duration": 4-6,\n'
         f'        "image_style": "one of: realistic, anime, 3d_render, oil_painting, watercolor, cinematic",\n'
         '        "subtitle_enabled": true/false,\n'

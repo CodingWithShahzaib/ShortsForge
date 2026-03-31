@@ -7,6 +7,7 @@ import { useForm, FormProvider, useWatch, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod";
 import { notify } from "@/lib/notify";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { LinearProgress } from "@/components/ui/progress-linear";
 import { Sparkles, Layers, Volume2 } from "lucide-react";
 import { api, ApiError, getMediaUrl } from "@/lib/api";
@@ -29,6 +30,7 @@ import { ViralIdeasSection } from "@/components/generate/ViralIdeasSection";
 import { GenerateSummaryPanel } from "@/components/generate/GenerateSummaryPanel";
 import { useStoryTypesQuery, useVoicesQuery, useMusicQuery, useUploadMusicMutation } from "@/lib/queries/generateCatalog";
 import { SECTIONS_STORAGE_KEY } from "@/app/generate/constants";
+import { engineStageLabel, inferCurrentStage, summarizeEngineOutcome } from "@/lib/engine-pipeline";
 import { cn } from "@/lib/utils";
 
 const GenerationPipeline = dynamic(
@@ -41,7 +43,10 @@ const TEMPLATE_FIELDS = [
   "story_template",
   "scene_count",
   "word_count",
+  "scene_narration_style",
   "scene_duration",
+  "inter_scene_pause_ms",
+  "transition_overlap_ms",
   "image_style",
   "tts_provider",
   "tts_voice",
@@ -54,8 +59,12 @@ const TEMPLATE_FIELDS = [
   "subtitle_size",
   "subtitle_color",
   "subtitle_position",
+  "subtitle_words_per_group",
   "transition",
   "resolution",
+  "use_production_storyboard",
+  "match_scenes_to_audio",
+  "visual_continuity",
 ] as const;
 
 type ServerValidationIssue = {
@@ -63,12 +72,14 @@ type ServerValidationIssue = {
   msg?: string;
   type?: string;
 };
+type PipelineMode = "manual" | "auto";
 
 export default function GeneratePage() {
   const router = useRouter();
   const addJob = useProjectStore((s) => s.addJob);
   const jobs = useProjectStore((s) => s.jobs);
   const jobDetails = useProjectStore((s) => s.jobDetails);
+  const jobPipelines = useProjectStore((s) => s.jobPipelines);
   const transitions = useSettingsStore((s) => s.transitions);
   const resolutions = useSettingsStore((s) => s.resolutions);
   const providers = useSettingsStore((s) => s.providers);
@@ -98,6 +109,7 @@ export default function GeneratePage() {
 
   const [contentSource, setContentSource] = useState<ContentSource>("concept");
   const [generating, setGenerating] = useState(false);
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>("manual");
   const [previewingVoice, setPreviewingVoice] = useState(false);
   const [sectionsOpen, setSectionsOpen] = useState({
     content: true,
@@ -154,10 +166,21 @@ export default function GeneratePage() {
       if (v !== null) {
         if (field === "scene_count" || field === "word_count") updates[field] = parseInt(v, 10);
         else if (field === "scene_duration") updates[field] = parseFloat(v);
+        else if (field === "inter_scene_pause_ms" || field === "transition_overlap_ms") updates[field] = parseInt(v, 10);
         else if (field === "subtitle_size") updates[field] = parseInt(v, 10);
-        else if (field === "subtitle_enabled" || field === "generate_subtitles") updates[field] = v === "true";
+        else if (field === "subtitle_words_per_group") updates[field] = parseInt(v, 10);
+        else if (
+          field === "subtitle_enabled" ||
+          field === "generate_subtitles" ||
+          field === "use_production_storyboard" ||
+          field === "match_scenes_to_audio"
+        )
+          updates[field] = v === "true";
         else updates[field] = v;
       }
+    }
+    if (typeof updates.visual_continuity === "string") {
+      updates.visual_continuity = updates.visual_continuity.trim();
     }
     if (Object.keys(updates).length > 0) {
       form.reset({ ...form.getValues(), ...updates } as GenerateFormValues);
@@ -251,7 +274,7 @@ export default function GeneratePage() {
           type: "manual",
           message: `Provider '${values.llm_provider}' is not configured.`,
         });
-        notify.error("Configure the selected LLM provider first.");
+        notify.error("Set up the selected script AI first.");
         return;
       }
       if (!providers.image.some((p) => p.name === values.image_provider && p.configured)) {
@@ -259,7 +282,7 @@ export default function GeneratePage() {
           type: "manual",
           message: `Provider '${values.image_provider}' is not configured.`,
         });
-        notify.error("Configure the selected image provider first.");
+        notify.error("Set up the selected image engine first.");
         return;
       }
       if (!providers.tts.some((p) => p.name === values.tts_provider && p.configured)) {
@@ -267,27 +290,26 @@ export default function GeneratePage() {
           type: "manual",
           message: `Provider '${values.tts_provider}' is not configured.`,
         });
-        notify.error("Configure the selected TTS provider first.");
+        notify.error("Set up the selected voice engine first.");
         return;
       }
       if (!voices.some((v) => v.id === values.tts_voice)) {
         form.setError("tts_voice", {
           type: "manual",
-          message: "Please select a valid voice for the current TTS provider.",
+          message: "Please select a voice that works with the current voice engine.",
         });
-        notify.error("Selected voice is unavailable for this TTS provider.");
+        notify.error("That voice is not available for the selected voice engine.");
         return;
       }
       setGenerating(true);
       try {
-        const storyboard_only = true;
-        const prepare_only = false;
+        const target_stage = pipelineMode === "manual" ? "storyboard" : "compile";
         const job = await api.generateVideo({
           ...values,
           custom_script: contentSource === "script" ? values.custom_script : undefined,
           control_mode: "co_pilot",
-          prepare_only,
-          storyboard_only,
+          pipeline_mode: pipelineMode,
+          target_stage,
         });
         addJob(job);
         if (job.project_id) {
@@ -309,7 +331,7 @@ export default function GeneratePage() {
         setGenerating(false);
       }
     },
-    [contentSource, addJob, applyBackendFieldErrors, form, providers.image, providers.llm, providers.tts, router, voices]
+    [contentSource, pipelineMode, addJob, applyBackendFieldErrors, form, providers.image, providers.llm, providers.tts, router, voices]
   );
 
   const canGenerate = useMemo(() => {
@@ -337,6 +359,7 @@ export default function GeneratePage() {
   const triggerGenerate = useCallback(() => {
     void form.handleSubmit(onSubmitValid)();
   }, [form, onSubmitValid]);
+  const generateCtaLabel = pipelineMode === "manual" ? "Create scenes" : "Create full video";
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -353,8 +376,6 @@ export default function GeneratePage() {
   const activeJobs = jobs.filter((j) => (j.status === "queued" || j.status === "in_progress") && j.type === "video_render");
   const resolutionIds = resolutions.map((r) => r.id);
   const transitionIds = transitions.map((t) => t.id);
-  const formErrors = form.formState.errors;
-  const problemFields = Object.keys(formErrors) as (keyof GenerateFormValues)[];
   const showAsideColumn = useMemo(() => {
     const pipelineTrackable = jobs.some(
       (j) =>
@@ -362,15 +383,8 @@ export default function GeneratePage() {
         (j.status === "queued" || j.status === "in_progress") &&
         Boolean(j.project_id)
     );
-    return problemFields.length > 0 || activeJobs.length > 0 || pipelineTrackable;
-  }, [jobs, problemFields.length, activeJobs.length]);
-  const jumpToField = (field: keyof GenerateFormValues) => {
-    form.setFocus(field);
-    requestAnimationFrame(() => {
-      const el = document.getElementsByName(field)[0] as HTMLElement | undefined;
-      el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-  };
+    return activeJobs.length > 0 || pipelineTrackable;
+  }, [jobs, activeJobs.length]);
 
   return (
     <FormProvider {...form}>
@@ -396,12 +410,35 @@ export default function GeneratePage() {
               aria-label="Live estimate"
               className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm backdrop-blur-sm"
             >
+              <div className="mb-2.5 flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={pipelineMode === "manual" ? "default" : "outline"}
+                  onClick={() => setPipelineMode("manual")}
+                >
+                  Step-by-step mode
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={pipelineMode === "auto" ? "default" : "outline"}
+                  onClick={() => setPipelineMode("auto")}
+                >
+                  One-click mode
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {pipelineMode === "manual"
+                    ? "Start with scenes first, then finish assets and export in Studio."
+                    : "Create scenes, assets, and final video in one run."}
+                </span>
+              </div>
               <GenerateSummaryPanel control={form.control} variant="strip" />
               <p className="mt-2 text-[11px] text-muted-foreground">
                 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-sans text-[10px]">Ctrl</kbd>
                 <span className="mx-1">+</span>
                 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-sans text-[10px]">Enter</kbd>
-                <span className="ml-1.5">to generate when ready</span>
+                <span className="ml-1.5">to start when ready</span>
               </p>
             </section>
 
@@ -427,6 +464,7 @@ export default function GeneratePage() {
                       generating={generating}
                       canGenerate={canGenerate}
                       onGenerate={triggerGenerate}
+                      generateLabel={generateCtaLabel}
                     />
                   )}
                   {contentSource === "script" && (
@@ -434,6 +472,7 @@ export default function GeneratePage() {
                       generating={generating}
                       canGenerate={canGenerate}
                       onGenerate={triggerGenerate}
+                      generateLabel={generateCtaLabel}
                     />
                   )}
 
@@ -486,47 +525,32 @@ export default function GeneratePage() {
 
           {showAsideColumn && (
             <aside className="min-w-0 w-full max-w-full space-y-3 lg:sticky lg:top-6 lg:self-start">
-              {problemFields.length > 0 && (
-                <Card className="section-neon section-neon--amber border-amber-500/35 shadow-sm" size="2">
-                  <CardHeader className="space-y-0 p-3 pb-2">
-                    <CardTitle className="text-xs font-semibold tracking-wide uppercase text-amber-800 dark:text-amber-200/90">
-                      Fix first
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-1.5 px-3 pb-3 pt-0">
-                    {problemFields.slice(0, 8).map((field) => (
-                      <button
-                        key={field}
-                        type="button"
-                        onClick={() => jumpToField(field)}
-                        className="block w-full rounded-lg border border-border/80 bg-background/50 px-2.5 py-2 text-left text-sm transition hover:bg-accent/80"
-                      >
-                        <span className="font-medium">{field.replace(/_/g, " ")}</span>
-                        {formErrors[field]?.message ? (
-                          <span className="mt-0.5 block text-xs text-muted-foreground">
-                            {String(formErrors[field]?.message)}
-                          </span>
-                        ) : null}
-                      </button>
-                    ))}
-                  </CardContent>
-                </Card>
-              )}
-
               <GenerationPipeline />
 
               {activeJobs.length > 0 && (
                 <Card className="section-neon section-neon--pipeline border-border/70 shadow-sm" size="2">
                   <CardHeader className="space-y-0 p-3 pb-2">
                     <CardTitle className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">
-                      Active jobs
+                      Active tasks
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 px-3 pb-3 pt-0">
                     {activeJobs.map((job) => (
                       <div key={job.id} className="space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">{job.type.replace(/_/g, " ")}</span>
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-muted-foreground">{job.type.replace(/_/g, " ")}</span>
+                              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
+                                {engineStageLabel(
+                                  inferCurrentStage(job, jobPipelines[job.id], jobDetails[job.id]),
+                                )}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              {summarizeEngineOutcome(job, jobPipelines[job.id], jobDetails[job.id])}
+                            </p>
+                          </div>
                           <span className="font-medium tabular-nums">{job.progress}%</span>
                         </div>
                         <LinearProgress value={job.progress} />

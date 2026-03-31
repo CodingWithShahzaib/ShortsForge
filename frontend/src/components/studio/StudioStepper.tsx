@@ -313,14 +313,14 @@ function VerticalStepper({
                         </Badge>
                       )}
                       {isDone && (
-                        <p className="text-[9px] font-medium text-emerald-500/80 dark:text-emerald-400/70">Done</p>
+                        <p className="text-[9px] font-medium text-emerald-500/80 dark:text-emerald-400/70">Ready</p>
                       )}
                       {error && (
                         <p className="mt-0.5 text-[9px] font-semibold text-rose-500/80">Needs attention</p>
                       )}
                       {isFuture && !error && (
                         <p className="mt-0.5 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/30">
-                          Upcoming
+                          Next
                         </p>
                       )}
                       {hint && (

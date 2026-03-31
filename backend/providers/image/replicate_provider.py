@@ -26,18 +26,23 @@ class ReplicateImageProvider(ImageProvider):
         **kwargs: Any,
     ) -> bytes:
         model = kwargs.get("model", "black-forest-labs/flux-schnell")
+        negative_prompt = kwargs.get("negative_prompt")
+        seed = kwargs.get("seed")
+        input_payload = {
+            "prompt": prompt,
+            "width": width,
+            "height": height,
+            "num_outputs": 1,
+        }
+        if negative_prompt:
+            input_payload["negative_prompt"] = negative_prompt
+        if seed is not None:
+            input_payload["seed"] = seed
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 f"{self._base_url}/models/{model}/predictions",
                 headers={"Authorization": f"Bearer {self._api_key}"},
-                json={
-                    "input": {
-                        "prompt": prompt,
-                        "width": width,
-                        "height": height,
-                        "num_outputs": 1,
-                    }
-                },
+                json={"input": input_payload},
             )
             resp.raise_for_status()
             prediction = resp.json()

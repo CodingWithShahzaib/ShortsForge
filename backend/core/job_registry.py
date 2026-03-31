@@ -54,17 +54,37 @@ def list_handlers() -> list[str]:
     return list(_handlers.keys())
 
 
+def _resolve_pipeline_request(params: dict[str, Any], settings: dict[str, Any]) -> tuple[str, str]:
+    mode = str(params.get("pipeline_mode") or settings.get("pipeline_mode") or "manual").lower()
+    stage_raw = params.get("target_stage")
+    if not stage_raw:
+        if params.get("storyboard_only", False):
+            stage_raw = "storyboard"
+        elif params.get("prepare_only", False):
+            stage_raw = "assets"
+        elif mode == "auto":
+            stage_raw = "compile"
+        else:
+            stage_raw = "storyboard"
+    stage = str(stage_raw).lower()
+    if mode not in {"manual", "auto"}:
+        mode = "manual"
+    if stage not in {"storyboard", "assets", "compile"}:
+        stage = "storyboard"
+    if mode == "auto":
+        stage = "compile"
+    return mode, stage
+
+
 # ── Handler implementations ──────────────────────────────────────────
 
 @register("video_render")
 async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
     """Render a full project video pipeline (storyboard → render)."""
-    from backend.config import get_settings
     from backend.database import async_session
-    from backend.models import Job, Project, Scene
-    from backend.services.video_service import render_video
-    from backend.services.script_service import generate_story_and_storyboard
-    from backend.core.websocket_manager import ws_manager
+    from backend.engine import EngineRequest, ShortsForgeEngine
+    from backend.engine.planning import ResolvedGenerationSettings, SceneSpec
+    from backend.models import Job, Project
 
     project_id = params["project_id"]
     job_id = params["job_id"]
@@ -72,6 +92,7 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
     if isinstance(scenes, list) and not scenes:
         scenes = None
     settings = params.get("settings") or {}
+    from backend.config import get_settings
     app_settings = get_settings()
 
     async with async_session() as session:
@@ -90,167 +111,14 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                 .options(selectinload(Project.scenes))
             )
             project = r2.scalar_one()
-
             if not settings and project.settings:
                 settings = project.settings
+            resolved_settings = ResolvedGenerationSettings.from_mapping(settings, app_settings)
 
-            if scenes is None and not project.scenes:
-                await ws_manager.send_progress(
-                    job_id, "video_render", 0, "in_progress", "Generating script and storyboard"
-                )
-                storyboard = await generate_story_and_storyboard(
-                    concept=project.title if not settings.get("custom_script") else None,
-                    script=settings.get("custom_script") or project.script,
-                    story_type=settings.get("story_type", project.story_type),
-                    scene_count=settings.get("scene_count", 5),
-                    image_style=settings.get("image_style") or app_settings.default_image_style,
-                    word_count=settings.get("word_count") or 400,
-                    generate_subtitles=settings.get("generate_subtitles", True),
-                    llm_provider=settings.get("llm_provider") or app_settings.default_llm_provider,
-                    llm_model=settings.get("llm_model") or app_settings.default_llm_model,
-                    story_template=settings.get("story_template", "default"),
-                )
+            pipeline_mode, target_stage = _resolve_pipeline_request(params, settings)
 
-                project.title = storyboard.get("title", project.title)
-                project.script = storyboard.get("script", project.script)
-                project.settings = settings or project.settings
-
-                scenes = []
-                for i, sc in enumerate(storyboard.get("scenes", [])):
-                    scene_duration = sc.get("duration", settings.get("scene_duration", 5.0))
-                    scene = Scene(
-                        project_id=project.id,
-                        order_index=i,
-                        narration=sc.get("narration", ""),
-                        subtitle=sc.get("subtitle") or sc.get("narration", ""),
-                        image_prompt=sc.get("image_prompt", ""),
-                        transition_type=sc.get("transition") or settings.get("transition") or app_settings.default_transition,
-                        duration=scene_duration,
-                        scene_type="image",
-                    )
-                    session.add(scene)
-                    sc_copy = dict(sc)
-                    sc_copy["duration"] = scene_duration
-                    scenes.append(sc_copy)
-                await session.commit()
-                await ws_manager.send_progress(
-                    job_id,
-                    "video_render",
-                    0,
-                    "in_progress",
-                    "Storyboard ready, rendering video",
-                    pipeline=_ws_pipeline_storyboard_only(len(storyboard.get("scenes", []))),
-                )
-            elif scenes and not project.scenes:
-                scene_duration_default = settings.get("scene_duration", 5.0)
-                scene_objs = []
-                for i, sc in enumerate(scenes):
-                    scene_duration = sc.get("duration", scene_duration_default)
-                    scene_obj = Scene(
-                        project_id=project.id,
-                        order_index=i,
-                        narration=sc.get("narration", ""),
-                        subtitle=sc.get("subtitle") or sc.get("narration", ""),
-                        image_prompt=sc.get("image_prompt", ""),
-                        transition_type=sc.get("transition") or settings.get("transition") or app_settings.default_transition,
-                        duration=scene_duration,
-                        scene_type="image",
-                    )
-                    session.add(scene_obj)
-                    scene_objs.append(scene_obj)
-                    sc["duration"] = scene_duration
-                await session.commit()
-                await ws_manager.send_progress(
-                    job_id,
-                    "video_render",
-                    0,
-                    "in_progress",
-                    "Scenes ready, rendering video",
-                    pipeline=_ws_pipeline_storyboard_only(len(scenes)),
-                )
-
-            storyboard_only = params.get("storyboard_only", False)
-            if storyboard_only:
-                r_pf = await session.execute(
-                    select(Project)
-                    .where(Project.id == project_id)
-                    .options(selectinload(Project.scenes))
-                )
-                proj_for_skip = r_pf.scalar_one()
-                if not proj_for_skip.scenes:
-                    await ws_manager.send_progress(
-                        job_id,
-                        "video_render",
-                        0,
-                        "in_progress",
-                        "Generating script and storyboard",
-                    )
-                    storyboard = await generate_story_and_storyboard(
-                        concept=proj_for_skip.title if not settings.get("custom_script") else None,
-                        script=settings.get("custom_script") or proj_for_skip.script,
-                        story_type=settings.get("story_type", proj_for_skip.story_type),
-                        scene_count=settings.get("scene_count", 5),
-                        image_style=settings.get("image_style") or app_settings.default_image_style,
-                        word_count=settings.get("word_count") or 400,
-                        generate_subtitles=settings.get("generate_subtitles", True),
-                        llm_provider=settings.get("llm_provider") or app_settings.default_llm_provider,
-                        llm_model=settings.get("llm_model") or app_settings.default_llm_model,
-                        story_template=settings.get("story_template", "default"),
-                    )
-                    proj_for_skip.title = storyboard.get("title", proj_for_skip.title)
-                    proj_for_skip.script = storyboard.get("script", proj_for_skip.script)
-                    proj_for_skip.settings = settings or proj_for_skip.settings
-
-                    scene_duration_default = settings.get("scene_duration", 5.0)
-                    for i, sc in enumerate(storyboard.get("scenes", [])):
-                        scene_duration = sc.get("duration", scene_duration_default)
-                        scene_obj = Scene(
-                            project_id=proj_for_skip.id,
-                            order_index=i,
-                            narration=sc.get("narration", ""),
-                            subtitle=sc.get("subtitle") or sc.get("narration", ""),
-                            image_prompt=sc.get("image_prompt", ""),
-                            transition_type=sc.get("transition") or settings.get("transition") or app_settings.default_transition,
-                            duration=scene_duration,
-                            scene_type="image",
-                        )
-                        session.add(scene_obj)
-                    await session.commit()
-                    await session.refresh(proj_for_skip)
-                    if not proj_for_skip.scenes:
-                        raise ValueError(
-                            "storyboard_only requires at least one scene. "
-                            "Use a concept/custom script or pass pre-defined scenes."
-                        )
-                await ws_manager.send_progress(
-                    job_id,
-                    "video_render",
-                    99,
-                    "in_progress",
-                    "Storyboard ready — generate assets per scene, then compile",
-                    pipeline=_ws_pipeline_storyboard_only(len(proj_for_skip.scenes)),
-                )
-                result = {
-                    "prepared": True,
-                    "storyboard_only": True,
-                    "scenes": len(proj_for_skip.scenes),
-                }
-                r = await session.execute(select(Job).where(Job.id == job_id))
-                j = r.scalar_one()
-                j.status = "completed"
-                j.progress = 100
-                j.result = result
-                j.completed_at = datetime.now(timezone.utc)
-                proj_for_skip.status = "ready_for_edit"
-                await session.commit()
-                return result
-
-            prepare_only = params.get("prepare_only", False)
             inc = params.get("incremental_scene_ids") or []
             reg_set: set[str] | None = set(inc) if inc else None
-            # Cached per-scene video clips ignore new durations/settings unless we rebuild them.
-            # Full compile must re-encode from images so match_scenes_to_audio and scene timing apply.
-            # Incremental renders default to reusing clips for scenes not in the delta set.
             if inc:
                 force_scene_clips = bool(params.get("force_regenerate_scene_clips", False))
             else:
@@ -259,16 +127,36 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
                     force_scene_clips = bool(raw_f)
                 else:
                     force_scene_clips = bool((settings or {}).get("match_scenes_to_audio", False))
-            result = await render_video(
-                project_id=project_id,
-                job_id=job_id,
-                session=session,
-                scenes=scenes,
-                settings=settings if settings else None,
-                stop_after_assets=prepare_only,
-                regenerate_scene_ids=reg_set,
-                force_regenerate_scene_clips=force_scene_clips,
+
+            engine_scenes = (
+                [
+                    scene
+                    if isinstance(scene, SceneSpec)
+                    else SceneSpec.from_mapping(
+                        scene,
+                        default_transition=resolved_settings.transition,
+                    )
+                    for scene in scenes
+                ]
+                if scenes is not None
+                else None
             )
+            engine = ShortsForgeEngine()
+            result = (
+                await engine.run(
+                    EngineRequest(
+                        project_id=project_id,
+                        job_id=job_id,
+                        scenes=engine_scenes,
+                        settings=resolved_settings,
+                        pipeline_mode=pipeline_mode,
+                        target_stage=target_stage,
+                        regenerate_scene_ids=reg_set,
+                        force_regenerate_scene_clips=force_scene_clips,
+                    ),
+                    session,
+                )
+            ).to_mapping()
             r = await session.execute(select(Job).where(Job.id == job_id))
             j = r.scalar_one()
             j.status = "completed"
@@ -278,7 +166,12 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
 
             r2 = await session.execute(select(Project).where(Project.id == project_id))
             p = r2.scalar_one()
-            p.status = "ready_for_edit" if result.get("prepared") else "completed"
+            if result.get("storyboard_only"):
+                p.status = "ready_for_edit"
+            elif result.get("prepared"):
+                p.status = "ready_for_compile"
+            else:
+                p.status = "completed"
             await session.commit()
             return result
         except Exception as exc:
@@ -301,7 +194,8 @@ async def handle_asset_generate(params: dict[str, Any]) -> dict[str, Any]:
     from backend.config import get_settings
     from backend.database import async_session
     from backend.models import Job, Project, Scene, Asset
-    from backend.services.image_service import generate_image
+    from backend.services.project_video_settings_service import ensure_scene_asset_override
+    from backend.services.image_service import DEFAULT_TEXT_NEGATIVE_PROMPT, generate_image
     from backend.services.audio_service import synthesize_speech
     from backend.core.websocket_manager import ws_manager
 
@@ -390,6 +284,8 @@ async def _run_asset_generate(
             nprompt = ov.get("negative_prompt")
             if isinstance(nprompt, str) and nprompt.strip():
                 gen_kwargs["negative_prompt"] = nprompt.strip()
+            else:
+                gen_kwargs["negative_prompt"] = DEFAULT_TEXT_NEGATIVE_PROMPT
             seed = ov.get("seed")
             if seed is not None and seed != "":
                 try:
@@ -430,13 +326,16 @@ async def _run_asset_generate(
                 },
             )
             session.add(new_asset)
+            override_row = ensure_scene_asset_override(scene)
+            override_row.manual_image_path = None
+            override_row.image_status = "ai_generated"
         elif asset_type == "audio":
             for a in list(scene.assets):
                 if a.type == "video":
                     await session.delete(a)
             await session.flush()
 
-            narration = (prompt_override or scene.narration or "").strip()
+            narration = (prompt_override or scene.narration or scene.subtitle or "").strip()
             if not narration:
                 raise ValueError("Scene has no narration for TTS")
 
@@ -469,6 +368,9 @@ async def _run_asset_generate(
                 metadata_={"voice": tts_voice},
             )
             session.add(new_asset)
+            override_row = ensure_scene_asset_override(scene)
+            override_row.manual_audio_path = None
+            override_row.audio_status = "ai_generated"
         else:
             raise ValueError(f"Unsupported asset_type: {asset_type}")
 

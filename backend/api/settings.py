@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -10,10 +11,65 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.config import get_settings
-from backend.schemas import AppSettings, ProviderStatus
+from backend.schemas import (
+    AppSettings,
+    AudioSettings,
+    ProviderStatus,
+    SafeZoneResponse,
+    SubtitleSettings,
+    VideoStyleSettings,
+)
 from backend.services.transition_service import list_transitions
 
 router = APIRouter()
+
+
+def _video_style_from_app_settings() -> VideoStyleSettings:
+    settings = get_settings()
+    return VideoStyleSettings(
+        ken_burns_enabled=settings.default_ken_burns_enabled,
+        ken_burns_zoom_percent=settings.default_ken_burns_zoom_percent,
+        ken_burns_motion=settings.default_ken_burns_motion,
+        film_grain_enabled=settings.default_film_grain_enabled,
+        film_grain_intensity=settings.default_film_grain_intensity,
+        vignette_enabled=settings.default_vignette_enabled,
+        vignette_intensity=settings.default_vignette_intensity,
+        lut_enabled=settings.default_lut_enabled,
+        lut_path=settings.default_lut_path or None,
+        default_transition=settings.default_transition,
+        transition_duration_sec=settings.default_transition_duration_sec,
+        scene_duration_min=settings.default_scene_duration_min,
+        scene_duration_max=settings.default_scene_duration_max,
+    )
+
+
+def _subtitle_settings_from_app_settings() -> SubtitleSettings:
+    settings = get_settings()
+    return SubtitleSettings(
+        font_family=settings.default_subtitle_font,
+        font_size=settings.default_subtitle_size,
+        position=settings.default_subtitle_position,
+        background_opacity=settings.default_subtitle_background_opacity,
+        text_color=settings.default_subtitle_color,
+        shadow_enabled=settings.default_subtitle_shadow_enabled,
+        shadow_strength=settings.default_subtitle_shadow_strength,
+        safe_zone_enabled=settings.default_subtitle_safe_zone_enabled,
+        safe_zone_platform=settings.default_subtitle_safe_zone_platform,
+        safe_zone_config=settings.default_subtitle_safe_zone_config,
+        words_per_group=settings.default_subtitle_words_per_group,
+        word_pop_enabled=settings.default_word_pop_enabled,
+    )
+
+
+def _audio_settings_from_app_settings() -> AudioSettings:
+    settings = get_settings()
+    return AudioSettings(
+        music_volume=settings.default_music_volume,
+        ducking_enabled=settings.default_ducking_enabled,
+        ducking_amount=settings.default_ducking_amount,
+        voice_provider=settings.default_tts_provider,
+        voice_id=settings.default_tts_voice,
+    )
 
 
 @router.get("/")
@@ -30,7 +86,43 @@ async def get_settings_endpoint():
         "default_image_style": settings.default_image_style,
         "default_word_count": settings.default_word_count,
         "default_scene_count": settings.default_scene_count,
+        "default_scene_narration_style": settings.default_scene_narration_style,
+        "default_inter_scene_pause_ms": settings.default_inter_scene_pause_ms,
+        "default_transition_overlap_ms": settings.default_transition_overlap_ms,
+        "default_use_production_storyboard": settings.default_use_production_storyboard,
+        "default_match_scenes_to_audio": settings.default_match_scenes_to_audio,
+        "default_visual_continuity": settings.default_visual_continuity,
+        "default_ken_burns_enabled": settings.default_ken_burns_enabled,
+        "default_ken_burns_zoom_percent": settings.default_ken_burns_zoom_percent,
+        "default_ken_burns_motion": settings.default_ken_burns_motion,
+        "default_film_grain_enabled": settings.default_film_grain_enabled,
+        "default_film_grain_intensity": settings.default_film_grain_intensity,
+        "default_vignette_enabled": settings.default_vignette_enabled,
+        "default_vignette_intensity": settings.default_vignette_intensity,
+        "default_lut_enabled": settings.default_lut_enabled,
+        "default_lut_path": settings.default_lut_path,
+        "default_transition_duration_sec": settings.default_transition_duration_sec,
+        "default_scene_duration_min": settings.default_scene_duration_min,
+        "default_scene_duration_max": settings.default_scene_duration_max,
+        "default_subtitle_font": settings.default_subtitle_font,
+        "default_subtitle_size": settings.default_subtitle_size,
+        "default_subtitle_color": settings.default_subtitle_color,
+        "default_subtitle_position": settings.default_subtitle_position,
+        "default_subtitle_words_per_group": settings.default_subtitle_words_per_group,
+        "default_subtitle_background_opacity": settings.default_subtitle_background_opacity,
+        "default_subtitle_shadow_enabled": settings.default_subtitle_shadow_enabled,
+        "default_subtitle_shadow_strength": settings.default_subtitle_shadow_strength,
+        "default_subtitle_safe_zone_enabled": settings.default_subtitle_safe_zone_enabled,
+        "default_subtitle_safe_zone_platform": settings.default_subtitle_safe_zone_platform,
+        "default_subtitle_safe_zone_config": settings.default_subtitle_safe_zone_config,
+        "default_word_pop_enabled": settings.default_word_pop_enabled,
+        "default_music_volume": settings.default_music_volume,
+        "default_ducking_enabled": settings.default_ducking_enabled,
+        "default_ducking_amount": settings.default_ducking_amount,
         "ffmpeg_path": settings.ffmpeg_path,
+        "video_style": _video_style_from_app_settings().model_dump(),
+        "subtitles": _subtitle_settings_from_app_settings().model_dump(),
+        "audio": _audio_settings_from_app_settings().model_dump(),
     }
 
 
@@ -68,18 +160,133 @@ async def update_settings(data: AppSettings):
         "default_image_style": "DEFAULT_IMAGE_STYLE",
         "default_word_count": "DEFAULT_WORD_COUNT",
         "default_scene_count": "DEFAULT_SCENE_COUNT",
+        "default_scene_narration_style": "DEFAULT_SCENE_NARRATION_STYLE",
+        "default_inter_scene_pause_ms": "DEFAULT_INTER_SCENE_PAUSE_MS",
+        "default_transition_overlap_ms": "DEFAULT_TRANSITION_OVERLAP_MS",
+        "default_use_production_storyboard": "DEFAULT_USE_PRODUCTION_STORYBOARD",
+        "default_match_scenes_to_audio": "DEFAULT_MATCH_SCENES_TO_AUDIO",
+        "default_visual_continuity": "DEFAULT_VISUAL_CONTINUITY",
+        "default_ken_burns_enabled": "DEFAULT_KEN_BURNS_ENABLED",
+        "default_ken_burns_zoom_percent": "DEFAULT_KEN_BURNS_ZOOM_PERCENT",
+        "default_ken_burns_motion": "DEFAULT_KEN_BURNS_MOTION",
+        "default_film_grain_enabled": "DEFAULT_FILM_GRAIN_ENABLED",
+        "default_film_grain_intensity": "DEFAULT_FILM_GRAIN_INTENSITY",
+        "default_vignette_enabled": "DEFAULT_VIGNETTE_ENABLED",
+        "default_vignette_intensity": "DEFAULT_VIGNETTE_INTENSITY",
+        "default_lut_enabled": "DEFAULT_LUT_ENABLED",
+        "default_lut_path": "DEFAULT_LUT_PATH",
+        "default_transition_duration_sec": "DEFAULT_TRANSITION_DURATION_SEC",
+        "default_scene_duration_min": "DEFAULT_SCENE_DURATION_MIN",
+        "default_scene_duration_max": "DEFAULT_SCENE_DURATION_MAX",
+        "default_subtitle_font": "DEFAULT_SUBTITLE_FONT",
+        "default_subtitle_size": "DEFAULT_SUBTITLE_SIZE",
+        "default_subtitle_color": "DEFAULT_SUBTITLE_COLOR",
+        "default_subtitle_position": "DEFAULT_SUBTITLE_POSITION",
+        "default_subtitle_words_per_group": "DEFAULT_SUBTITLE_WORDS_PER_GROUP",
+        "default_subtitle_background_opacity": "DEFAULT_SUBTITLE_BACKGROUND_OPACITY",
+        "default_subtitle_shadow_enabled": "DEFAULT_SUBTITLE_SHADOW_ENABLED",
+        "default_subtitle_shadow_strength": "DEFAULT_SUBTITLE_SHADOW_STRENGTH",
+        "default_subtitle_safe_zone_enabled": "DEFAULT_SUBTITLE_SAFE_ZONE_ENABLED",
+        "default_subtitle_safe_zone_platform": "DEFAULT_SUBTITLE_SAFE_ZONE_PLATFORM",
+        "default_subtitle_safe_zone_config": "DEFAULT_SUBTITLE_SAFE_ZONE_CONFIG",
+        "default_word_pop_enabled": "DEFAULT_WORD_POP_ENABLED",
+        "default_music_volume": "DEFAULT_MUSIC_VOLUME",
+        "default_ducking_enabled": "DEFAULT_DUCKING_ENABLED",
+        "default_ducking_amount": "DEFAULT_DUCKING_AMOUNT",
         "redis_url": "REDIS_URL",
     }
 
     for field, value in updates.items():
-        if value is not None and field in key_map:
-            existing[key_map[field]] = value
+        if field not in key_map:
+            continue
+        env_key = key_map[field]
+        if value is None:
+            existing.pop(env_key, None)
+        else:
+            existing[env_key] = json.dumps(value) if isinstance(value, (dict, list)) else value
 
     lines = [f"{k}={v}" for k, v in existing.items()]
     env_path.write_text("\n".join(lines) + "\n")
 
     get_settings.cache_clear()
     return {"status": "updated"}
+
+
+@router.get("/video-style", response_model=VideoStyleSettings)
+async def get_video_style_settings():
+    return _video_style_from_app_settings()
+
+
+@router.post("/video-style", response_model=VideoStyleSettings)
+async def update_video_style_settings(data: VideoStyleSettings):
+    await update_settings(
+        AppSettings(
+            default_ken_burns_enabled=data.ken_burns_enabled,
+            default_ken_burns_zoom_percent=data.ken_burns_zoom_percent,
+            default_ken_burns_motion=data.ken_burns_motion,
+            default_film_grain_enabled=data.film_grain_enabled,
+            default_film_grain_intensity=data.film_grain_intensity,
+            default_vignette_enabled=data.vignette_enabled,
+            default_vignette_intensity=data.vignette_intensity,
+            default_lut_enabled=data.lut_enabled,
+            default_lut_path=data.lut_path,
+            default_transition=data.default_transition,
+            default_transition_duration_sec=data.transition_duration_sec,
+            default_scene_duration_min=data.scene_duration_min,
+            default_scene_duration_max=data.scene_duration_max,
+        )
+    )
+    return _video_style_from_app_settings()
+
+
+@router.get("/subtitles", response_model=SubtitleSettings)
+async def get_subtitle_settings():
+    return _subtitle_settings_from_app_settings()
+
+
+@router.post("/subtitles", response_model=SubtitleSettings)
+async def update_subtitle_settings(data: SubtitleSettings):
+    await update_settings(
+        AppSettings(
+            default_subtitle_font=data.font_family,
+            default_subtitle_size=data.font_size,
+            default_subtitle_color=data.text_color,
+            default_subtitle_position=data.position,
+            default_subtitle_background_opacity=data.background_opacity,
+            default_subtitle_words_per_group=data.words_per_group,
+            default_subtitle_shadow_enabled=data.shadow_enabled,
+            default_subtitle_shadow_strength=data.shadow_strength,
+            default_subtitle_safe_zone_enabled=data.safe_zone_enabled,
+            default_subtitle_safe_zone_platform=data.safe_zone_platform,
+            default_subtitle_safe_zone_config=data.safe_zone_config.model_dump() if data.safe_zone_config else None,
+            default_word_pop_enabled=data.word_pop_enabled,
+        )
+    )
+    return _subtitle_settings_from_app_settings()
+
+
+@router.get("/audio", response_model=AudioSettings)
+async def get_audio_settings():
+    return _audio_settings_from_app_settings()
+
+
+@router.post("/audio", response_model=AudioSettings)
+async def update_audio_settings(data: AudioSettings):
+    await update_settings(
+        AppSettings(
+            default_music_volume=data.music_volume,
+            default_ducking_enabled=data.ducking_enabled,
+            default_ducking_amount=data.ducking_amount,
+            default_tts_provider=data.voice_provider,
+            default_tts_voice=data.voice_id,
+        )
+    )
+    return _audio_settings_from_app_settings()
+
+
+@router.get("/safe-zones", response_model=SafeZoneResponse)
+async def get_safe_zone_settings():
+    return SafeZoneResponse()
 
 
 @router.get("/providers")

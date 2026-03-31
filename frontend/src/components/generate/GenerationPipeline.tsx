@@ -8,6 +8,13 @@ import { Check, Loader2, Minus } from "lucide-react";
 import { useProjectStore } from "@/stores/projectStore";
 import { api } from "@/lib/api";
 import type { PipelineStepState } from "@/lib/types";
+import {
+  buildEngineStageStates,
+  engineStageLabel,
+  inferCurrentStage,
+  inferTargetStage,
+  summarizeEngineOutcome,
+} from "@/lib/engine-pipeline";
 import { pickLatestAsset } from "@/components/projects/scene-assets";
 import { cn } from "@/lib/utils";
 
@@ -37,9 +44,9 @@ function StepDot({ state }: { state: PipelineStepState }) {
 }
 
 const labels: { key: "storyboard" | "image" | "tts"; short: string }[] = [
-  { key: "storyboard", short: "SB" },
+  { key: "storyboard", short: "Plan" },
   { key: "image", short: "Img" },
-  { key: "tts", short: "TTS" },
+  { key: "tts", short: "Voice" },
 ];
 
 export const GenerationPipeline = memo(function GenerationPipeline() {
@@ -108,6 +115,11 @@ export const GenerationPipeline = memo(function GenerationPipeline() {
 
   const detail = jobDetails[activeJob.id] || "";
   const busy = activeJob.status === "queued" || activeJob.status === "in_progress";
+  const stageRows = buildEngineStageStates(activeJob, wsPipeline, detail);
+  const currentStage = inferCurrentStage(activeJob, wsPipeline, detail);
+  const targetStage = inferTargetStage(activeJob, wsPipeline, detail);
+  const shouldShowSceneRows = rows.length > 0 && targetStage !== "storyboard" && currentStage !== "storyboard";
+  const helperText = detail || summarizeEngineOutcome(activeJob, wsPipeline, detail);
 
   return (
     <div
@@ -116,50 +128,76 @@ export const GenerationPipeline = memo(function GenerationPipeline() {
       aria-busy={busy}
     >
       <div className="border-b border-border px-3 py-2.5">
-        <h3 className="text-sm font-semibold">Generation pipeline</h3>
+        <h3 className="text-sm font-semibold">Creation progress</h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          {detail || "Tracking storyboard, images, and voice per scene."}
+          {helperText}
         </p>
       </div>
-      {rows.length === 0 ? (
+      <div className="border-b border-border/70 px-3 py-3">
+        <div className="flex flex-wrap gap-2">
+          {stageRows.map((stage) => (
+            <div
+              key={stage.stage}
+              className={cn(
+                "min-w-[112px] rounded-lg border px-3 py-2",
+                stage.state === "processing" && "border-sky-500/30 bg-sky-500/5",
+                stage.state === "complete" && "border-emerald-500/25 bg-emerald-500/5",
+                stage.state === "failed" && "border-destructive/30 bg-destructive/5",
+                (stage.state === "pending" || stage.state === "skipped") && "border-border bg-muted/15",
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <StepDot state={stage.state} />
+                <span className="text-xs font-medium">{stage.label}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {!shouldShowSceneRows ? (
         <div className="px-3 py-4 text-sm text-muted-foreground text-center">
-          Preparing scenes… {activeJob.progress}%
+          {busy ? `Working on ${engineStageLabel(currentStage).toLowerCase()}... ${activeJob.progress}%` : helperText}
         </div>
       ) : (
-        <div className="overflow-x-auto p-2.5">
-          <div className="flex gap-2 min-w-max">
-            {rows.map((row) => (
-              <motion.div
-                layout
-                key={`${row.index}-${row.sceneId ?? "pending"}`}
-                className={cn(
-                  "w-[100px] shrink-0 rounded-lg border px-2 py-2 text-center",
-                  busy ? "border-sky-500/30 bg-sky-500/5" : "border-border bg-muted/20",
-                )}
-              >
-                <p className="text-[11px] font-medium text-muted-foreground mb-1.5">Scene {row.index + 1}</p>
-                <div className="flex justify-center gap-1">
-                  {labels.map(({ key, short }) => (
-                    <div
-                      key={key}
-                      className="flex flex-col items-center gap-0.5"
-                      title={`${key}: ${row[key]}`}
+        <div className="p-2.5">
+          <div className="mb-2 px-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+            Scene asset prep
+          </div>
+          <div className="overflow-x-auto">
+            <div className="flex gap-2 min-w-max">
+              {rows.map((row) => (
+                <motion.div
+                  layout
+                  key={`${row.index}-${row.sceneId ?? "pending"}`}
+                  className={cn(
+                    "w-[100px] shrink-0 rounded-lg border px-2 py-2 text-center",
+                    busy ? "border-sky-500/30 bg-sky-500/5" : "border-border bg-muted/20",
+                  )}
+                >
+                  <p className="text-[11px] font-medium text-muted-foreground mb-1.5">Scene {row.index + 1}</p>
+                  <div className="flex justify-center gap-1">
+                    {labels.map(({ key, short }) => (
+                      <div
+                        key={key}
+                        className="flex flex-col items-center gap-0.5"
+                        title={`${key}: ${row[key]}`}
+                      >
+                        <StepDot state={row[key]} />
+                        <span className="text-[9px] text-muted-foreground">{short}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {projectId ? (
+                    <Link
+                      href={`/projects/${projectId}/studio`}
+                      className="mt-2 inline-block text-[10px] text-primary hover:underline"
                     >
-                      <StepDot state={row[key]} />
-                      <span className="text-[9px] text-muted-foreground">{short}</span>
-                    </div>
-                  ))}
-                </div>
-                {projectId ? (
-                  <Link
-                    href={`/projects/${projectId}/studio`}
-                    className="mt-2 inline-block text-[10px] text-primary hover:underline"
-                  >
-                    Studio
-                  </Link>
-                ) : null}
-              </motion.div>
-            ))}
+                      Studio
+                    </Link>
+                  ) : null}
+                </motion.div>
+              ))}
+            </div>
           </div>
         </div>
       )}

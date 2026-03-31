@@ -7,6 +7,17 @@ export function allScenesHaveImages(scenes: Scene[]): boolean {
   return scenes.length > 0 && scenes.every((s) => !!pickLatestAsset(s.assets, "image"));
 }
 
+export function allScenesHaveAudio(scenes: Scene[]): boolean {
+  return scenes.length > 0 && scenes.every((s) => !!pickLatestAsset(s.assets, "audio"));
+}
+
+export function allScenesHaveNarration(scenes: Scene[]): boolean {
+  return (
+    scenes.length > 0 &&
+    scenes.every((s) => !!((s.narration || s.subtitle || "").trim()))
+  );
+}
+
 export function extractJobErrorMessage(job: Job | null | undefined): string {
   if (!job?.error) return "Generation failed";
   const m = job.error.message;
@@ -31,6 +42,18 @@ export interface StudioRecoveryContext {
   message: string;
 }
 
+export function getStudioRecoveryStepLabel(stepHint: StudioStepHint): string {
+  if (stepHint === 0) return "Storyboard";
+  if (stepHint === 1) return "Assets";
+  return "Compile";
+}
+
+export function getStudioRecoveryActionLabel(stepHint: StudioStepHint): string {
+  if (stepHint === 0) return "Retry storyboard";
+  if (stepHint === 1) return "Retry asset prep";
+  return "Retry compile";
+}
+
 /**
  * Maps scene state to which studio step should surface recovery for a failed job.
  */
@@ -43,7 +66,7 @@ export function getStudioRecoveryContext(
   if (scenes.length === 0) {
     return { stepHint: 0, message };
   }
-  if (!allScenesHaveImages(scenes)) {
+  if (!allScenesHaveImages(scenes) || !allScenesHaveAudio(scenes)) {
     return { stepHint: 1, message };
   }
   return { stepHint: 3, message };

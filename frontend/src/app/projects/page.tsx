@@ -12,7 +12,6 @@ import {
   Trash2,
   XSquare,
   Youtube,
-  Sparkles,
   ExternalLink,
   Upload,
   X,
@@ -30,6 +29,7 @@ import { ProjectCard, ProjectCardSkeleton } from "@/components/project-card";
 import { notify } from "@/lib/notify";
 import { api, type YouTubeChannelsStatus } from "@/lib/api";
 import { useProjectStore } from "@/stores/projectStore";
+import { appConfirm } from "@/stores/confirmDialogStore";
 import type { ProjectListItem } from "@/lib/types";
 import { useCancelProjectMutation, useDeleteProjectMutation, useProjectsLibraryQuery, useRetryProjectActionMutation } from "@/lib/queries";
 
@@ -37,9 +37,25 @@ type SortKey = "newest" | "oldest" | "title_asc" | "scene_desc";
 type SceneBucket = "all" | "small" | "medium" | "large";
 type DateRange = "all" | "7d" | "30d" | "90d";
 /** "active" = generating / in_progress / queued on the project record */
-type StatusFilterKey = "all" | "active" | "failed" | "ready_for_edit" | "completed" | "draft";
+type StatusFilterKey =
+  | "all"
+  | "active"
+  | "failed"
+  | "ready_for_edit"
+  | "ready_for_compile"
+  | "completed"
+  | "draft";
 
 const ACTIVE_STATUSES = new Set(["generating", "in_progress", "queued"]);
+const STATUS_FILTER_OPTIONS = [
+  { key: "all" as const, label: "All" },
+  { key: "active" as const, label: "Running" },
+  { key: "failed" as const, label: "Failed" },
+  { key: "ready_for_edit" as const, label: "Ready to review" },
+  { key: "ready_for_compile" as const, label: "Ready to compile" },
+  { key: "completed" as const, label: "Completed" },
+  { key: "draft" as const, label: "Draft" },
+];
 
 function daysAgo(iso: string): number {
   const ms = Date.now() - new Date(iso).getTime();
@@ -61,8 +77,6 @@ export default function ProjectsPage() {
   const [dateRange, setDateRange] = useState<DateRange>("all");
   const [sortBy, setSortBy] = useState<SortKey>("newest");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [pendingDeleteProjectId, setPendingDeleteProjectId] = useState<string | null>(null);
-  const [bulkDeleteArmed, setBulkDeleteArmed] = useState(false);
   const [ytStatus, setYtStatus] = useState<YouTubeChannelsStatus | null>(null);
   const [ytDialogProject, setYtDialogProject] = useState<ProjectListItem | null>(null);
   const [ytJobId, setYtJobId] = useState<string | null>(null);
@@ -108,6 +122,7 @@ export default function ProjectsPage() {
       active: 0,
       failed: 0,
       ready_for_edit: 0,
+      ready_for_compile: 0,
       completed: 0,
       draft: 0,
     };
@@ -115,6 +130,7 @@ export default function ProjectsPage() {
       if (ACTIVE_STATUSES.has(p.status)) c.active += 1;
       else if (p.status === "failed") c.failed += 1;
       else if (p.status === "ready_for_edit") c.ready_for_edit += 1;
+      else if (p.status === "ready_for_compile") c.ready_for_compile += 1;
       else if (p.status === "completed") c.completed += 1;
       else if (p.status === "draft") c.draft += 1;
     }
@@ -163,13 +179,52 @@ export default function ProjectsPage() {
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const filteredIds = useMemo(() => filtered.map((p) => p.id), [filtered]);
+  const activeFilterLabels = useMemo(() => {
+    const labels: string[] = [];
+    if (statusFilter !== "all") {
+      labels.push(STATUS_FILTER_OPTIONS.find((option) => option.key === statusFilter)?.label ?? statusFilter);
+    }
+    if (storyTypeFilter !== "all") labels.push(storyTypeFilter);
+    if (sceneBucket !== "all") {
+      labels.push(
+        sceneBucket === "small"
+          ? "1-3 scenes"
+          : sceneBucket === "medium"
+            ? "4-8 scenes"
+            : "9+ scenes",
+      );
+    }
+    if (dateRange !== "all") {
+      labels.push(
+        dateRange === "7d"
+          ? "Last 7 days"
+          : dateRange === "30d"
+            ? "Last 30 days"
+            : "Last 90 days",
+      );
+    }
+    if (sortBy !== "newest") {
+      labels.push(
+        sortBy === "oldest"
+          ? "Oldest first"
+          : sortBy === "title_asc"
+            ? "Title A-Z"
+            : "Most scenes",
+      );
+    }
+    return labels;
+  }, [statusFilter, storyTypeFilter, sceneBucket, dateRange, sortBy]);
 
   const handleDelete = async (id: string) => {
-    if (pendingDeleteProjectId !== id) {
-      setPendingDeleteProjectId(id);
-      notify.message("Press delete again to confirm.");
-      return;
-    }
+    const project = projects.find((p) => p.id === id);
+    const ok = await appConfirm({
+      title: "Delete project?",
+      description: `Delete "${project?.title ?? "this project"}" and all of its generated data. This cannot be undone.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
       await deleteProjectMutation.mutateAsync(id);
       setProjects(projects.filter((p) => p.id !== id));
@@ -177,8 +232,6 @@ export default function ProjectsPage() {
       notify.success("Project deleted");
     } catch (e) {
       notify.error((e as Error).message);
-    } finally {
-      setPendingDeleteProjectId(null);
     }
   };
 
@@ -186,7 +239,7 @@ export default function ProjectsPage() {
     try {
       await retryProjectMutation.mutateAsync(id);
       setProjects(projects.map((p) => (p.id === id ? { ...p, status: "generating" } : p)));
-      notify.success("Retry queued");
+      notify.success("Retry added to queue");
     } catch (e) {
       notify.error((e as Error).message);
     }
@@ -196,7 +249,7 @@ export default function ProjectsPage() {
     try {
       await cancelProjectMutation.mutateAsync(id);
       setProjects(projects.map((p) => (p.id === id ? { ...p, status: "failed" } : p)));
-      notify.success("Project cancelled");
+      notify.success("Project stopped");
     } catch (e) {
       notify.error((e as Error).message);
     }
@@ -210,16 +263,24 @@ export default function ProjectsPage() {
     setYtChannelId(ytChannels.length === 1 ? ytChannels[0].channel_id : null);
     try {
       const jobs = await api.listJobs({ limit: 50, project_id: project.id });
-      const projectJobs = jobs.filter((j: { project_id: string; status: string; type?: string; result?: { video_path?: string } }) => j.project_id === project.id && j.status === "completed" && j.type === "video_render" && j.result?.video_path);
+      const projectJobs = jobs.filter(
+        (j) =>
+          j.project_id === project.id &&
+          j.status === "completed" &&
+          j.type === "video_render" &&
+          !!(j.result?.video_path || j.result?.video_url),
+      );
       if (projectJobs.length) {
-        const sorted = [...projectJobs].sort((a: { created_at: string }, b: { created_at: string }) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const sorted = [...projectJobs].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        );
         setYtJobId(sorted[0].id);
       } else {
-        notify.error("No completed video found for this project");
+      notify.error("No finished video found for this project");
         setYtDialogProject(null);
       }
     } catch {
-      notify.error("Failed to load job data");
+      notify.error("Could not load task data");
       setYtDialogProject(null);
     }
   };
@@ -241,7 +302,7 @@ export default function ProjectsPage() {
         description: meta.description || f.description,
         tags: meta.tags?.join(", ") || f.tags,
       }));
-      notify.success("AI metadata generated");
+      notify.success("AI title and description generated");
     } catch (e: unknown) {
       notify.error(e instanceof Error ? e.message : "Failed to generate metadata");
     } finally {
@@ -263,7 +324,7 @@ export default function ProjectsPage() {
         privacy: ytForm.privacy,
       });
       setYtResult(result);
-      notify.success("Video uploaded to YouTube!");
+      notify.success("Video uploaded to YouTube");
     } catch (e: unknown) {
       notify.error(e instanceof Error ? e.message : "YouTube upload failed");
     } finally {
@@ -282,7 +343,6 @@ export default function ProjectsPage() {
 
   const clearSelection = useCallback(() => {
     setSelectedIds([]);
-    setBulkDeleteArmed(false);
   }, []);
 
   const resetFilters = () => {
@@ -296,11 +356,14 @@ export default function ProjectsPage() {
 
   const runBulkDelete = async () => {
     if (!selectedIds.length) return;
-    if (!bulkDeleteArmed) {
-      setBulkDeleteArmed(true);
-      notify.message(`Press bulk delete again to delete ${selectedIds.length} project(s).`);
-      return;
-    }
+    const confirmed = await appConfirm({
+      title: `Delete ${selectedIds.length} project${selectedIds.length === 1 ? "" : "s"}?`,
+      description: "This will permanently remove the selected projects and all related data. This cannot be undone.",
+      confirmLabel: "Delete selected",
+      cancelLabel: "Cancel",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     const ok = new Set<string>();
     await Promise.all(
       selectedIds.map(async (id) => {
@@ -315,7 +378,6 @@ export default function ProjectsPage() {
     setProjects(projects.filter((p) => !ok.has(p.id)));
     clearSelection();
     notify.success(`Deleted ${ok.size} project(s)`);
-    setBulkDeleteArmed(false);
   };
 
   const runBulkRetry = async () => {
@@ -340,7 +402,7 @@ export default function ProjectsPage() {
   const runBulkCancel = async () => {
     const ids = selectedIds.filter((id) => projects.find((p) => p.id === id)?.status === "generating");
     if (!ids.length) {
-      notify.message("Select generating projects to cancel.");
+      notify.message("Select running projects to stop.");
       return;
     }
     await Promise.all(
@@ -353,23 +415,54 @@ export default function ProjectsPage() {
       })
     );
     setProjects(projects.map((p) => (ids.includes(p.id) ? { ...p, status: "failed" } : p)));
-    notify.success(`Cancelled ${ids.length} project(s)`);
+      notify.success(`Stopped ${ids.length} project(s)`);
   };
 
   return (
-    <div className="space-y-6 w-full text-slate-900 dark:text-slate-100">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2"><FolderOpen className="h-8 w-8 text-cyan-500" /> Library</h1>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">
-            {projects.length} project{projects.length === 1 ? "" : "s"}
-            {projects.length >= 500 ? " (showing up to 500 — use search to narrow)" : ""}
-          </p>
+    <div className="w-full space-y-5 text-slate-900 dark:text-slate-100">
+      <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-linear-to-br from-white via-slate-50/95 to-cyan-50/40 px-5 py-4 shadow-sm dark:border-zinc-700/80 dark:from-zinc-900 dark:via-zinc-900 dark:to-cyan-950/15 sm:px-6">
+        <div className="pointer-events-none absolute right-0 top-0 h-28 w-28 rounded-full bg-cyan-500/8 blur-3xl" />
+        <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight sm:text-3xl">
+              <FolderOpen className="h-7 w-7 text-cyan-500" />
+              Library
+            </h1>
+            <p className="mt-1 max-w-2xl text-sm text-slate-600 dark:text-slate-400">
+              Find the right project quickly, keep active work visible, and jump back into Studio without digging through UI noise.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge variant="secondary" className="rounded-full px-3 py-1 text-[11px] uppercase tracking-wide">
+                {filtered.length} visible
+              </Badge>
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px]">
+                {projects.length} total
+              </Badge>
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px]">
+                {statusCounts.active} running
+              </Badge>
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px]">
+                {statusCounts.ready_for_compile} ready to compile
+              </Badge>
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-[11px]">
+                {statusCounts.failed} need attention
+              </Badge>
+            </div>
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              {projects.length >= 500 ? "Showing up to 500 projects. Use search or filters to narrow the list." : "Browse all projects or refine the list below."}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href="/generate">
+              <Button className="rounded-xl">
+                <Plus className="h-4 w-4" /> New Project
+              </Button>
+            </Link>
+          </div>
         </div>
-        <Link href="/generate"><Button><Plus className="h-4 w-4" /> New Project</Button></Link>
       </div>
 
-      <div className="relative z-1 rounded-xl border border-slate-200/80 dark:border-zinc-700/80 bg-slate-50/40 dark:bg-zinc-900/40 p-4 sm:p-5 space-y-4">
+      <div className="rounded-2xl border border-slate-200/80 bg-slate-50/35 p-4 shadow-sm dark:border-zinc-700/80 dark:bg-zinc-900/35 sm:p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-4">
           <Field id="projects-search" label="Search" className="min-w-0 flex-1">
             <div className="relative">
@@ -383,7 +476,7 @@ export default function ProjectsPage() {
               />
             </div>
           </Field>
-          <div className="space-y-1.5 w-full lg:w-52 shrink-0">
+          <div className="w-full shrink-0 space-y-1.5 lg:w-52">
             <span className="text-sm font-medium text-slate-700 dark:text-slate-200 block" id="projects-filter-sort-label">
               Sort
             </span>
@@ -399,22 +492,22 @@ export default function ProjectsPage() {
               </SelectContent>
             </Select>
           </div>
+          {hasNonDefaultFilters ? (
+            <Button type="button" variant="ghost" className="lg:mb-0.5" onClick={resetFilters}>
+              Reset filters
+            </Button>
+          ) : null}
         </div>
 
-        <div className="space-y-2">
+        <div className="mt-4 space-y-2">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">Status</p>
           <div className="flex flex-wrap gap-2">
-            {(
-              [
-                { key: "all" as const, label: "All" },
-                { key: "active" as const, label: "In progress" },
-                { key: "failed" as const, label: "Failed" },
-                { key: "ready_for_edit" as const, label: "Ready to edit" },
-                { key: "completed" as const, label: "Completed" },
-                { key: "draft" as const, label: "Draft" },
-              ] as const
-            )
-              .filter((row) => row.key !== "draft" || statusCounts.draft > 0)
+            {STATUS_FILTER_OPTIONS
+              .filter(
+                (row) =>
+                  (row.key !== "draft" || statusCounts.draft > 0) &&
+                  (row.key !== "ready_for_compile" || statusCounts.ready_for_compile > 0)
+              )
               .map(({ key, label }) => (
                 <Button
                   key={key}
@@ -429,15 +522,9 @@ export default function ProjectsPage() {
                 </Button>
               ))}
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {filtered.length === projects.length
-              ? `Showing all ${filtered.length} loaded`
-              : `Showing ${filtered.length} of ${projects.length} loaded`}
-            {filtered.length === 0 && projects.length > 0 ? " — try another status or search" : ""}
-          </p>
         </div>
 
-        <details className="group border-t border-slate-200/70 dark:border-zinc-700/70 pt-3 [&_summary::-webkit-details-marker]:hidden">
+        <details className="group mt-4 border-t border-slate-200/70 pt-3 dark:border-zinc-700/70 [&_summary::-webkit-details-marker]:hidden">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-lg py-1 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white">
             <span className="flex items-center gap-2">
               <SlidersHorizontal className="h-4 w-4 text-slate-500" />
@@ -504,7 +591,34 @@ export default function ProjectsPage() {
           </div>
         </details>
 
-        <div className="flex flex-wrap gap-2 items-center pt-1 border-t border-slate-200/70 dark:border-zinc-700/70">
+        <div className="mt-4 flex flex-col gap-3 border-t border-slate-200/70 pt-3 dark:border-zinc-700/70 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <span className="font-medium text-slate-900 dark:text-slate-100">
+              {filtered.length === projects.length
+                ? `Showing all ${filtered.length} loaded`
+                : `Showing ${filtered.length} of ${projects.length} loaded`}
+            </span>
+            {filtered.length === 0 && projects.length > 0 ? (
+              <span className="text-slate-500 dark:text-slate-400">Try another status or search.</span>
+            ) : null}
+            {activeFilterLabels.map((label) => (
+              <Badge key={label} variant="secondary" className="rounded-full px-2.5 py-0.5 text-[11px]">
+                {label}
+              </Badge>
+            ))}
+            {search.trim() ? (
+              <Badge variant="secondary" className="rounded-full px-2.5 py-0.5 text-[11px]">
+                Search: {search.trim()}
+              </Badge>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedIds.length > 0 ? (
+              <Badge variant="secondary" className="rounded-full px-3 py-1 text-[11px] uppercase tracking-wide">
+                {selectedIds.length} selected
+              </Badge>
+            ) : null}
           <Button type="button" size="sm" variant="outline" onClick={selectAllFiltered} disabled={filtered.length === 0}>
             <CheckSquare className="h-4 w-4" /> Select all shown ({filtered.length})
           </Button>
@@ -521,52 +635,39 @@ export default function ProjectsPage() {
           >
             <XSquare className="h-4 w-4" /> Clear selection
           </Button>
-          {hasNonDefaultFilters ? (
-            <Button type="button" size="sm" variant="ghost" onClick={resetFilters}>
-              Reset filters
-            </Button>
-          ) : null}
+            {selectedIds.length > 0 ? (
+              <>
+                <Button type="button" size="sm" variant="outline" onClick={runBulkRetry}>
+                  <RotateCcw className="h-4 w-4" /> Try again
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={runBulkCancel}>
+                  <StopCircle className="h-4 w-4" /> Stop
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  onClick={runBulkDelete}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete
+                </Button>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
 
-      {selectedIds.length > 0 && (
-        <Card className="border-cyan-500/30">
-          <CardContent className="py-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-medium">{selectedIds.length} selected</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  clearSelection();
-                }}
-              >
-                <XSquare className="h-4 w-4" /> Clear selection
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={runBulkRetry}>
-                <RotateCcw className="h-4 w-4" /> Bulk retry
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={runBulkCancel}>
-                <StopCircle className="h-4 w-4" /> Bulk cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={bulkDeleteArmed ? "destructive" : "outline"}
-                onClick={runBulkDelete}
-              >
-                <Trash2 className="h-4 w-4" /> Bulk delete
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Projects</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Open a project to continue editing, export, or recover it.
+          </p>
+        </div>
+      </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {Array.from({ length: 12 }).map((_, i) => (
             <ProjectCardSkeleton key={i} />
           ))}
@@ -578,7 +679,7 @@ export default function ProjectsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {filtered.map((project) => (
             <ProjectCard
               key={project.id}

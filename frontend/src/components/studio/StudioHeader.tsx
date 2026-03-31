@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { toFriendlyStatus } from "@/lib/user-facing-text";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
@@ -15,6 +16,7 @@ export interface StudioHeaderProps {
   onClose: () => void;
   stepLabel?: string;
   stepStatus?: string;
+  projectStatus?: string;
   onSaveDraft?: () => void;
   onResumeDraft?: () => void;
   draftSavedAt?: string | null;
@@ -29,6 +31,7 @@ export function StudioHeader({
   onClose,
   stepLabel,
   stepStatus,
+  projectStatus,
   onSaveDraft,
   onResumeDraft,
   draftSavedAt,
@@ -38,6 +41,16 @@ export function StudioHeader({
 
   const fromColor = BEAM_COLORS[Math.max(currentStep - 2, 0)] ?? BEAM_COLORS[0];
   const toColor = BEAM_COLORS[Math.min(currentStep - 1, BEAM_COLORS.length - 1)] ?? BEAM_COLORS[0];
+  const projectStatusVariant =
+    projectStatus === "completed"
+      ? "success"
+      : projectStatus === "ready_for_compile"
+        ? "warning"
+        : projectStatus === "failed"
+          ? "error"
+          : projectStatus === "generating" || projectStatus === "in_progress" || projectStatus === "queued"
+            ? "inProgress"
+            : "secondary";
 
   return (
     <motion.header
@@ -71,69 +84,73 @@ export function StudioHeader({
         />
       </div>
 
-      {/* Header bar */}
-      <div className="flex h-12 items-center bg-background/90 backdrop-blur-xl border-b border-border/20">
-        <div className="relative z-10 grid h-full w-full grid-cols-3 items-center gap-2 px-3 sm:px-4">
-          <div className="flex justify-start">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "shrink-0 text-muted-foreground transition-colors h-8 w-8",
-                "hover:bg-primary/10 hover:text-primary",
-              )}
-              onClick={onClose}
-              aria-label="Leave studio"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </div>
-
-          <div className="mx-auto flex min-w-0 max-w-[min(100%,20rem)] items-center justify-center gap-2">
-            <h1
-              className="min-w-0 truncate text-center text-sm font-medium text-foreground"
-              title={projectTitle}
-            >
-              {projectTitle}
-            </h1>
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-2 py-0.5",
-                "text-[8px] font-bold uppercase tracking-widest text-white",
-                "bg-linear-to-r from-primary/90 to-accent/90",
-                "ring-1 ring-white/15",
-              )}
-            >
-              Studio
-            </span>
-          </div>
-
-          <div className="flex items-center justify-end gap-2">
-            <div className="hidden items-center gap-2 text-[10px] text-muted-foreground/70 sm:flex">
-              {stepLabel && (
-                <Badge variant="secondary" className="h-5 rounded-full px-2 text-[9px] uppercase tracking-widest">
-                  {stepLabel}
-                </Badge>
-              )}
-              <span className="font-mono tabular-nums">
-                {Math.min(currentStep, totalSteps)}/{totalSteps}
-              </span>
+      <div className="border-b border-border/20 bg-background/88 backdrop-blur-xl">
+        <div className="relative z-10 flex flex-col gap-3 px-4 py-4 sm:px-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "mt-0.5 h-9 w-9 shrink-0 rounded-xl text-muted-foreground transition-colors",
+                  "hover:bg-primary/10 hover:text-primary",
+                )}
+                onClick={onClose}
+                aria-label="Leave studio"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white",
+                      "bg-linear-to-r from-primary/90 to-accent/90 ring-1 ring-white/15",
+                    )}
+                  >
+                    Studio
+                  </span>
+                  {projectStatus && (
+                    <Badge variant={projectStatusVariant} className="h-6 rounded-full px-2.5 text-[10px] uppercase tracking-wide">
+                      {toFriendlyStatus(projectStatus)}
+                    </Badge>
+                  )}
+                  {stepLabel && (
+                    <Badge variant="secondary" className="h-6 rounded-full px-2.5 text-[10px] uppercase tracking-wide">
+                      {stepLabel}
+                    </Badge>
+                  )}
+                </div>
+                <h1
+                  className="mt-2 truncate text-lg font-semibold tracking-tight text-foreground sm:text-xl"
+                  title={projectTitle}
+                >
+                  {projectTitle}
+                </h1>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-mono tabular-nums">
+                    Step {Math.min(currentStep, totalSteps)} of {totalSteps}
+                  </span>
+                  {stepStatus ? (
+                    <>
+                      <span className="text-border">•</span>
+                      <span aria-live="polite" className="font-medium text-foreground/75">
+                        {stepStatus}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
             </div>
 
-            {stepStatus && (
-              <span className="hidden text-[10px] font-medium text-muted-foreground/70 md:inline" aria-live="polite">
-                {stepStatus}
-              </span>
-            )}
-
-            <div className="flex items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-1.5">
               {onSaveDraft && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-8 px-2 text-[10px]"
+                  className="h-9 rounded-xl px-3 text-[11px]"
                   onClick={onSaveDraft}
                 >
                   Save draft
@@ -147,7 +164,7 @@ export function StudioHeader({
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-8 px-2 text-[10px]"
+                        className="h-9 rounded-xl px-3 text-[11px]"
                         onClick={onResumeDraft}
                       >
                         Resume

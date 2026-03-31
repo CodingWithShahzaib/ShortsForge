@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,12 +15,55 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import get_settings
 from backend.core.storage import build_key, get_storage, guess_content_type, local_path_for
 from backend.database import get_db
+from backend.engine.planning import ResolvedGenerationSettings
 from backend.models import Project, Job
 from backend.schemas import GenerateVideoRequest, BatchGenerateRequest, JobOut
 from backend.core.task_manager import task_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _resolve_pipeline_intent(req: GenerateVideoRequest) -> tuple[str, str]:
+    """Normalize new stage contract with legacy storyboard/prepare flags."""
+    mode = req.pipeline_mode or "manual"
+    stage = req.target_stage
+    if stage is None:
+        if req.storyboard_only:
+            stage = "storyboard"
+        elif req.prepare_only:
+            stage = "assets"
+        elif mode == "auto":
+            stage = "compile"
+        else:
+            stage = "storyboard"
+    if mode == "auto":
+        stage = "compile"
+    return mode, stage
+
+
+def _resolve_generation_settings(req: GenerateVideoRequest) -> dict[str, Any]:
+    """Resolve request settings into the canonical stored engine settings."""
+    app_settings = get_settings()
+    return ResolvedGenerationSettings.from_request(req, app_settings).to_settings_dict()
+
+
+def _job_to_out(job: Job) -> JobOut:
+    """Build a plain response model to avoid ORM recursive encoding edge-cases."""
+    result = job.result if isinstance(job.result, dict) else None
+    error = job.error if isinstance(job.error, dict) else None
+    return JobOut(
+        id=job.id,
+        project_id=job.project_id,
+        type=job.type,
+        status=job.status,
+        progress=int(job.progress or 0),
+        result=result,
+        error=error,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        created_at=job.created_at,
+    )
 
 
 async def _delete_final_videos_for_recompile(project_id: str, db: AsyncSession) -> None:
@@ -60,7 +104,7 @@ async def _requeue_failed_video_render(
     job: Job,
     project: Project,
     db: AsyncSession,
-) -> Job:
+) -> JobOut:
     """Reset a failed video_render job row, mark project generating, and enqueue the same job again."""
     from backend.core import redis_queue
 
@@ -85,6 +129,8 @@ async def _requeue_failed_video_render(
             "settings": None,
             "prepare_only": False,
             "storyboard_only": False,
+            "pipeline_mode": "manual",
+            "target_stage": "compile",
         }
 
     async def _do_render():
@@ -94,12 +140,13 @@ async def _requeue_failed_video_render(
     await task_manager.submit_to_redis(
         job.id, "video_render", redis_params, fallback_coro=_do_render,
     )
-    return job
+    return _job_to_out(job)
 
 
 @router.post("/video", response_model=JobOut)
 async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(get_db)):
-    _settings_dump = req.model_dump(exclude={"scenes", "control_mode", "storyboard_only"})
+    pipeline_mode, target_stage = _resolve_pipeline_intent(req)
+    _settings_dump = _resolve_generation_settings(req)
     project = Project(
         title=req.title or "AI Video",
         story_type=req.story_type,
@@ -138,8 +185,10 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
         "job_id": job.id,
         "scenes": scenes_payload,
         "settings": _settings_dump,
-        "prepare_only": req.prepare_only,
-        "storyboard_only": req.storyboard_only,
+        "prepare_only": target_stage == "assets",
+        "storyboard_only": target_stage == "storyboard",
+        "pipeline_mode": pipeline_mode,
+        "target_stage": target_stage,
     }
 
     async def _do_render():
@@ -198,11 +247,15 @@ class CompileRequest(BaseModel):
     project_id: str
 
 
+class AssetsStageRequest(BaseModel):
+    project_id: str
+
+
 @router.post("/incremental-render", response_model=JobOut)
 async def incremental_render_video(req: IncrementalRenderRequest, db: AsyncSession = Depends(get_db)):
     """Re-render only listed scenes and rebuild the final video; other scenes reuse existing clips/audio."""
     if not req.scene_ids:
-        raise HTTPException(400, "scene_ids must not be empty")
+        raise HTTPException(400, "Choose at least one scene to re-render.")
     result = await db.execute(select(Project).where(Project.id == req.project_id))
     project = result.scalar_one_or_none()
     if not project:
@@ -210,7 +263,7 @@ async def incremental_render_video(req: IncrementalRenderRequest, db: AsyncSessi
     if project.status not in ("ready_for_edit", "completed"):
         raise HTTPException(
             400,
-            f"Project must be ready_for_edit or completed for incremental render (current: {project.status}).",
+            f"This action is only available when the project is ready to review or already done (current: {project.status}).",
         )
 
     project.status = "generating"
@@ -231,6 +284,8 @@ async def incremental_render_video(req: IncrementalRenderRequest, db: AsyncSessi
         "settings": None,
         "prepare_only": False,
         "storyboard_only": False,
+        "pipeline_mode": "manual",
+        "target_stage": "compile",
         "incremental_scene_ids": req.scene_ids,
     }
 
@@ -253,10 +308,23 @@ async def compile_video(req: CompileRequest, db: AsyncSession = Depends(get_db))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if project.status not in ("ready_for_edit", "completed"):
+    if project.status == "generating":
+        active_jobs_result = await db.execute(
+            select(Job).where(
+                Job.project_id == project.id,
+                Job.status.in_(["queued", "in_progress"]),
+            )
+        )
+        active_jobs = active_jobs_result.scalars().all()
+        if not active_jobs:
+            # Recover from stale generating status when all work already finished.
+            project.status = "ready_for_compile"
+            await db.commit()
+            await db.refresh(project)
+    if project.status not in ("ready_for_edit", "ready_for_compile", "completed"):
         raise HTTPException(
             400,
-            "Compile is only available when the project is ready to edit or already has a completed video "
+            "Export is only available when the project is ready to review, ready to export, or already has a finished video "
             f"(current: {project.status}).",
         )
 
@@ -281,9 +349,56 @@ async def compile_video(req: CompileRequest, db: AsyncSession = Depends(get_db))
         "settings": None,
         "prepare_only": False,
         "storyboard_only": False,
+        "pipeline_mode": "manual",
+        "target_stage": "compile",
         # Re-encode each scene clip from the still image + current timing (required when
         # match_scenes_to_audio or other duration settings change; avoids reusing stale clips).
         "force_regenerate_scene_clips": True,
+    }
+
+    async def _do_render():
+        from backend.core.job_registry import handle_video_render
+        return await handle_video_render(redis_params)
+
+    await task_manager.submit_to_redis(
+        job.id, "video_render", redis_params, fallback_coro=_do_render,
+    )
+    return job
+
+
+@router.post("/assets", response_model=JobOut)
+async def prepare_assets(req: AssetsStageRequest, db: AsyncSession = Depends(get_db)):
+    """Generate scene-level image/audio assets only; does not compile final video."""
+    result = await db.execute(select(Project).where(Project.id == req.project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if project.status not in ("ready_for_edit", "ready_for_compile", "failed", "completed", "generating"):
+        raise HTTPException(
+            400,
+            f"You can't create assets for this project right now (current status: {project.status}).",
+        )
+
+    project.status = "generating"
+    job = Job(
+        project_id=project.id,
+        type="video_render",
+        status="queued",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    redis_params = {
+        "project_id": project.id,
+        "job_id": job.id,
+        "scenes": None,
+        "settings": None,
+        "prepare_only": True,
+        "storyboard_only": False,
+        "pipeline_mode": "manual",
+        "target_stage": "assets",
     }
 
     async def _do_render():
@@ -308,7 +423,7 @@ async def retry_project(project_id: str, db: AsyncSession = Depends(get_db)):
     if project.status != "failed":
         raise HTTPException(
             400,
-            f"Project is not failed (status: {project.status}). Only failed projects can be retried.",
+            f"This project cannot be retried right now (status: {project.status}). Only failed projects can be retried.",
         )
 
     rj = await db.execute(
@@ -355,7 +470,7 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
         if project.status != "failed":
             raise HTTPException(
                 400,
-                f"Project is not failed (status: {project.status}). Only failed projects can be retried.",
+                f"This project cannot be retried right now (status: {project.status}). Only failed projects can be retried.",
             )
         return await _requeue_failed_video_render(job, project, db)
 
@@ -366,7 +481,7 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
     if not params:
         raise HTTPException(
             400,
-            "Retry not available: job params have expired. Please create a new generation.",
+            "Retry is no longer available for this task. Please start a new generation.",
         )
 
     job_type = job.type
@@ -391,7 +506,7 @@ async def retry_job(job_id: str, db: AsyncSession = Depends(get_db)):
     await task_manager.submit_to_redis(
         job.id, job_type, redis_params, fallback_coro=_dispatch_registered_handler,
     )
-    return job
+    return _job_to_out(job)
 
 
 @router.delete("/jobs/{job_id}", status_code=204)
@@ -402,7 +517,7 @@ async def delete_failed_job(job_id: str, db: AsyncSession = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
     if job.status != "failed":
-        raise HTTPException(400, f"Only failed jobs can be deleted (current status: {job.status}).")
+        raise HTTPException(400, f"Only failed tasks can be deleted (current status: {job.status}).")
 
     await task_manager.cancel_redis_job(job_id)
 
@@ -527,7 +642,7 @@ async def export_video(req: ExportRequest, db: AsyncSession = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
     if job.status != "completed" or not job.result or not job.result.get("video_path"):
-        raise HTTPException(400, "Job has no completed video to export")
+        raise HTTPException(400, "This task has no finished video to export.")
 
     res_preset = EXPORT_PRESETS.get(req.resolution)
     if not res_preset:
@@ -546,7 +661,7 @@ async def export_video(req: ExportRequest, db: AsyncSession = Depends(get_db)):
         local_input = str(temp_dir / Path(input_key).name)
         await storage.download_to_path(input_key, local_input)
     if not Path(local_input).exists():
-        raise HTTPException(400, "Source video file not found")
+        raise HTTPException(400, "The source video file could not be found.")
     output_name = f"export_{uuid.uuid4().hex[:8]}_{req.resolution}_{req.quality}.mp4"
     local_output = str((Path(settings.temp_dir) / "exports" / output_name))
 
@@ -556,7 +671,7 @@ async def export_video(req: ExportRequest, db: AsyncSession = Depends(get_db)):
         qual_preset["crf"], qual_preset["preset"],
     )
     if returncode != 0:
-        raise HTTPException(500, "FFmpeg export failed")
+        raise HTTPException(500, "Video export failed. Please try again.")
     export_key = build_key("videos", f"exports/{output_name}")
     await storage.save_file(export_key, local_output, guess_content_type(output_name))
 

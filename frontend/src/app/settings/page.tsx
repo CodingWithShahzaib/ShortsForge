@@ -42,6 +42,36 @@ export default function SettingsPage() {
     default_image_style: "realistic",
     default_word_count: 400,
     default_scene_count: 5,
+    default_scene_narration_style: "balanced",
+    default_inter_scene_pause_ms: 600,
+    default_transition_overlap_ms: 250,
+    default_use_production_storyboard: true,
+    default_match_scenes_to_audio: true,
+    default_visual_continuity: "",
+    default_ken_burns_enabled: true,
+    default_ken_burns_zoom_percent: 2.5,
+    default_ken_burns_motion: "auto",
+    default_film_grain_enabled: false,
+    default_film_grain_intensity: 0.05,
+    default_vignette_enabled: true,
+    default_vignette_intensity: 0.15,
+    default_transition_duration_sec: 0.3,
+    default_scene_duration_min: 2,
+    default_scene_duration_max: 4,
+    default_subtitle_font: "Arial",
+    default_subtitle_size: 48,
+    default_subtitle_color: "#FFFFFF",
+    default_subtitle_position: "bottom",
+    default_subtitle_words_per_group: 4,
+    default_subtitle_background_opacity: 0.65,
+    default_subtitle_shadow_enabled: true,
+    default_subtitle_shadow_strength: 0.85,
+    default_subtitle_safe_zone_enabled: true,
+    default_subtitle_safe_zone_platform: "tiktok",
+    default_word_pop_enabled: false,
+    default_music_volume: 0.3,
+    default_ducking_enabled: true,
+    default_ducking_amount: -12,
     ffmpeg_path: "ffmpeg",
     redis_url: "",
   });
@@ -108,7 +138,7 @@ export default function SettingsPage() {
     setNotifyPerm(next);
     if (next === "granted") {
       setDesktopNotifyEnabled(true);
-      notify.success("Background notifications enabled");
+      notify.success("Background notifications turned on");
     } else if (next === "denied") {
       notify.error("Notifications were blocked.");
     }
@@ -126,40 +156,87 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const updates: Record<string, string> = {};
+      const updates: Record<string, string | null> = {};
       Object.entries(form).forEach(([key, value]) => {
-        if (value != null && value !== "") updates[key] = String(value);
+        if (value == null) return;
+        if (typeof value === "object") return;
+        if (typeof value === "string") {
+          updates[key] = value === "" ? null : value;
+          return;
+        }
+        updates[key] = String(value);
       });
       await api.updateSettings(updates);
       const p = await api.listProviders();
       setProviders(p);
       setDefaults({
         llm_provider: form.default_llm_provider,
-        llm_model: form.default_llm_model,
+        llm_model: form.default_llm_model || "gpt-4o-mini",
         image_provider: form.default_image_provider,
         tts_provider: form.default_tts_provider,
-        tts_voice: form.default_tts_voice,
-        resolution: form.default_resolution,
-        transition: form.default_transition,
-        image_style: form.default_image_style,
+        tts_voice: form.default_tts_voice || "en-US-ChristopherNeural",
+        resolution: form.default_resolution || "1080x1920",
+        transition: form.default_transition || "fade",
+        image_style: form.default_image_style || "realistic",
         word_count: Number(form.default_word_count) || 400,
         scene_count: Number(form.default_scene_count) || 5,
+        scene_narration_style: form.default_scene_narration_style || "balanced",
+        inter_scene_pause_ms: Number(form.default_inter_scene_pause_ms) || 600,
+        transition_overlap_ms: Number(form.default_transition_overlap_ms) || 250,
+        use_production_storyboard: Boolean(form.default_use_production_storyboard),
+        match_scenes_to_audio: Boolean(form.default_match_scenes_to_audio),
+        visual_continuity: form.default_visual_continuity || "",
+        video_style: {
+          ken_burns_enabled: Boolean(form.default_ken_burns_enabled),
+          ken_burns_zoom_percent: Number(form.default_ken_burns_zoom_percent) || 2.5,
+          ken_burns_motion: (form.default_ken_burns_motion as any) || "auto",
+          film_grain_enabled: Boolean(form.default_film_grain_enabled),
+          film_grain_intensity: Number(form.default_film_grain_intensity) || 0.05,
+          vignette_enabled: Boolean(form.default_vignette_enabled),
+          vignette_intensity: Number(form.default_vignette_intensity) || 0.15,
+          lut_enabled: false,
+          lut_path: null,
+          default_transition: form.default_transition || "fade",
+          transition_duration_sec: Number(form.default_transition_duration_sec) || 0.3,
+          scene_duration_min: Number(form.default_scene_duration_min) || 2,
+          scene_duration_max: Number(form.default_scene_duration_max) || 4,
+        },
+        subtitles: {
+          font_family: form.default_subtitle_font || "Arial",
+          font_size: Number(form.default_subtitle_size) || 48,
+          position: (form.default_subtitle_position as any) || "bottom",
+          background_opacity: Number(form.default_subtitle_background_opacity) || 0.65,
+          text_color: form.default_subtitle_color || "#FFFFFF",
+          shadow_enabled: Boolean(form.default_subtitle_shadow_enabled),
+          shadow_strength: Number(form.default_subtitle_shadow_strength) || 0.85,
+          safe_zone_enabled: Boolean(form.default_subtitle_safe_zone_enabled),
+          safe_zone_platform: (form.default_subtitle_safe_zone_platform as any) || "tiktok",
+          words_per_group: Number(form.default_subtitle_words_per_group) || 4,
+          word_pop_enabled: Boolean(form.default_word_pop_enabled),
+        },
+        audio: {
+          music_volume: Number(form.default_music_volume) || 0.3,
+          ducking_enabled: Boolean(form.default_ducking_enabled),
+          ducking_amount: Number(form.default_ducking_amount) || -12,
+          voice_provider: form.default_tts_provider || "edge",
+          voice_id: form.default_tts_voice || "en-US-ChristopherNeural",
+        },
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       api.redisStatus().then(setRedisStatus).catch(() => {});
     } catch (err: any) {
-      notify.error(err?.message || "Failed to save settings");
+      notify.error(err?.message || "Could not save settings");
     } finally {
       setSaving(false);
     }
   };
 
-  const update = (key: string, value: string) => setForm((f) => ({ ...f, [key]: value }));
+  const update = (key: string, value: string | number | boolean) => setForm((f) => ({ ...f, [key]: value }));
 
   const handleYoutubeConnect = async () => {
     if (!ytStatus?.oauth_ready) {
-      notify.error("Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in the server .env file, then restart the backend.");
+      notify.error("Connect YouTube by adding YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in server .env, then restart the backend.");
       return;
     }
     setYtConnecting(true);
@@ -208,14 +285,14 @@ export default function SettingsPage() {
   };
 
   const apiKeys = [
-    { key: "openai_api_key", label: "OpenAI API Key", desc: "For GPT, TTS, Whisper, DALL-E" },
-    { key: "groq_api_key", label: "Groq API Key", desc: "For LLaMA models and fast inference" },
-    { key: "openrouter_api_key", label: "OpenRouter API Key", desc: "For free models (Gemini, Qwen, DeepSeek)" },
-    { key: "elevenlabs_api_key", label: "ElevenLabs API Key", desc: "For high-quality TTS voices" },
-    { key: "replicate_api_key", label: "Replicate API Key", desc: "For Flux image generation" },
-    { key: "fal_api_key", label: "FAL AI API Key", desc: "For Flux image generation" },
-    { key: "together_api_key", label: "Together AI API Key", desc: "For Flux image generation (free tier)" },
-    { key: "runware_api_key", label: "Runware API Key", desc: "For image generation" },
+    { key: "openai_api_key", label: "OpenAI API Key", desc: "Script AI, voice, speech-to-text, and images" },
+    { key: "groq_api_key", label: "Groq API Key", desc: "Fast script AI models" },
+    { key: "openrouter_api_key", label: "OpenRouter API Key", desc: "Access to multiple AI models" },
+    { key: "elevenlabs_api_key", label: "ElevenLabs API Key", desc: "Premium voice options" },
+    { key: "replicate_api_key", label: "Replicate API Key", desc: "Image generation" },
+    { key: "fal_api_key", label: "FAL AI API Key", desc: "Image generation" },
+    { key: "together_api_key", label: "Together AI API Key", desc: "Image generation (free tier available)" },
+    { key: "runware_api_key", label: "Runware API Key", desc: "Image generation" },
   ];
 
   const ytChannels = ytStatus?.channels || [];
@@ -229,8 +306,8 @@ export default function SettingsPage() {
   const sectionOptions = [
     { id: "account" as const, label: "Account", description: "Notifications and YouTube connections", icon: <Bell className="h-4 w-4" /> },
     { id: "providers" as const, label: "Providers", description: "API keys and provider status", icon: <Key className="h-4 w-4" /> },
-    { id: "generation" as const, label: "Generation", description: "Defaults for scripts, images, video, and TTS", icon: <Sparkles className="h-4 w-4" /> },
-    { id: "infrastructure" as const, label: "Infrastructure", description: "Queueing and local processing", icon: <Database className="h-4 w-4" /> },
+    { id: "generation" as const, label: "Creation", description: "Default script, image, video, and voice settings", icon: <Sparkles className="h-4 w-4" /> },
+    { id: "infrastructure" as const, label: "Advanced", description: "Queue and local processing setup", icon: <Database className="h-4 w-4" /> },
   ];
   const activeSectionMeta = sectionOptions.find((section) => section.id === activeSection);
 
@@ -239,7 +316,7 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2"><Settings className="h-8 w-8 text-cyan-500" /> Settings</h1>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">Configure API keys, providers, and infrastructure</p>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Configure API keys, defaults, and advanced setup</p>
         </div>
         <Button onClick={handleSave} disabled={saving}>
           {saving ? <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : saved ? <><CheckCircle className="h-4 w-4" /> Saved</> : <><Save className="h-4 w-4" /> Save</>}
@@ -254,11 +331,11 @@ export default function SettingsPage() {
             <p className="text-xs text-slate-500 dark:text-slate-400">Keys drive availability</p>
           </div>
           <div className="space-y-1">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Redis Queue</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Queue</p>
             <p className="text-lg font-semibold">
-              {redisStatus?.status === "connected" ? "Connected" : redisStatus?.enabled ? "Error" : "In-memory"}
+              {redisStatus?.status === "connected" ? "Connected" : redisStatus?.enabled ? "Error" : "Local mode"}
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{redisStatus?.enabled ? "Persistent queue" : "Ephemeral jobs"}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{redisStatus?.enabled ? "Persistent queue" : "Temporary queue"}</p>
           </div>
           <div className="space-y-1">
             <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">YouTube</p>
@@ -447,8 +524,8 @@ export default function SettingsPage() {
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Key className="h-5 w-5" /> API Keys</CardTitle>
-              <CardDescription>Your keys are stored in the .env file on the server</CardDescription>
+              <CardTitle className="flex items-center gap-2"><Key className="h-5 w-5" /> API keys</CardTitle>
+              <CardDescription>Your keys are saved in the server .env file</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-2">
               {apiKeys.map((item) => (
@@ -462,8 +539,8 @@ export default function SettingsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Provider Status</CardTitle>
-              <CardDescription>See which providers are configured and ready</CardDescription>
+              <CardTitle>Provider status</CardTitle>
+              <CardDescription>See which services are set up and ready</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -485,8 +562,8 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> AI Generation Defaults</CardTitle>
-              <CardDescription>Account-wide defaults for script, image, video, and TTS generation</CardDescription>
+              <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> Creation defaults</CardTitle>
+              <CardDescription>Default script, image, video, and voice settings for your account</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -506,16 +583,100 @@ export default function SettingsPage() {
                   <Input
                     type="number"
                     min={2}
-                    max={15}
+                    max={100}
                     value={form.default_scene_count ?? 5}
                     onChange={(e) => update("default_scene_count", e.target.value)}
                   />
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Scenes per video when generating from concept</p>
                 </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Default narration per scene</label>
+                  <Select
+                    value={form.default_scene_narration_style}
+                    onValueChange={(value) => update("default_scene_narration_style", value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Narration density" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="short">Short</SelectItem>
+                      <SelectItem value="balanced">Balanced</SelectItem>
+                      <SelectItem value="long">Long</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Controls how much spoken copy each generated scene should carry.
+                  </p>
+                </div>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Script / Storyboard LLM</label>
+                  <label className="text-sm font-medium mb-1 block">Default pause between scenes (ms)</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1200}
+                    step={50}
+                    value={form.default_inter_scene_pause_ms ?? 600}
+                    onChange={(e) => update("default_inter_scene_pause_ms", e.target.value)}
+                  />
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Adds a short pause between scenes</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Default transition overlap (ms)</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={800}
+                    step={50}
+                    value={form.default_transition_overlap_ms ?? 250}
+                    onChange={(e) => update("default_transition_overlap_ms", e.target.value)}
+                  />
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">How long scene transitions blend</p>
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="flex items-start gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.default_use_production_storyboard)}
+                    onChange={(e) => update("default_use_production_storyboard", e.target.checked)}
+                  />
+                  <span>
+                    Default director-style scenes
+                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                      Adds camera and lighting guidance by default.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.default_match_scenes_to_audio)}
+                    onChange={(e) => update("default_match_scenes_to_audio", e.target.checked)}
+                  />
+                  <span>
+                    Default sync scenes to narration
+                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                      Keeps scene durations aligned to voiceover.
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div>
+                    <label className="text-sm font-medium mb-1 block">Default visual consistency</label>
+                <Input
+                  value={form.default_visual_continuity ?? ""}
+                  onChange={(e) => update("default_visual_continuity", e.target.value)}
+                  placeholder="e.g. teal-orange palette, rain, solitary figure"
+                />
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Keeps a shared look and mood across scenes.
+                </p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Default script AI</label>
                   <Select value={form.default_llm_provider} onValueChange={(value) => update("default_llm_provider", value)}>
                     <SelectTrigger>
                       <SelectValue placeholder="Provider" />
@@ -528,7 +689,7 @@ export default function SettingsPage() {
                   </Select>
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">LLM Model</label>
+                  <label className="text-sm font-medium mb-1 block">AI model</label>
                   <Select value={form.default_llm_model} onValueChange={(value) => update("default_llm_model", value)} disabled={llmModelsLoading}>
                     <SelectTrigger>
                       <SelectValue placeholder={llmModelsLoading ? "Loading models…" : "Model"} />
@@ -542,11 +703,11 @@ export default function SettingsPage() {
                       })()}
                     </SelectContent>
                   </Select>
-                  {llmModelsLoading && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Fetching models from API…</p>}
+                  {llmModelsLoading && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Loading available models…</p>}
                 </div>
               </div>
               <div>
-                <label className="text-sm font-medium mb-1 block">Image Generation Provider</label>
+                <label className="text-sm font-medium mb-1 block">Default image engine</label>
                 <Select value={form.default_image_provider} onValueChange={(value) => update("default_image_provider", value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select provider" />
@@ -563,20 +724,20 @@ export default function SettingsPage() {
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="text-sm font-medium mb-1 block">TTS Provider</label>
+                  <label className="text-sm font-medium mb-1 block">Default voice engine</label>
                   <Select value={form.default_tts_provider} onValueChange={(value) => update("default_tts_provider", value)}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select provider" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="edge">Edge TTS (Free)</SelectItem>
-                      <SelectItem value="openai_tts">OpenAI TTS</SelectItem>
+                      <SelectItem value="edge">Edge Voice (Free)</SelectItem>
+                      <SelectItem value="openai_tts">OpenAI Voice</SelectItem>
                       <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Default TTS Voice ID</label>
+                  <label className="text-sm font-medium mb-1 block">Default voice ID</label>
                   <Input placeholder="en-US-ChristopherNeural" value={form.default_tts_voice} onChange={(e) => update("default_tts_voice", e.target.value)} />
                 </div>
               </div>
@@ -633,6 +794,154 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Video Style</CardTitle>
+              <CardDescription>Motion and visual treatment defaults for new projects.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.default_ken_burns_enabled)}
+                  onChange={(e) => update("default_ken_burns_enabled", e.target.checked)}
+                />
+                <span>Enable Ken Burns motion</span>
+              </label>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Ken Burns zoom %</label>
+                <Input type="number" min={0} max={8} step={0.1} value={form.default_ken_burns_zoom_percent ?? 2.5} onChange={(e) => update("default_ken_burns_zoom_percent", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Motion style</label>
+                <Select value={String(form.default_ken_burns_motion || "auto")} onValueChange={(value) => update("default_ken_burns_motion", value)}>
+                  <SelectTrigger><SelectValue placeholder="Motion style" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="zoom_in">Zoom In</SelectItem>
+                    <SelectItem value="zoom_out">Zoom Out</SelectItem>
+                    <SelectItem value="pan_left">Pan Left</SelectItem>
+                    <SelectItem value="pan_right">Pan Right</SelectItem>
+                    <SelectItem value="pan_up">Pan Up</SelectItem>
+                    <SelectItem value="pan_down">Pan Down</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Transition duration (sec)</label>
+                <Input type="number" min={0} max={2} step={0.1} value={form.default_transition_duration_sec ?? 0.3} onChange={(e) => update("default_transition_duration_sec", e.target.value)} />
+              </div>
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.default_film_grain_enabled)}
+                  onChange={(e) => update("default_film_grain_enabled", e.target.checked)}
+                />
+                <span>Enable film grain</span>
+              </label>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Film grain intensity</label>
+                <Input type="number" min={0} max={0.25} step={0.01} value={form.default_film_grain_intensity ?? 0.05} onChange={(e) => update("default_film_grain_intensity", e.target.value)} />
+              </div>
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.default_vignette_enabled)}
+                  onChange={(e) => update("default_vignette_enabled", e.target.checked)}
+                />
+                <span>Enable vignette</span>
+              </label>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Vignette intensity</label>
+                <Input type="number" min={0} max={0.5} step={0.01} value={form.default_vignette_intensity ?? 0.15} onChange={(e) => update("default_vignette_intensity", e.target.value)} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Subtitle Defaults</CardTitle>
+              <CardDescription>Readability and safe-zone defaults for captions.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Font</label>
+                <Input value={form.default_subtitle_font ?? "Arial"} onChange={(e) => update("default_subtitle_font", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Font size</label>
+                <Input type="number" min={18} max={96} value={form.default_subtitle_size ?? 48} onChange={(e) => update("default_subtitle_size", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Text color</label>
+                <Input value={form.default_subtitle_color ?? "#FFFFFF"} onChange={(e) => update("default_subtitle_color", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Position</label>
+                <Select value={String(form.default_subtitle_position || "bottom")} onValueChange={(value) => update("default_subtitle_position", value)}>
+                  <SelectTrigger><SelectValue placeholder="Position" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bottom">Bottom</SelectItem>
+                    <SelectItem value="center">Center</SelectItem>
+                    <SelectItem value="top">Top</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Background opacity</label>
+                <Input type="number" min={0} max={1} step={0.05} value={form.default_subtitle_background_opacity ?? 0.65} onChange={(e) => update("default_subtitle_background_opacity", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Words per group</label>
+                <Input type="number" min={1} max={12} value={form.default_subtitle_words_per_group ?? 4} onChange={(e) => update("default_subtitle_words_per_group", e.target.value)} />
+              </div>
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input type="checkbox" checked={Boolean(form.default_subtitle_shadow_enabled)} onChange={(e) => update("default_subtitle_shadow_enabled", e.target.checked)} />
+                <span>Enable subtitle shadow</span>
+              </label>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Shadow strength</label>
+                <Input type="number" min={0} max={2} step={0.05} value={form.default_subtitle_shadow_strength ?? 0.85} onChange={(e) => update("default_subtitle_shadow_strength", e.target.value)} />
+              </div>
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input type="checkbox" checked={Boolean(form.default_subtitle_safe_zone_enabled)} onChange={(e) => update("default_subtitle_safe_zone_enabled", e.target.checked)} />
+                <span>Use safe zones</span>
+              </label>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Safe zone preset</label>
+                <Select value={String(form.default_subtitle_safe_zone_platform || "tiktok")} onValueChange={(value) => update("default_subtitle_safe_zone_platform", value)}>
+                  <SelectTrigger><SelectValue placeholder="Preset" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tiktok">TikTok</SelectItem>
+                    <SelectItem value="instagram_reel">Instagram Reel</SelectItem>
+                    <SelectItem value="youtube_short">YouTube Short</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Audio Defaults</CardTitle>
+              <CardDescription>Background music and narration ducking defaults.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Background music volume</label>
+                <Input type="number" min={0} max={1} step={0.05} value={form.default_music_volume ?? 0.3} onChange={(e) => update("default_music_volume", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Ducking amount (dB)</label>
+                <Input type="number" min={-30} max={-1} step={1} value={form.default_ducking_amount ?? -12} onChange={(e) => update("default_ducking_amount", e.target.value)} />
+              </div>
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input type="checkbox" checked={Boolean(form.default_ducking_enabled)} onChange={(e) => update("default_ducking_enabled", e.target.checked)} />
+                <span>Enable ducking during narration</span>
+              </label>
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -640,22 +949,22 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5" /> Redis Queue</CardTitle>
+              <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5" /> Queue (advanced)</CardTitle>
               <CardDescription>
                 {redisStatus?.status === "connected"
-                  ? "Redis is connected and processing jobs reliably"
-                  : "Optional – enables persistent job queue, crash recovery, and multi-worker support"}
+                  ? "Queue service is connected and running reliably"
+                  : "Optional: enables persistent queue, crash recovery, and multi-worker support"}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <label className="text-sm font-medium mb-1 block">Redis URL</label>
+                <label className="text-sm font-medium mb-1 block">Queue URL</label>
                 <Input
-                  placeholder="redis://localhost:6379/0 (leave empty for in-memory mode)"
+                  placeholder="redis://localhost:6379/0 (leave blank for local mode)"
                   value={form.redis_url}
                   onChange={(e) => update("redis_url", e.target.value)}
                 />
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Requires server restart to take effect</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Restart backend after changing this</p>
               </div>
               {redisStatus && (
                 <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 space-y-3">
@@ -667,7 +976,7 @@ export default function SettingsPage() {
                       ) : redisStatus.enabled ? (
                         <><AlertCircle className="h-3 w-3 mr-1" />Error</>
                       ) : (
-                        "In-Memory Mode"
+                        "Local mode"
                       )}
                     </Badge>
                   </div>
@@ -703,7 +1012,7 @@ export default function SettingsPage() {
                           </div>
                           <div className="text-center p-2 rounded bg-rose-50 dark:bg-rose-950/30">
                             <p className="text-lg font-bold text-rose-600 dark:text-rose-400">{redisStatus.queue.dead_letter || 0}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Dead Letter</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">Failed queue</p>
                           </div>
                         </div>
                       )}
@@ -711,8 +1020,8 @@ export default function SettingsPage() {
                   )}
                   {redisStatus.status === "disconnected" && !redisStatus.enabled && (
                     <p className="text-sm text-slate-500 dark:text-slate-400">
-                      Running in in-memory mode. Jobs will be lost on server restart.
-                      Set a Redis URL above and restart the server for persistent queuing.
+                      Running in local mode. Tasks will be lost after backend restart.
+                      Add a Queue URL above and restart backend for a persistent queue.
                     </p>
                   )}
                   {redisStatus.error && (
@@ -725,7 +1034,7 @@ export default function SettingsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Infrastructure</CardTitle>
+              <CardTitle>Advanced tools</CardTitle>
               <CardDescription>FFmpeg path for video processing</CardDescription>
             </CardHeader>
             <CardContent>

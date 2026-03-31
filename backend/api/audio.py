@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -23,6 +24,34 @@ EDGE_VOICES_FALLBACK = [
     {"id": "en-GB-ThomasNeural", "name": "Thomas (en-GB)", "locale": "en-GB", "gender": "Male"},
     {"id": "en-GB-SoniaNeural", "name": "Sonia (en-GB)", "locale": "en-GB", "gender": "Female"},
 ]
+
+
+def _sanitize_music_filename(filename: str) -> str:
+    base = Path(filename).name.strip()
+    if not base or ".." in base:
+        raise HTTPException(400, "Invalid filename")
+    ext = Path(base).suffix.lower()
+    if ext not in {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}:
+        raise HTTPException(400, f"Unsupported audio format: {ext}")
+    stem = Path(base).stem.strip()
+    cleaned_stem = re.sub(r"[^a-zA-Z0-9._()\- ]+", "_", stem).strip(" ._")
+    if not cleaned_stem:
+        cleaned_stem = "track"
+    return f"{cleaned_stem[:80]}{ext}"
+
+
+def _build_music_storage_name(filename: str) -> str:
+    return f"{uuid.uuid4().hex}__{_sanitize_music_filename(filename)}"
+
+
+def _music_display_name(stored_name: str) -> str:
+    stem = Path(stored_name).stem
+    ext = Path(stored_name).suffix
+    if "__" in stem:
+        _, original_stem = stem.split("__", 1)
+        if original_stem:
+            return f"{original_stem}{ext}"
+    return stored_name
 
 
 @router.post("/generate")
@@ -64,17 +93,15 @@ async def list_tts_providers():
 async def upload_music(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(400, "No file provided")
-    ext = Path(file.filename).suffix.lower()
-    if ext not in {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}:
-        raise HTTPException(400, f"Unsupported audio format: {ext}")
-    name = f"{uuid.uuid4().hex}{ext}"
+    display_name = _sanitize_music_filename(file.filename)
+    name = _build_music_storage_name(file.filename)
     content = await file.read()
     key = build_key("music", name)
     storage = get_storage()
     await storage.save_bytes(key, content, guess_content_type(name))
     return {
         "id": name,
-        "name": file.filename,
+        "name": display_name,
         "path": key,
         "url": await storage.get_url(key),
     }
@@ -91,7 +118,7 @@ async def list_music():
         if Path(name).suffix.lower() in exts:
             tracks.append({
                 "id": name,
-                "name": name,
+                "name": _music_display_name(name),
                 "path": key,
                 "url": await storage.get_url(key),
             })

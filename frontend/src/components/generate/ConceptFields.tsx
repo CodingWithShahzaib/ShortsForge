@@ -14,9 +14,15 @@ type Props = {
   generating: boolean;
   canGenerate: boolean;
   onGenerate: () => void;
+  generateLabel?: string;
 };
 
-export const ConceptFields = memo(function ConceptFields({ generating, canGenerate, onGenerate }: Props) {
+export const ConceptFields = memo(function ConceptFields({
+  generating,
+  canGenerate,
+  onGenerate,
+  generateLabel = "Create scenes",
+}: Props) {
   const {
     register,
     formState: { errors, touchedFields, submitCount },
@@ -82,7 +88,7 @@ export const ConceptFields = memo(function ConceptFields({ generating, canGenera
                 </>
               ) : (
                 <>
-                  <Play className="h-4 w-4 shrink-0" /> Generate Video
+                  <Play className="h-4 w-4 shrink-0" /> {generateLabel}
                 </>
               )}
             </Button>

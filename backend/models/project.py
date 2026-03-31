@@ -43,7 +43,14 @@ class Project(Base):
     project_assets: Mapped[list["ProjectAsset"]] = relationship(
         "ProjectAsset", back_populates="project", cascade="all, delete-orphan",
     )
+    video_settings: Mapped["ProjectVideoSettings | None"] = relationship(
+        "ProjectVideoSettings",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 from backend.models.scene import Scene  # noqa: E402
 from backend.models.job import Job  # noqa: E402
+from backend.models.video_settings import ProjectVideoSettings  # noqa: E402

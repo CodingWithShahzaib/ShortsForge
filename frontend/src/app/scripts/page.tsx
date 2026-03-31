@@ -21,6 +21,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SCENE_NARRATION_STYLE_IDS } from "@/app/generate/schema";
 
 type ScriptMode = "video_production" | "basic";
 
@@ -148,6 +149,17 @@ export default function ScriptsPage() {
     subtitle_size: 48,
     subtitle_color: "#FFFFFF",
     subtitle_position: "bottom" as "bottom" | "top" | "center",
+    subtitle_words_per_group: 4,
+  });
+
+  const [realismSettings, setRealismSettings] = useState({
+    scene_duration: 5,
+    scene_narration_style: defaults.scene_narration_style ?? "balanced",
+    inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? 600,
+    transition_overlap_ms: defaults.transition_overlap_ms ?? 250,
+    use_production_storyboard: defaults.use_production_storyboard ?? true,
+    match_scenes_to_audio: defaults.match_scenes_to_audio ?? true,
+    visual_continuity: defaults.visual_continuity ?? "",
   });
 
   useEffect(() => {
@@ -163,8 +175,38 @@ export default function ScriptsPage() {
       setWordCount(defaults.word_count ?? 400);
       setSceneCount(defaults.scene_count ?? 5);
       setSplitCount(defaults.scene_count ?? 5);
+      setRealismSettings({
+        scene_duration: 5,
+        scene_narration_style: defaults.scene_narration_style ?? "balanced",
+        inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? 600,
+        transition_overlap_ms: defaults.transition_overlap_ms ?? 250,
+        use_production_storyboard: defaults.use_production_storyboard ?? true,
+        match_scenes_to_audio: defaults.match_scenes_to_audio ?? true,
+        visual_continuity: defaults.visual_continuity ?? "",
+      });
+    } else {
+      setRealismSettings((prev) => ({
+        ...prev,
+        scene_narration_style: defaults.scene_narration_style ?? prev.scene_narration_style,
+        inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? prev.inter_scene_pause_ms,
+        transition_overlap_ms: defaults.transition_overlap_ms ?? prev.transition_overlap_ms,
+        use_production_storyboard: defaults.use_production_storyboard ?? prev.use_production_storyboard,
+        match_scenes_to_audio: defaults.match_scenes_to_audio ?? prev.match_scenes_to_audio,
+        visual_continuity: defaults.visual_continuity ?? prev.visual_continuity,
+      }));
     }
-  }, [defaults.llm_provider, defaults.word_count, defaults.scene_count]);
+  }, [
+    defaults.llm_provider,
+    defaults.word_count,
+    defaults.scene_count,
+    defaults.scene_narration_style,
+    defaults.inter_scene_pause_ms,
+    defaults.transition_overlap_ms,
+    defaults.use_production_storyboard,
+    defaults.match_scenes_to_audio,
+    defaults.visual_continuity,
+  ]);
+
 
   useEffect(() => {
     setEditorTab(mode === "basic" ? "script" : "scenes");
@@ -250,8 +292,12 @@ export default function ScriptsPage() {
           concept,
           story_type: storyType,
           scene_count: sceneCount,
+          image_style: defaults.image_style,
+          resolution: defaults.resolution,
+          transition: defaults.transition,
           llm_provider: llmProvider,
           llm_model: defaults.llm_model,
+          visual_continuity: realismSettings.visual_continuity,
         });
         setVideoProduction(result);
       } else {
@@ -281,6 +327,7 @@ export default function ScriptsPage() {
         scene_count: splitCount,
         story_type: storyType,
         story_template: storyTemplate,
+        scene_narration_style: realismSettings.scene_narration_style,
         generate_subtitles: true,
         llm_provider: llmProvider,
         llm_model: defaults.llm_model,
@@ -377,16 +424,20 @@ export default function ScriptsPage() {
             custom_script: videoProduction.scenes.map((s) => s.script).join("\n\n"),
             scenes: scenesPayload,
             scene_count: videoProduction.scenes.length,
-            prepare_only: false,
-            storyboard_only: true,
+            scene_duration: realismSettings.scene_duration,
             control_mode: "co_pilot",
+            pipeline_mode: "manual",
+            target_stage: "storyboard",
+            inter_scene_pause_ms: realismSettings.inter_scene_pause_ms,
+            transition_overlap_ms: realismSettings.transition_overlap_ms,
             ...subtitleSettings,
+            ...realismSettings,
           }),
           30000,
         );
         addJob(job);
         if (job.project_id) {
-          notify.success("Storyboard project ready — opening project");
+          notify.success("Scene project is ready — opening project");
           router.push(`/projects/${job.project_id}`);
         }
       } catch (err: any) {
@@ -413,16 +464,20 @@ export default function ScriptsPage() {
             custom_script: fullScript,
             scenes: scenesPayload,
             scene_count: scenes.length,
-            prepare_only: false,
-            storyboard_only: true,
+            scene_duration: realismSettings.scene_duration,
             control_mode: "co_pilot",
+            pipeline_mode: "manual",
+            target_stage: "storyboard",
+            inter_scene_pause_ms: realismSettings.inter_scene_pause_ms,
+            transition_overlap_ms: realismSettings.transition_overlap_ms,
             ...subtitleSettings,
+            ...realismSettings,
           }),
           30000,
         );
         addJob(job);
         if (job.project_id) {
-          notify.success("Storyboard project ready — opening project");
+          notify.success("Scene project is ready — opening project");
           router.push(`/projects/${job.project_id}`);
         }
       } catch (err: any) {
@@ -449,6 +504,14 @@ export default function ScriptsPage() {
         subtitle_font: subtitleSettings.subtitle_font,
         subtitle_color: subtitleSettings.subtitle_color,
         subtitle_position: subtitleSettings.subtitle_position,
+        subtitle_words_per_group: String(subtitleSettings.subtitle_words_per_group),
+        scene_duration: String(realismSettings.scene_duration),
+        scene_narration_style: realismSettings.scene_narration_style,
+        inter_scene_pause_ms: String(realismSettings.inter_scene_pause_ms),
+        transition_overlap_ms: String(realismSettings.transition_overlap_ms),
+        use_production_storyboard: String(realismSettings.use_production_storyboard),
+        match_scenes_to_audio: String(realismSettings.match_scenes_to_audio),
+        visual_continuity: realismSettings.visual_continuity,
       });
       router.push(`/generate?${params}`);
       notify.success("Opened Generate page with your script");
@@ -613,7 +676,7 @@ export default function ScriptsPage() {
 
   const outlineHeader =
     mode === "video_production"
-      ? `Storyboard scenes (${videoProduction?.scenes?.length || 0})`
+      ? `Scene plan (${videoProduction?.scenes?.length || 0})`
       : scenes.length > 0
         ? `Scenes (${scenes.length})`
         : "Outline";
@@ -623,9 +686,9 @@ export default function ScriptsPage() {
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-1">
-            <h1 className="text-3xl font-bold tracking-tight">Script editor</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Script studio</h1>
             <p className="text-sm text-muted-foreground">
-              Build a tight script, map it to scenes, and send a clean storyboard to your project.
+              Build your script, shape it into scenes, and send it to your project.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -641,7 +704,7 @@ export default function ScriptsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <Tabs value={mode} onValueChange={(value) => setMode(value as ScriptMode)}>
             <TabsList>
-              <TabsTrigger value="video_production">Storyboard</TabsTrigger>
+              <TabsTrigger value="video_production">Scene plan</TabsTrigger>
               <TabsTrigger value="basic">Basic script</TabsTrigger>
             </TabsList>
           </Tabs>
@@ -689,11 +752,11 @@ export default function ScriptsPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <CardTitle className="text-base">
-                    {mode === "video_production" ? "Storyboard editor" : "Script editor"}
+                    {mode === "video_production" ? "Scene plan editor" : "Script editor"}
                   </CardTitle>
                   <CardDescription className="text-xs">
                     {mode === "video_production"
-                      ? "Edit per-scene narration and image prompts before sending to a project."
+                      ? "Edit narration and image prompts for each scene before sending to a project."
                       : "Write the core narration, then split into scenes when ready."}
                   </CardDescription>
                 </div>
@@ -744,7 +807,7 @@ export default function ScriptsPage() {
                           <Input
                             type="number"
                             min={2}
-                            max={15}
+                            max={100}
                             value={splitCount}
                             onChange={(e) => setSplitCount(parseInt(e.target.value) || 5)}
                             className="w-20 border-border/60"
@@ -826,7 +889,7 @@ export default function ScriptsPage() {
                     <div className="space-y-4 pb-4">
                       {!videoProduction?.scenes?.length && (
                         <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
-                          Generate a storyboard to start editing scenes here.
+                          Generate scene plans to start editing here.
                         </div>
                       )}
                       {videoProduction?.scenes?.map((scene, idx) => {
@@ -955,10 +1018,10 @@ export default function ScriptsPage() {
                             <Input
                               type="number"
                               min={2}
-                              max={15}
+                              max={100}
                               value={sceneCount}
                               onChange={(e) =>
-                                setSceneCount(Math.max(2, Math.min(15, parseInt(e.target.value) || 5)))
+                                setSceneCount(Math.max(2, Math.min(100, parseInt(e.target.value) || 5)))
                               }
                               className="border-border/60"
                             />
@@ -998,7 +1061,7 @@ export default function ScriptsPage() {
                         )}
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">LLM provider</label>
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Script AI</label>
                         <Select value={llmProvider} onValueChange={setLlmProvider}>
                           <SelectTrigger className="border-border/60">
                             <SelectValue placeholder="Select provider" />
@@ -1017,7 +1080,112 @@ export default function ScriptsPage() {
                       <Separator />
                       <details className="group">
                         <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-                          Subtitle settings
+                          Scene realism
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Scene length</label>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={60}
+                                step={0.5}
+                                value={realismSettings.scene_duration}
+                                onChange={(e) =>
+                                  setRealismSettings((s) => ({ ...s, scene_duration: parseFloat(e.target.value) || 5 }))
+                                }
+                                className="mt-1 border-border/60"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Pause (ms)</label>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={1200}
+                                step={50}
+                                value={realismSettings.inter_scene_pause_ms}
+                                onChange={(e) =>
+                                  setRealismSettings((s) => ({ ...s, inter_scene_pause_ms: parseInt(e.target.value) || 0 }))
+                                }
+                                className="mt-1 border-border/60"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Overlap (ms)</label>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={800}
+                                step={50}
+                                value={realismSettings.transition_overlap_ms}
+                                onChange={(e) =>
+                                  setRealismSettings((s) => ({ ...s, transition_overlap_ms: parseInt(e.target.value) || 0 }))
+                                }
+                                className="mt-1 border-border/60"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                              Narration per scene
+                            </label>
+                            <Select
+                              value={realismSettings.scene_narration_style}
+                              onValueChange={(value) =>
+                                setRealismSettings((s) => ({ ...s, scene_narration_style: value }))
+                              }
+                            >
+                              <SelectTrigger className="mt-1 border-border/60">
+                                <SelectValue placeholder="Narration density" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {SCENE_NARRATION_STYLE_IDS.map((id) => (
+                                  <SelectItem key={id} value={id}>
+                                    {id === "short" ? "Short" : id === "long" ? "Long" : "Balanced"}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <label className="flex items-start gap-2 text-xs font-medium text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              checked={realismSettings.use_production_storyboard}
+                              onChange={(e) =>
+                                setRealismSettings((s) => ({ ...s, use_production_storyboard: e.target.checked }))
+                              }
+                            />
+                            Director-style scenes (camera + lighting details)
+                          </label>
+                          <label className="flex items-start gap-2 text-xs font-medium text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              checked={realismSettings.match_scenes_to_audio}
+                              onChange={(e) =>
+                                setRealismSettings((s) => ({ ...s, match_scenes_to_audio: e.target.checked }))
+                              }
+                            />
+                            Match scenes to narration length
+                          </label>
+                          <div>
+                            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Visual continuity</label>
+                            <Input
+                              value={realismSettings.visual_continuity}
+                              onChange={(e) =>
+                                setRealismSettings((s) => ({ ...s, visual_continuity: e.target.value }))
+                              }
+                              className="mt-1 border-border/60"
+                              placeholder="e.g. teal-orange palette, rain, solitary figure"
+                            />
+                          </div>
+                        </div>
+                      </details>
+
+                      <details className="group">
+                        <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+                          Caption settings
                         </summary>
                         <div className="mt-3 space-y-3">
                           <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -1044,8 +1212,8 @@ export default function ScriptsPage() {
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="llm">LLM-generated</SelectItem>
-                                    <SelectItem value="transcription">Audio transcription</SelectItem>
+                                    <SelectItem value="llm">AI-generated</SelectItem>
+                                    <SelectItem value="transcription">Speech-to-text from audio</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -1062,6 +1230,19 @@ export default function ScriptsPage() {
                                   className="mt-1 border-border/60"
                                 />
                               </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Words per caption</label>
+                                <Input
+                                  type="number"
+                                  min={2}
+                                  max={12}
+                                  value={subtitleSettings.subtitle_words_per_group}
+                                  onChange={(e) =>
+                                    setSubtitleSettings((s) => ({ ...s, subtitle_words_per_group: parseInt(e.target.value) || 4 }))
+                                  }
+                                  className="mt-1 border-border/60"
+                                />
+                              </div>
                               {subtitleSettings.subtitle_source === "llm" && (
                                 <label className="col-span-2 flex items-center gap-2 text-xs text-muted-foreground">
                                   <input
@@ -1071,7 +1252,7 @@ export default function ScriptsPage() {
                                       setSubtitleSettings((s) => ({ ...s, generate_subtitles: e.target.checked }))
                                     }
                                   />
-                                  Generate subtitles with LLM
+                                  Generate captions with AI
                                 </label>
                               )}
                               {subtitleSettings.subtitle_source === "transcription" && (
@@ -1146,7 +1327,7 @@ export default function ScriptsPage() {
                         </div>
                       </details>
                       <Button variant="secondary" onClick={handleGenerate} disabled={loading || !concept.trim()} className="w-full">
-                        {loading ? "Generating…" : mode === "video_production" ? "Generate storyboard" : "Generate script"}
+                        {loading ? "Generating…" : mode === "video_production" ? "Generate scene plan" : "Generate script"}
                       </Button>
                     </div>
                   </div>
@@ -1195,7 +1376,7 @@ export default function ScriptsPage() {
                           value={aiInstruction}
                           onChange={(e) => setAiInstruction(e.target.value)}
                           rows={2}
-                          placeholder="Optional override, e.g. Make it sound more cinematic."
+                          placeholder="Optional override, e.g. Make it sound more dramatic."
                           className="resize-none border-border/60 text-sm"
                         />
                       </div>

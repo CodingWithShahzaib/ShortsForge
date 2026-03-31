@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { LinearProgress } from "@/components/ui/progress-linear";
 import type { Job } from "@/lib/types";
+import { engineStageLabel, inferCurrentStage, inferTargetStage, summarizeEngineOutcome } from "@/lib/engine-pipeline";
 import { useVideoPreviewStore } from "@/stores/videoPreviewStore";
 import { jobHasVideoAsset, resolveJobVideoPlaybackUrl } from "@/lib/job-video-url";
 import { notify } from "@/lib/notify";
@@ -67,6 +68,9 @@ export function JobCard({
   const typeLabel = job.type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   const isActive = job.status === "in_progress" || job.status === "queued";
   const shortId = job.id ? job.id.slice(0, 8) : "";
+  const currentStage = inferCurrentStage(job);
+  const targetStage = inferTargetStage(job);
+  const stageSummary = summarizeEngineOutcome(job);
   const statusDotMap: Record<string, string> = {
     completed: "bg-emerald-500",
     failed: "bg-rose-500",
@@ -150,15 +154,19 @@ export function JobCard({
                 ) : job.project_id ? (
                   <span className="font-mono">project:{job.project_id.slice(0, 6)}</span>
                 ) : null}
+                <span className="rounded bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                  {engineStageLabel(currentStage)}
+                </span>
                 <span className="tabular-nums">{job.progress}%</span>
                 {job.created_at && <span>({timeAgo(job.created_at)})</span>}
                 {hasPayload && (
                   <span className="rounded bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-500">
-                    payload
+                    details
                   </span>
                 )}
               </div>
               {isActive && <LinearProgress value={job.progress} className="mt-1 h-1" />}
+              <div className="text-[11px] text-muted-foreground">{stageSummary}</div>
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
@@ -210,36 +218,44 @@ export function JobCard({
         <div className="mt-3 rounded-md border border-border/40 bg-muted/30 p-3 text-xs text-muted-foreground">
           <div className="mb-3 grid gap-2 md:grid-cols-2">
             <div>
-              <span className="font-semibold text-foreground">Severity:</span>{" "}
+              <span className="font-semibold text-foreground">Status level:</span>{" "}
               {job.status === "failed"
-                ? "ERROR"
+                ? "Error"
                 : job.status === "queued"
-                  ? "NOTICE"
+                  ? "Waiting"
                   : job.status === "in_progress"
-                    ? "INFO"
-                    : "SUCCESS"}
+                    ? "In progress"
+                    : "Done"}
             </div>
             <div>
-              <span className="font-semibold text-foreground">Resource:</span>{" "}
+              <span className="font-semibold text-foreground">Task type:</span>{" "}
               job:{job.type}
             </div>
             <div>
-              <span className="font-semibold text-foreground">Trace:</span>{" "}
-              {(job.result as Record<string, any> | undefined)?.trace_id
-                ?? (job.result as Record<string, any> | undefined)?.trace
-                ?? (job.error as Record<string, any> | undefined)?.trace_id
+              <span className="font-semibold text-foreground">Current stage:</span>{" "}
+              {engineStageLabel(currentStage)}
+            </div>
+            <div>
+              <span className="font-semibold text-foreground">Target stage:</span>{" "}
+              {engineStageLabel(targetStage)}
+            </div>
+            <div>
+              <span className="font-semibold text-foreground">Trace ID:</span>{" "}
+              {job.result?.trace_id
+                ?? job.result?.trace
+                ?? job.error?.trace_id
                 ?? "n/a"}
             </div>
             <div>
               <span className="font-semibold text-foreground">Request ID:</span>{" "}
-              {(job.result as Record<string, any> | undefined)?.request_id
-                ?? (job.error as Record<string, any> | undefined)?.request_id
+              {job.result?.request_id
+                ?? job.error?.request_id
                 ?? "n/a"}
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1">
-              <div><span className="font-semibold text-foreground">Job ID:</span> {job.id}</div>
+              <div><span className="font-semibold text-foreground">Task ID:</span> {job.id}</div>
               {job.project_id && (
                 <div><span className="font-semibold text-foreground">Project ID:</span> {job.project_id}</div>
               )}
@@ -319,11 +335,15 @@ export function JobCard({
               project:{job.project_id.slice(0, 6)}
             </span>
           )}
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-primary">
+            {engineStageLabel(currentStage)}
+          </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {job.created_at && <span>{timeAgo(job.created_at)}</span>}
           <span className="tabular-nums">{job.progress}%</span>
         </div>
+        <div className="text-[11px] text-muted-foreground">{stageSummary}</div>
         {isActive && <LinearProgress value={job.progress} className="mt-1 h-1" />}
       </div>
 

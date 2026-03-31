@@ -12,13 +12,17 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 
 import { api, resolveMediaPlaybackUrl } from "@/lib/api";
+import { buildEngineStageStates, engineStageLabel, inferCurrentStage } from "@/lib/engine-pipeline";
+import { wsErrorMessage } from "@/lib/job-ws";
 import { useProjectStore } from "@/stores/projectStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { notify } from "@/lib/notify";
-import type { Project, Scene, Job, WsMessage } from "@/lib/types";
+import type { EngineStage, EngineStageState, Project, Scene, Job, WsMessage } from "@/lib/types";
 import { pickLatestAsset } from "@/components/projects/scene-assets";
 import {
+  allScenesHaveAudio,
   allScenesHaveImages,
+  allScenesHaveNarration,
   extractJobErrorMessage,
   getStudioRecoveryContext,
   pickLatestFailedVideoRender,
@@ -34,10 +38,10 @@ import ArrangeStep from "@/components/studio/ArrangeStep";
 import CompileStep from "@/components/studio/CompileStep";
 
 const STEPS = [
-  { label: "Script", description: "Generate & edit your story", icon: <FileText className="h-4 w-4" /> },
-  { label: "Assets", description: "Images & voiceover", icon: <Images className="h-4 w-4" /> },
-  { label: "Arrange", description: "Order & preview scenes", icon: <LayoutGrid className="h-4 w-4" /> },
-  { label: "Compile", description: "Render final video", icon: <Clapperboard className="h-4 w-4" /> },
+  { label: "Script", description: "Create and edit your story", icon: <FileText className="h-4 w-4" /> },
+  { label: "Assets", description: "Images and voice", icon: <Images className="h-4 w-4" /> },
+  { label: "Arrange", description: "Order and preview scenes", icon: <LayoutGrid className="h-4 w-4" /> },
+  { label: "Export", description: "Create final video", icon: <Clapperboard className="h-4 w-4" /> },
 ];
 
 type DraftInfo = {
@@ -53,19 +57,56 @@ function pickMostRecentJob(jobs: Job[], type?: string): Job | null {
   )[0];
 }
 
+function getRenderVideoSource(job: Job | null): string | null {
+  if (!job?.result) return null;
+  const candidates = [job.result.video_url, job.result.video_path];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function hasImageAssets(scenes: Scene[]): boolean {
   return scenes.some((s) => !!pickLatestAsset(s.assets, "image"));
+}
+
+function hasAudioAssets(scenes: Scene[]): boolean {
+  return scenes.some((s) => !!pickLatestAsset(s.assets, "audio"));
+}
+
+function isActiveJob(job: Job): boolean {
+  return job.status === "queued" || job.status === "in_progress";
+}
+
+function mergePolledJobs(previousJobs: Job[], nextJobs: Job[]): Job[] {
+  const previousById = new Map(previousJobs.map((job) => [job.id, job]));
+  return nextJobs.map((job) => {
+    const previous = previousById.get(job.id);
+    if (!previous || !isActiveJob(previous) || !isActiveJob(job)) {
+      return job;
+    }
+    return {
+      ...job,
+      progress: Math.max(job.progress || 0, previous.progress || 0),
+    };
+  });
 }
 
 function detectInitialStep(project: Project, jobs: Job[]): number {
   const scenes = project.scenes || [];
   if (scenes.length === 0) return 0;
-  if (!hasImageAssets(scenes)) return 1;
+  if (project.status === "ready_for_compile") return 3;
+  if (!hasImageAssets(scenes) || !hasAudioAssets(scenes)) return 1;
   const completedRender = jobs.find(
-    (j) => j.type === "video_render" && j.status === "completed" && j.result?.video_path,
+    (j) =>
+      j.type === "video_render" &&
+      j.status === "completed" &&
+      !!(j.result?.video_path || j.result?.video_url),
   );
   if (completedRender) return 3;
-  if (allScenesHaveImages(scenes)) return 2;
+  if (allScenesHaveImages(scenes) && allScenesHaveAudio(scenes)) return 2;
   return 1;
 }
 
@@ -160,8 +201,12 @@ export default function StudioPage() {
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const [blockedSteps, setBlockedSteps] = useState<Set<number>>(new Set());
   const [draftInfo, setDraftInfo] = useState<DraftInfo | null>(null);
+  const [requestedStage, setRequestedStage] = useState<EngineStage | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const liveAssetRefreshAtRef = useRef(0);
+  const liveAssetRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressJobIdRef = useRef<string | null>(null);
 
   const refreshProject = useCallback(async () => {
     if (!projectId) return;
@@ -173,6 +218,16 @@ export default function StudioPage() {
       notify.error("Failed to load project");
     }
   }, [projectId]);
+
+  const syncTrackedJobProgress = useCallback((jobId: string, progress: number) => {
+    setJobProgress((previous) => {
+      if (progressJobIdRef.current !== jobId) {
+        progressJobIdRef.current = jobId;
+        return progress;
+      }
+      return Math.max(previous, progress);
+    });
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;
@@ -190,18 +245,69 @@ export default function StudioPage() {
     } catch {
       setDraftInfo(null);
     }
-  }, [projectId]);
+  }, [projectId, syncTrackedJobProgress]);
 
   const refreshJobs = useCallback(async () => {
     if (!projectId) return [];
     try {
       const j = await api.listJobs({ project_id: projectId });
-      setJobs(j as Job[]);
+      setJobs((previous) => mergePolledJobs(previous, j as Job[]));
       return j as Job[];
     } catch {
       return [];
     }
   }, [projectId]);
+
+  const maybeRefreshAssetsLive = useCallback((msg: WsMessage) => {
+    if (currentStep !== 1) return;
+    if (msg.job_type !== "video_render" && msg.job_type !== "asset_generate") return;
+    const detail = (msg.detail || "").toLowerCase();
+    const hintsImageReady =
+      detail.includes("image for scene") ||
+      detail.includes("saving image");
+    if (!hintsImageReady) return;
+
+    const now = Date.now();
+    // Throttle eager refreshes while still reacting quickly to per-scene image completions.
+    if (now - liveAssetRefreshAtRef.current < 700) return;
+    liveAssetRefreshAtRef.current = now;
+    if (liveAssetRefreshTimeoutRef.current) clearTimeout(liveAssetRefreshTimeoutRef.current);
+    liveAssetRefreshTimeoutRef.current = setTimeout(() => {
+      void refreshProject();
+    }, 180);
+  }, [currentStep, refreshProject]);
+
+  useEffect(() => {
+    if (!jobs.length) return;
+    const tracked = activeJobId ? jobs.find((j) => j.id === activeJobId) : null;
+
+    if (tracked) {
+      if (isActiveJob(tracked)) {
+        setActiveJobType(tracked.type || "video_render");
+        syncTrackedJobProgress(tracked.id, tracked.progress || 0);
+        return;
+      }
+      // WS completion can be missed; reconcile from polled jobs.
+      progressJobIdRef.current = null;
+      setActiveJobId(null);
+      setActiveJobType(null);
+      setProgressDetail("");
+      if (tracked.status === "completed") {
+        setJobProgress(100);
+      }
+      return;
+    }
+
+    const fallbackActive = jobs.find(isActiveJob);
+    if (fallbackActive) {
+      setActiveJobId(fallbackActive.id);
+      setActiveJobType(fallbackActive.type || "video_render");
+      syncTrackedJobProgress(fallbackActive.id, fallbackActive.progress || 0);
+      return;
+    }
+    // Do not clear optimistic active state here; a freshly queued job may not
+    // appear in polled jobs yet. WS/poll will reconcile shortly.
+  }, [jobs, activeJobId, syncTrackedJobProgress]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -212,7 +318,7 @@ export default function StudioPage() {
     ])
       .then(([p, fetchedJobs]: [Project, Job[]]) => {
         setProject(p);
-        setJobs(fetchedJobs);
+        setJobs(mergePolledJobs([], fetchedJobs));
 
         const step = detectInitialStep(p, fetchedJobs);
         setCurrentStep(step);
@@ -226,20 +332,20 @@ export default function StudioPage() {
         if (activeJob) {
           setActiveJobId(activeJob.id);
           setActiveJobType(activeJob.type);
-          setJobProgress(activeJob.progress || 0);
+          syncTrackedJobProgress(activeJob.id, activeJob.progress || 0);
         }
 
         const completedRender = pickMostRecentJob(
           fetchedJobs.filter((j) => j.status === "completed" && j.type === "video_render"),
         );
-        if (completedRender?.result?.video_path || completedRender?.result?.video_url) {
-          const raw = completedRender.result.video_url || completedRender.result.video_path;
+        const raw = getRenderVideoSource(completedRender);
+        if (raw) {
           resolveMediaPlaybackUrl(raw).then(setCompletedVideoUrl).catch(() => {});
         }
       })
       .catch(() => notify.error("Failed to load project"))
       .finally(() => setLoading(false));
-  }, [projectId]);
+  }, [projectId, syncTrackedJobProgress]);
 
   const latestCompletedRender = useMemo(
     () =>
@@ -281,6 +387,14 @@ export default function StudioPage() {
     };
   }, [activeJobId, projectId, refreshJobs]);
 
+  useEffect(() => {
+    return () => {
+      if (liveAssetRefreshTimeoutRef.current) {
+        clearTimeout(liveAssetRefreshTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const latestFailedVideoJob = useMemo(() => {
     if (!project || project.status !== "failed") return null;
     return pickLatestFailedVideoRender(project.id, jobs);
@@ -301,6 +415,16 @@ export default function StudioPage() {
     Boolean(failureMessage.trim()) &&
     dismissedBannerKey !== recoveryBannerKey;
 
+  const scenes: Scene[] = useMemo(
+    () => (project?.scenes || []).sort((a, b) => a.order_index - b.order_index),
+    [project?.scenes],
+  );
+
+  const recoveryContext = useMemo(
+    () => getStudioRecoveryContext(scenes, failureMessage || "Generation failed"),
+    [scenes, failureMessage],
+  );
+
   const handleWsMessage = useCallback(
     (msg: WsMessage) => {
       if (activeJobId && msg.job_id !== activeJobId) return;
@@ -310,9 +434,13 @@ export default function StudioPage() {
       }
 
       if (msg.type === "progress") {
-        setJobProgress(msg.progress ?? 0);
+        setRequestedStage(null);
+        syncTrackedJobProgress(msg.job_id, msg.progress ?? 0);
         setProgressDetail(msg.detail || "");
+        maybeRefreshAssetsLive(msg);
       } else if (msg.type === "completed") {
+        progressJobIdRef.current = null;
+        setRequestedStage(null);
         setJobProgress(100);
         setActiveJobId(null);
         setActiveJobType(null);
@@ -325,58 +453,68 @@ export default function StudioPage() {
           const completedRender = pickMostRecentJob(
             jobsList.filter((j) => j.status === "completed" && j.type === "video_render"),
           );
-          if (completedRender?.result?.video_path || completedRender?.result?.video_url) {
-            const raw = completedRender.result.video_url || completedRender.result.video_path;
+          const raw = getRenderVideoSource(completedRender);
+          if (raw) {
             resolveMediaPlaybackUrl(raw).then(setCompletedVideoUrl).catch(() => {});
           }
         });
       } else if (msg.type === "error") {
+        progressJobIdRef.current = null;
+        setRequestedStage(null);
         setActiveJobId(null);
         setActiveJobType(null);
+        const message = wsErrorMessage(msg);
         setWsFailure({
-          message: msg.error || "Job failed",
+          message,
           jobId: msg.job_id,
         });
-        notify.error(msg.error || "Job failed");
+        notify.error(message);
         refreshProject();
         refreshJobs();
       }
     },
-    [activeJobId, jobs, refreshProject, refreshJobs],
+    [activeJobId, jobs, refreshProject, refreshJobs, maybeRefreshAssetsLive, syncTrackedJobProgress],
   );
 
   useWebSocket(handleWsMessage);
 
-  const scenes: Scene[] = useMemo(
-    () => (project?.scenes || []).sort((a, b) => a.order_index - b.order_index),
-    [project?.scenes],
+  const activeJob = useMemo(
+    () => (activeJobId ? jobs.find((job) => job.id === activeJobId) ?? null : null),
+    [jobs, activeJobId],
   );
 
-  const recoveryContext = useMemo(
-    () => getStudioRecoveryContext(scenes, failureMessage || "Generation failed"),
-    [scenes, failureMessage],
+  const activeVideoJob = useMemo(
+    () => (activeJob?.type === "video_render" ? activeJob : null),
+    [activeJob],
   );
+
+  const activeEngineStage = useMemo(
+    () => (activeJob ? inferCurrentStage(activeJob, undefined, progressDetail) : null),
+    [activeJob, progressDetail],
+  );
+  const effectiveEngineStage = activeEngineStage ?? requestedStage;
 
   const isScriptGenerating =
     activeJobType === "video_render" &&
     !!activeJobId &&
+    activeEngineStage === "storyboard" &&
     scenes.length === 0;
 
   const isStoryboardGenerating =
     activeJobType === "video_render" &&
     !!activeJobId &&
-    !hasImageAssets(scenes);
+    activeEngineStage === "storyboard";
 
   const isAssetGenerating =
     (activeJobType === "video_render" || activeJobType === "asset_generate") &&
     !!activeJobId &&
-    hasImageAssets(scenes) &&
-    !allScenesHaveImages(scenes);
+    (activeEngineStage === "assets" || activeJobType === "asset_generate");
 
   const isCompiling =
-    activeJobType === "video_render" &&
-    !!activeJobId &&
-    currentStep === 3;
+    (activeJobType === "video_render" &&
+      !!activeJobId &&
+      activeEngineStage === "compile") ||
+    (requestedStage === "compile" && pipelineBusy);
 
   const goToStep = useCallback(
     (step: number) => {
@@ -387,21 +525,30 @@ export default function StudioPage() {
     [currentStep],
   );
 
+  useEffect(() => {
+    if (!showRecoveryBanner || activeJobId) return;
+    if (currentStep !== recoveryContext.stepHint) {
+      goToStep(recoveryContext.stepHint);
+    }
+  }, [showRecoveryBanner, activeJobId, currentStep, recoveryContext.stepHint, goToStep]);
+
   const stepValidity = useMemo(() => {
     const hasScenes = scenes.length > 0;
+    const hasNarration = allScenesHaveNarration(scenes);
     const hasImages = allScenesHaveImages(scenes);
+    const hasAudio = allScenesHaveAudio(scenes);
     return {
-      0: hasScenes,
-      1: hasScenes && hasImages,
+      0: hasScenes && hasNarration,
+      1: hasScenes && hasNarration && hasImages && hasAudio,
       2: hasScenes,
-      3: hasScenes && hasImages,
+      3: hasScenes && hasNarration && hasImages && hasAudio,
     };
   }, [scenes]);
 
   const stepErrors = useMemo(() => {
     const errors: Record<number, string | null> = {};
     if (blockedSteps.has(0) && !stepValidity[0]) {
-      errors[0] = "Add at least one scene to continue.";
+      errors[0] = "All scenes must have narration.";
     }
     if (blockedSteps.has(1) && !stepValidity[1]) {
       errors[1] = "Generate images for all scenes.";
@@ -410,31 +557,146 @@ export default function StudioPage() {
       errors[2] = "Arrange at least one scene.";
     }
     if (blockedSteps.has(3) && !stepValidity[3]) {
-      errors[3] = "Finalize visuals before compiling.";
+      errors[3] = "Finalize visuals before exporting.";
     }
     return errors;
   }, [blockedSteps, stepValidity]);
 
+  const assetsReadyForExport = stepValidity[3];
+
+  const exportStageStates = useMemo<Array<{ stage: EngineStage; label: string; state: EngineStageState }>>(() => {
+    if (activeVideoJob) {
+      return buildEngineStageStates(activeVideoJob, undefined, progressDetail);
+    }
+    return [
+      {
+        stage: "storyboard" as const,
+        label: "Storyboard",
+        state: stepValidity[0] ? "complete" : "pending",
+      },
+      {
+        stage: "assets" as const,
+        label: "Assets",
+        state: stepValidity[1] ? "complete" : "pending",
+      },
+      {
+        stage: "compile" as const,
+        label: "Compile",
+        state:
+          project?.status === "failed"
+            ? "failed"
+            : completedVideoUrl && !isVideoStale
+              ? "complete"
+              : assetsReadyForExport
+                ? "pending"
+                : "pending",
+      },
+    ];
+  }, [activeVideoJob, progressDetail, stepValidity, project?.status, completedVideoUrl, isVideoStale, assetsReadyForExport]);
+
+  const exportSummary = useMemo(() => {
+    const safeProgress = Math.min(Math.max(jobProgress, 0), 99);
+
+    if (activeVideoJob?.status === "queued") {
+      const stageLabel = engineStageLabel(effectiveEngineStage ?? "compile").toLowerCase();
+      return {
+        label: "Queued",
+        note: `Waiting to start ${stageLabel}`,
+      };
+    }
+
+    if (activeVideoJob?.status === "in_progress") {
+      if (safeProgress >= 99) {
+        return {
+          label: "Finalizing",
+          note: progressDetail || "Wrapping up the export and saving the final file",
+        };
+      }
+      return {
+        label: "Rendering",
+        note: progressDetail || `${engineStageLabel(effectiveEngineStage ?? "compile")} in progress`,
+      };
+    }
+
+    if (project?.status === "failed") {
+      return {
+        label: "Failed",
+        note: failureMessage || "Review the latest render failure",
+      };
+    }
+
+    if (completedVideoUrl) {
+      return {
+        label: isVideoStale ? "Outdated" : "Compiled",
+        note: isVideoStale ? "Project changed since the last successful export" : "Latest export is ready",
+      };
+    }
+
+    if (project?.status === "ready_for_compile" && assetsReadyForExport) {
+      return {
+        label: "Ready",
+        note: "All scenes, visuals, and audio are ready to export",
+      };
+    }
+
+    if (!assetsReadyForExport) {
+      return {
+        label: "Blocked",
+        note: "Finish narration, images, and audio before exporting",
+      };
+    }
+
+    return {
+      label: "Draft",
+      note: "Review pacing and settings before you export",
+    };
+  }, [
+    jobProgress,
+    activeVideoJob,
+    effectiveEngineStage,
+    progressDetail,
+    project?.status,
+    failureMessage,
+    completedVideoUrl,
+    isVideoStale,
+    assetsReadyForExport,
+  ]);
+
   const stepHints = useMemo(() => {
     const hints: Record<number, string | null> = {};
     hints[0] = scenes.length ? `${scenes.length} scene${scenes.length !== 1 ? "s" : ""}` : "No scenes yet";
+    if (scenes.length && !allScenesHaveNarration(scenes)) {
+      const missing = scenes.filter((s) => !((s.narration || s.subtitle || "").trim())).length;
+      hints[0] = `${missing} scene${missing !== 1 ? "s" : ""} missing narration`;
+    }
     const imagesReady = scenes.filter((s) => !!pickLatestAsset(s.assets, "image")).length;
+    const audioReady = scenes.filter((s) => !!pickLatestAsset(s.assets, "audio")).length;
     hints[1] = scenes.length
-      ? `${imagesReady}/${scenes.length} images ready`
+      ? `${imagesReady}/${scenes.length} images, ${audioReady}/${scenes.length} audio`
       : "Generate scenes first";
     hints[2] = scenes.length ? "Drag to reorder, tune timing" : "Scenes required";
-    hints[3] = completedVideoUrl ? "Video compiled" : "Ready to render";
+    hints[3] = completedVideoUrl
+      ? "Video compiled"
+      : project?.status === "ready_for_compile"
+        ? "Assets ready, compile next"
+        : "Ready to render";
     return hints;
-  }, [scenes, completedVideoUrl]);
+  }, [scenes, completedVideoUrl, project?.status]);
 
   const stepBadges = useMemo(() => {
     const badges: Record<number, string | null> = {};
-    badges[0] = stepValidity[0] ? "Ready" : "Needed";
-    badges[1] = stepValidity[1] ? "Ready" : "In progress";
+    badges[0] = isStoryboardGenerating ? "Working" : stepValidity[0] ? "Ready" : "Needed";
+    badges[1] = isAssetGenerating ? "Working" : stepValidity[1] ? "Ready" : "Needed";
     badges[2] = stepValidity[2] ? "Ready" : "Needed";
-    badges[3] = completedVideoUrl ? "Done" : "Render";
+    badges[3] = isCompiling
+      ? "Working"
+      : completedVideoUrl
+        ? "Done"
+        : project?.status === "ready_for_compile"
+          ? "Ready"
+          : "Render";
     return badges;
-  }, [stepValidity, completedVideoUrl]);
+  }, [stepValidity, completedVideoUrl, isStoryboardGenerating, isAssetGenerating, isCompiling, project?.status]);
 
   const handleBlocked = useCallback((step: number, message: string) => {
     setBlockedSteps((prev) => new Set([...prev, step]));
@@ -447,51 +709,74 @@ export default function StudioPage() {
 
   const handleScriptNext = useCallback(() => {
     if (!stepValidity[0]) {
-      handleBlocked(0, "Add at least one scene before moving to Assets.");
+      if (!scenes.length) {
+        handleBlocked(0, "Add at least one scene before moving to Assets.");
+      } else {
+        handleBlocked(0, "Some scenes are missing narration. Recover or edit scene text first.");
+      }
       return;
     }
     markCompleted(0);
     goToStep(1);
-  }, [markCompleted, goToStep, handleBlocked, stepValidity]);
+  }, [markCompleted, goToStep, handleBlocked, stepValidity, scenes]);
 
-  const startOrRetryPipeline = useCallback(async () => {
+  const runStudioStage = useCallback(async (stage: EngineStage) => {
     if (!project) return;
-    const job =
-      project.status === "failed"
-        ? await api.retryProject(project.id)
+    const job = stage === "storyboard"
+      ? await api.retryProject(project.id)
+      : stage === "assets"
+        ? await api.prepareAssets(project.id)
         : await api.compileVideo(project.id);
     addJob(job);
+    setJobs((previous) => {
+      const index = previous.findIndex((existingJob) => existingJob.id === job.id);
+      if (index >= 0) {
+        return previous.map((existingJob) => (
+          existingJob.id === job.id ? { ...existingJob, ...job } : existingJob
+        ));
+      }
+      return [job, ...previous];
+    });
+    setProject((previous) => (
+      previous ? { ...previous, status: "generating" } : previous
+    ));
     setActiveJobId(job.id);
     setActiveJobType(job.type || "video_render");
-    setJobProgress(0);
-    setProgressDetail("");
+    syncTrackedJobProgress(job.id, Math.max(1, job.progress || 0));
+    setProgressDetail(`${engineStageLabel(stage)} queued...`);
     setWsFailure(null);
     setDismissedBannerKey(null);
-  }, [project, addJob]);
+    // Force immediate sync so compile/generation state reflects instantly.
+    void refreshJobs();
+    void refreshProject();
+  }, [project, addJob, refreshJobs, refreshProject, syncTrackedJobProgress]);
 
   const queuePipelineJob = useCallback(
-    async (clearFinalVideo: boolean) => {
+    async (stage: EngineStage) => {
       if (!project) return;
-      if (clearFinalVideo) setCompletedVideoUrl(null);
+      setRequestedStage(stage);
+      setProgressDetail(`${engineStageLabel(stage)} queued...`);
+      setJobProgress((previous) => Math.max(previous, 1));
       setPipelineBusy(true);
       try {
-        await startOrRetryPipeline();
+        await runStudioStage(stage);
       } catch (err: unknown) {
+        setRequestedStage(null);
         notify.error(err instanceof Error ? err.message : "Request failed");
       } finally {
         setPipelineBusy(false);
       }
     },
-    [project, startOrRetryPipeline],
+    [project, runStudioStage],
   );
 
   const handleStartAssetGeneration = useCallback(async () => {
-    await queuePipelineJob(false);
+    await queuePipelineJob("assets");
   }, [queuePipelineJob]);
 
   const handleAssetsNext = useCallback(() => {
     if (!stepValidity[1]) {
-      handleBlocked(1, "Generate images for all scenes to continue.");
+      handleBlocked(1, "Prepare image and audio assets for all scenes to continue.");
       return;
     }
     markCompleted(1);
@@ -500,7 +785,7 @@ export default function StudioPage() {
 
   const handleArrangeNext = useCallback(() => {
     if (!stepValidity[2]) {
-      handleBlocked(2, "Arrange at least one scene before compiling.");
+      handleBlocked(2, "Arrange at least one scene before exporting.");
       return;
     }
     markCompleted(2);
@@ -508,12 +793,18 @@ export default function StudioPage() {
   }, [markCompleted, goToStep, handleBlocked, stepValidity]);
 
   const handleStartCompile = useCallback(async () => {
-    await queuePipelineJob(true);
+    await queuePipelineJob("compile");
   }, [queuePipelineJob]);
 
+  const recoveryStage = useMemo<EngineStage>(() => {
+    if (recoveryContext.stepHint === 0) return "storyboard";
+    if (recoveryContext.stepHint === 1) return "assets";
+    return "compile";
+  }, [recoveryContext.stepHint]);
+
   const handleRecoveryRetry = useCallback(async () => {
-    await queuePipelineJob(currentStep === 3);
-  }, [queuePipelineJob, currentStep]);
+    await queuePipelineJob(recoveryStage);
+  }, [queuePipelineJob, recoveryStage]);
 
   const handleDismissRecoveryBanner = useCallback(() => {
     setDismissedBannerKey(recoveryBannerKey);
@@ -522,11 +813,59 @@ export default function StudioPage() {
   const stepperStatus = useMemo(() => {
     if (!activeJobId) return undefined;
     if (progressDetail) return progressDetail;
-    if (isCompiling) return `Compiling... ${Math.round(jobProgress)}%`;
+    if (effectiveEngineStage === "compile") return `Compiling video... ${Math.round(jobProgress)}%`;
+    if (effectiveEngineStage === "assets") return `Generating assets... ${Math.round(jobProgress)}%`;
+    if (effectiveEngineStage === "storyboard") return "Building storyboard...";
+    if (isCompiling) return `Exporting... ${Math.round(jobProgress)}%`;
     if (isAssetGenerating) return `Generating... ${Math.round(jobProgress)}%`;
-    if (isScriptGenerating || isStoryboardGenerating) return "Writing script...";
+    if (isScriptGenerating || isStoryboardGenerating) return `Working on ${engineStageLabel("storyboard").toLowerCase()}...`;
     return undefined;
-  }, [activeJobId, progressDetail, isCompiling, isAssetGenerating, isScriptGenerating, isStoryboardGenerating, jobProgress]);
+  }, [
+    activeJobId,
+    progressDetail,
+    effectiveEngineStage,
+    isCompiling,
+    isAssetGenerating,
+    isScriptGenerating,
+    isStoryboardGenerating,
+    jobProgress,
+  ]);
+
+  const studioSummaryCards = useMemo(() => {
+    const narratedScenes = scenes.filter((scene) => ((scene.narration || scene.subtitle || "").trim())).length;
+    const imageScenes = scenes.filter((scene) => !!pickLatestAsset(scene.assets, "image")).length;
+    const audioScenes = scenes.filter((scene) => !!pickLatestAsset(scene.assets, "audio")).length;
+    return [
+      {
+        id: "storyboard",
+        label: "Storyboard",
+        value: `${narratedScenes}/${scenes.length || 0}`,
+        note: "Scenes with narration",
+        icon: FileText,
+      },
+      {
+        id: "images",
+        label: "Images",
+        value: `${imageScenes}/${scenes.length || 0}`,
+        note: "Visual assets ready",
+        icon: Images,
+      },
+      {
+        id: "audio",
+        label: "Audio",
+        value: `${audioScenes}/${scenes.length || 0}`,
+        note: "Voice assets ready",
+        icon: Sparkles,
+      },
+      {
+        id: "output",
+        label: "Output",
+        value: exportSummary.label,
+        note: exportSummary.note,
+        icon: Clapperboard,
+      },
+    ];
+  }, [scenes, exportSummary]);
 
   const handleSaveDraft = useCallback(() => {
     if (!projectId) return;
@@ -544,6 +883,17 @@ export default function StudioPage() {
     goToStep(draftInfo.step);
     notify.info("Resumed saved draft.");
   }, [draftInfo, goToStep]);
+
+  useEffect(() => {
+    const raw = getRenderVideoSource(latestCompletedRender);
+    if (!raw) return;
+    resolveMediaPlaybackUrl(raw)
+      .then((url) => {
+        setCompletedVideoUrl(url);
+        setProgressDetail("Export complete");
+      })
+      .catch(() => {});
+  }, [latestCompletedRender]);
 
   if (loading) {
     return (
@@ -595,6 +945,7 @@ export default function StudioPage() {
             project={project}
             scenes={scenes}
             isGenerating={isScriptGenerating || isStoryboardGenerating}
+            progressDetail={progressDetail}
             projectFailed={project.status === "failed"}
             failureMessage={failureMessage}
             onRetryGeneration={handleRecoveryRetry}
@@ -670,17 +1021,22 @@ export default function StudioPage() {
             isCompiling={isCompiling}
             jobProgress={jobProgress}
             progressDetail={progressDetail}
+            activeJob={activeVideoJob}
+            activeStage={effectiveEngineStage}
+            stageStates={exportStageStates}
             completedVideoUrl={completedVideoUrl}
             videoIsStale={isVideoStale}
             lastCompiledAt={lastCompiledAt}
             compileFailed={
               project.status === "failed" &&
               scenes.length > 0 &&
-              allScenesHaveImages(scenes)
+              allScenesHaveImages(scenes) &&
+              allScenesHaveAudio(scenes)
             }
             failureMessage={failureMessage}
             onRetryCompile={handleRecoveryRetry}
             pipelineBusy={pipelineBusy}
+            hasReadyAssets={assetsReadyForExport}
             onStartCompile={handleStartCompile}
             onBack={() => goToStep(2)}
           />
@@ -699,11 +1055,25 @@ export default function StudioPage() {
         totalSteps={STEPS.length}
         stepLabel={STEPS[currentStep]?.label}
         stepStatus={stepperStatus}
+        projectStatus={project.status}
         onSaveDraft={handleSaveDraft}
         onResumeDraft={draftInfo ? handleResumeDraft : undefined}
         draftSavedAt={draftInfo?.savedAt ?? null}
         onClose={() => router.push(`/projects/${projectId}`)}
       />
+
+      <div className="grid grid-cols-2 gap-3 border-b border-border/15 bg-background/60 px-4 py-3 backdrop-blur-sm sm:grid-cols-4 sm:px-5">
+        {studioSummaryCards.map((item) => (
+          <div key={item.id} className="rounded-xl border border-border/50 bg-card/70 px-3 py-2.5 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{item.label}</p>
+              <item.icon className="h-3.5 w-3.5 text-primary/80" />
+            </div>
+            <p className="mt-1 text-sm font-semibold text-foreground">{item.value}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{item.note}</p>
+          </div>
+        ))}
+      </div>
 
       <div className="relative z-10 grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-rows-1 md:grid-cols-[240px_minmax(0,1fr)]">
         {/* ── Unified stepper rail (responsive) ── */}

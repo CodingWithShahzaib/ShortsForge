@@ -30,7 +30,8 @@ wheels/
 htmlcov/
 .tox/
 .nox/
-
+.claude/
+.claude/*
 # =========================
 # Node.js / Frontend
 # =========================

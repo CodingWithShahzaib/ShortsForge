@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from pathlib import Path
 from functools import lru_cache
 
@@ -78,6 +79,39 @@ class Settings(BaseSettings):
     default_image_style: str = "realistic"
     default_word_count: int = 400
     default_scene_count: int = 5
+    default_scene_narration_style: str = "balanced"
+    default_inter_scene_pause_ms: int = 600
+    default_transition_overlap_ms: int = 250
+    default_use_production_storyboard: bool = True
+    default_match_scenes_to_audio: bool = True
+    default_visual_continuity: str = ""
+    default_ken_burns_enabled: bool = True
+    default_ken_burns_zoom_percent: float = 2.5
+    default_ken_burns_motion: str = "auto"
+    default_film_grain_enabled: bool = False
+    default_film_grain_intensity: float = 0.05
+    default_vignette_enabled: bool = True
+    default_vignette_intensity: float = 0.15
+    default_lut_enabled: bool = False
+    default_lut_path: str = ""
+    default_transition_duration_sec: float = 0.3
+    default_scene_duration_min: int = 2
+    default_scene_duration_max: int = 4
+    default_subtitle_font: str = "Arial"
+    default_subtitle_size: int = 48
+    default_subtitle_color: str = "#FFFFFF"
+    default_subtitle_position: str = "bottom"
+    default_subtitle_words_per_group: int = 4
+    default_subtitle_background_opacity: float = 0.65
+    default_subtitle_shadow_enabled: bool = True
+    default_subtitle_shadow_strength: float = 0.85
+    default_subtitle_safe_zone_enabled: bool = True
+    default_subtitle_safe_zone_platform: str = "tiktok"
+    default_subtitle_safe_zone_config: dict[str, Any] | None = None
+    default_word_pop_enabled: bool = False
+    default_music_volume: float = 0.3
+    default_ducking_enabled: bool = True
+    default_ducking_amount: float = -12.0
 
     @property
     def redis_enabled(self) -> bool:

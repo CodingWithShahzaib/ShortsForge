@@ -25,6 +25,22 @@ class RunwareImageProvider(ImageProvider):
         **kwargs: Any,
     ) -> bytes:
         model = kwargs.get("model", "civitai:618692@693048")
+        negative_prompt = kwargs.get("negative_prompt")
+        seed = kwargs.get("seed")
+        task_payload: dict[str, Any] = {
+            "taskType": "imageInference",
+            "taskUUID": "gen-img-1",
+            "model": model,
+            "positivePrompt": prompt,
+            "width": width,
+            "height": height,
+            "numberResults": 1,
+            "outputFormat": "PNG",
+        }
+        if negative_prompt:
+            task_payload["negativePrompt"] = negative_prompt
+        if seed is not None:
+            task_payload["seed"] = seed
         async with httpx.AsyncClient(timeout=90) as client:
             resp = await client.post(
                 "https://api.runware.ai/v1/inference",
@@ -32,16 +48,7 @@ class RunwareImageProvider(ImageProvider):
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                json=[{
-                    "taskType": "imageInference",
-                    "taskUUID": "gen-img-1",
-                    "model": model,
-                    "positivePrompt": prompt,
-                    "width": width,
-                    "height": height,
-                    "numberResults": 1,
-                    "outputFormat": "PNG",
-                }],
+                json=[task_payload],
             )
             resp.raise_for_status()
             data = resp.json()

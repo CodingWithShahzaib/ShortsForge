@@ -16,6 +16,7 @@ const APPLY_KEYS: (keyof GenerateFormValues)[] = [
   "story_template",
   "scene_count",
   "word_count",
+  "scene_narration_style",
   "scene_duration",
   "image_style",
   "subtitle_enabled",
@@ -23,6 +24,9 @@ const APPLY_KEYS: (keyof GenerateFormValues)[] = [
   "generate_subtitles",
   "resolution",
   "transition",
+  "use_production_storyboard",
+  "match_scenes_to_audio",
+  "visual_continuity",
 ];
 
 type Props = {
@@ -109,7 +113,12 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
         } else if (key === "scene_duration") {
           const n = Number(v);
           if (!Number.isNaN(n)) setValue(key, n, { shouldDirty: true, shouldValidate: true });
-        } else if (key === "subtitle_enabled" || key === "generate_subtitles") {
+        } else if (
+          key === "subtitle_enabled" ||
+          key === "generate_subtitles" ||
+          key === "use_production_storyboard" ||
+          key === "match_scenes_to_audio"
+        ) {
           setValue(key, Boolean(v), { shouldDirty: true, shouldValidate: true });
         } else if (typeof v === "string") {
           setValue(key, v as never, { shouldDirty: true, shouldValidate: true });
@@ -117,7 +126,7 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
       }
 
       setSectionsOpen({ content: true, visuals: true, audio: true, review: true });
-      notify.success("Applied idea — review Content, Visuals, and Audio, then generate.");
+      notify.success("Idea applied — review Content, Visuals, and Audio, then start.");
       requestAnimationFrame(() => {
         const el = document.getElementById("gen-title");
         el?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -135,11 +144,11 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-base font-semibold tracking-tight">
             <TrendingUp className="h-4 w-4 text-violet-400" aria-hidden />
-            Trending-style ideas
+            Trending idea starter
           </div>
           <p className="text-xs text-muted-foreground max-w-3xl leading-relaxed sm:text-sm">
-            AI suggests angles that could perform well as faceless shorts right now. Pick a card to fill your concept
-            and tune video settings. Ideas are model-generated—not live trends—so verify facts before you publish.
+            AI suggests angles that may perform well for shorts. Pick a card to fill your concept
+            and tune video settings. These are AI suggestions, not live trend data, so verify facts before publishing.
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2">

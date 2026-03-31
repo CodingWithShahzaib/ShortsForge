@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from backend.schemas import (
     GenerateScriptRequest,
+    GenerateStoryboardRequest,
     GenerateVideoProductionScriptRequest,
     RewriteScriptRequest,
     StoryTemplateField,
@@ -63,9 +64,9 @@ async def generate_script_endpoint(req: GenerateScriptRequest):
 @router.post("/rewrite")
 async def rewrite_script_endpoint(req: RewriteScriptRequest):
     if not req.text.strip():
-        raise HTTPException(status_code=400, detail="Text is required")
+        raise HTTPException(status_code=400, detail="Please add text to rewrite.")
     if not req.instruction.strip():
-        raise HTTPException(status_code=400, detail="Instruction is required")
+        raise HTTPException(status_code=400, detail="Please add instructions for the rewrite.")
     edited = await rewrite_script(
         text=req.text,
         instruction=req.instruction,
@@ -78,31 +79,26 @@ async def rewrite_script_endpoint(req: RewriteScriptRequest):
 
 
 @router.post("/storyboard")
-async def generate_storyboard_endpoint(
-    concept: str = "",
-    script: str = "",
-    story_type: str = "general",
-    story_template: str = "default",
-    scene_count: int = 5,
-    image_style: str = "realistic",
-    word_count: int = 400,
-    generate_subtitles: bool = True,
-    llm_provider: str = "openai",
-    llm_model: str | None = None,
-):
-    _check_story_template(story_template)
-    storyboard = await generate_story_and_storyboard(
-        concept=concept or None,
-        script=script or None,
-        story_type=story_type,
-        scene_count=scene_count,
-        image_style=image_style,
-        word_count=word_count,
-        generate_subtitles=generate_subtitles,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
-        story_template=story_template,
-    )
+async def generate_storyboard_endpoint(req: GenerateStoryboardRequest):
+    _check_story_template(req.story_template)
+    try:
+        storyboard = await generate_story_and_storyboard(
+            concept=req.concept or None,
+            script=req.script or None,
+            story_type=req.story_type,
+            scene_count=req.scene_count,
+            image_style=req.image_style,
+            resolution=req.resolution,
+            transition=req.transition,
+            word_count=req.word_count,
+            scene_narration_style=req.scene_narration_style,
+            generate_subtitles=req.generate_subtitles,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+            story_template=req.story_template,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return storyboard
 
 
@@ -113,9 +109,14 @@ async def generate_video_production_script_endpoint(req: GenerateVideoProduction
         concept=req.concept,
         story_type=req.story_type,
         scene_count=req.scene_count,
+        image_style=req.image_style,
+        resolution=req.resolution,
+        transition=req.transition,
+        scene_narration_style=req.scene_narration_style,
         llm_provider=req.llm_provider,
         llm_model=req.llm_model,
         temperature=req.temperature,
+        visual_continuity=req.visual_continuity,
     )
     return result
 
@@ -132,9 +133,10 @@ async def list_story_templates_endpoint():
 
 class SplitScenesRequest(BaseModel):
     script: str
-    scene_count: int = 5
+    scene_count: int = Field(default=5, ge=2, le=100)
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
+    scene_narration_style: str = "balanced"
     generate_subtitles: bool = True
     llm_provider: str = "openai"
     llm_model: str | None = None
@@ -144,13 +146,14 @@ class SplitScenesRequest(BaseModel):
 async def split_script_to_scenes(req: SplitScenesRequest):
     """Split a script into individual scenes with narration and image prompts."""
     if not req.script.strip():
-        raise HTTPException(400, "Script cannot be empty")
+        raise HTTPException(400, "Please add a script before splitting into scenes.")
 
     storyboard = await generate_story_and_storyboard(
         script=req.script,
         story_type=req.story_type,
         scene_count=req.scene_count,
         image_style="realistic",
+        scene_narration_style=req.scene_narration_style,
         generate_subtitles=req.generate_subtitles,
         llm_provider=req.llm_provider,
         llm_model=req.llm_model,
@@ -213,7 +216,7 @@ async def url_to_script(req: UrlToScriptRequest):
         raise HTTPException(400, str(exc)) from exc
 
     if not content or len(content.strip()) < 50:
-        raise HTTPException(400, "Could not extract enough content from this URL")
+        raise HTTPException(400, "We couldn't extract enough text from that URL.")
 
     summary = content[:3000]
     concept = f"Create a video script based on this content:\n\n{summary}"
@@ -238,7 +241,7 @@ async def url_to_script(req: UrlToScriptRequest):
 async def text_to_script(req: TextToScriptRequest):
     content = req.text.strip()
     if len(content) < 50:
-        raise HTTPException(400, "Paste at least 50 characters of source text")
+        raise HTTPException(400, "Please paste at least 50 characters of source text.")
 
     summary = content[:3000]
     concept = f"Create a video script based on this content:\n\n{summary}"
@@ -276,7 +279,7 @@ async def viral_ideas(req: ViralIdeasRequest):
         raise HTTPException(502, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("viral ideas LLM failure")
-        raise HTTPException(502, detail=f"LLM failed: {str(exc)[:200]}") from exc
+        raise HTTPException(502, detail=f"AI request failed: {str(exc)[:200]}") from exc
     return {"ideas": ideas}
 
 
@@ -308,5 +311,5 @@ async def analyze_concept_endpoint(req: AnalyzeConceptRequest):
         raise HTTPException(502, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("analyze concept LLM failure")
-        raise HTTPException(502, detail=f"LLM failed: {str(exc)[:200]}") from exc
+        raise HTTPException(502, detail=f"AI request failed: {str(exc)[:200]}") from exc
     return {"suggestions": suggestions}

@@ -1,17 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-
-const STATUS_LABELS: Record<string, string> = {
-  completed: "Completed",
-  generating: "Generating",
-  in_progress: "Generating",
-  queued: "Queued",
-  failed: "Failed",
-  draft: "Draft",
-  ready_for_edit: "Ready to edit",
-  cancelled: "Cancelled",
-};
+import { toFriendlyStatus } from "@/lib/user-facing-text";
 
 export function StatusBadge({ status }: { status: string }) {
   const variantMap: Record<string, "success" | "error" | "warning" | "inProgress" | "secondary"> = {
@@ -22,9 +12,10 @@ export function StatusBadge({ status }: { status: string }) {
     failed: "error",
     draft: "secondary",
     ready_for_edit: "success",
+    ready_for_compile: "warning",
     cancelled: "secondary",
   };
-  const label = STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+  const label = toFriendlyStatus(status);
   const variant = variantMap[status] || "secondary";
   const isActive = status === "in_progress" || status === "generating";
   const isQueued = status === "queued";

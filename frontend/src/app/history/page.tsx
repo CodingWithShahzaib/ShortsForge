@@ -124,7 +124,7 @@ export default function HistoryPage() {
   const handleRetry = async (jobId: string) => {
     try {
       await retryJobMutation.mutateAsync(jobId);
-      notify.success("Retry queued");
+      notify.success("Retry added to queue");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Retry failed";
       notify.error(message);
@@ -161,13 +161,13 @@ export default function HistoryPage() {
             Activity
           </h1>
           <p className="text-slate-500 dark:text-slate-400 mt-1">
-            {visibleJobs.length} jobs • {stats.completionRate}% complete
+            {visibleJobs.length} tasks • {stats.completionRate}% complete
           </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-600 dark:text-emerald-300">
             <span className="h-2 w-2 rounded-full bg-emerald-400 motion-safe:animate-pulse" />
-            Live activity
+            Live updates
           </div>
         </div>
       </div>
@@ -175,7 +175,7 @@ export default function HistoryPage() {
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Card className="border border-border/60 bg-linear-to-br from-cyan-500/10 via-transparent to-transparent">
           <CardContent className="p-5">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Total jobs</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Total tasks</p>
             <div className="mt-2 text-3xl font-semibold">{stats.total}</div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {stats.averageProgress}% average progress
@@ -218,7 +218,7 @@ export default function HistoryPage() {
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search by type, status, or job ID"
+                placeholder="Search by type, status, or task ID"
                 className="pl-9"
               />
             </div>
@@ -302,13 +302,13 @@ export default function HistoryPage() {
         <Card>
           <CardContent className="py-10 flex items-center justify-center gap-2 text-rose-500">
             <AlertTriangle className="h-4 w-4" />
-            {(error as Error).message || "Could not load jobs"}
+            {(error as Error).message || "Could not load activity"}
           </CardContent>
         </Card>
       ) : visibleJobs.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center text-slate-500 dark:text-slate-400 space-y-3">
-            <div className="text-lg font-semibold text-slate-700 dark:text-slate-200">No jobs found</div>
+            <div className="text-lg font-semibold text-slate-700 dark:text-slate-200">No activity found</div>
             <div className="text-sm">Try a different filter or start a new generation.</div>
             <Button asChild variant="animated">
               <Link href="/generate">Start generating</Link>

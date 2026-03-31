@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from backend.schemas.video_settings import ProjectVideoSettingsOut, SceneAssetOverrideOut
+
 
 class SceneBase(BaseModel):
     narration: str | None = None
@@ -18,6 +20,13 @@ class SceneBase(BaseModel):
     user_notes: str | None = None
     trim_start_sec: float = 0.0
     trim_end_sec: float = 0.0
+
+    @field_validator("trim_start_sec", "trim_end_sec")
+    @classmethod
+    def validate_trim_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Trim values must be non-negative")
+        return value
 
 
 class SceneCreate(SceneBase):
@@ -41,6 +50,13 @@ class SceneUpdate(BaseModel):
         default=None,
         description="If set, must match project.version or 409 conflict",
     )
+
+    @field_validator("trim_start_sec", "trim_end_sec")
+    @classmethod
+    def validate_optional_trim_non_negative(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Trim values must be non-negative")
+        return value
 
 
 class ProjectAssetOut(BaseModel):
@@ -92,6 +108,7 @@ class SceneOut(SceneBase):
     project_id: str
     order_index: int
     assets: list[AssetOut] = []
+    asset_override: SceneAssetOverrideOut | None = None
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +148,7 @@ class ProjectOut(ProjectBase):
     updated_at: datetime
     scenes: list[SceneOut] = []
     project_assets: list[ProjectAssetOut] = []
+    video_settings: ProjectVideoSettingsOut | None = None
 
     model_config = {"from_attributes": True}
 

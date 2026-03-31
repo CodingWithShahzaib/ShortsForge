@@ -12,6 +12,8 @@ AVAILABLE_TRANSITIONS = {
     "slidedown": "Slide down transition",
     "slideleft": "Slide left transition",
     "slideright": "Slide right transition",
+    "crossfade": "Crossfade between clips",
+    "glitch": "Glitch-style cut accent (falls back to fade if unavailable)",
     "circleopen": "Circle opening reveal",
     "circleclose": "Circle closing transition",
     "zoom_in": "Ken Burns zoom in effect on image",
@@ -20,7 +22,7 @@ AVAILABLE_TRANSITIONS = {
     "pan_right": "Horizontal pan from left to right",
     "pan_up": "Vertical pan from bottom to top",
     "pan_down": "Vertical pan from top to bottom",
-    "none": "Soft blend at cuts (same as fade in export)",
+    "none": "Hard cut with no blend",
 }
 
 
