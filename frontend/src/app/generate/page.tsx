@@ -2,15 +2,17 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm, FormProvider, useWatch, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { notify } from "@/lib/notify";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LinearProgress } from "@/components/ui/progress-linear";
 import { Sparkles, Layers, Volume2 } from "lucide-react";
-import { api, ApiError, getMediaUrl } from "@/lib/api";
+import { api, ApiError, resolveMediaPlaybackUrl } from "@/lib/api";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import {
@@ -31,7 +33,13 @@ import { GenerateSummaryPanel } from "@/components/generate/GenerateSummaryPanel
 import { useStoryTypesQuery, useVoicesQuery, useMusicQuery, useUploadMusicMutation } from "@/lib/queries/generateCatalog";
 import { SECTIONS_STORAGE_KEY } from "@/app/generate/constants";
 import { engineStageLabel, inferCurrentStage, summarizeEngineOutcome } from "@/lib/engine-pipeline";
-import { cn } from "@/lib/utils";
+import { CreationActionBar } from "@/components/creation/CreationActionBar";
+import { CreationFlowHeader } from "@/components/creation/CreationFlowHeader";
+import { CreationPageShell } from "@/components/creation/CreationPageShell";
+import {
+  CreationProgressRail,
+  type CreationProgressStep,
+} from "@/components/creation/CreationProgressRail";
 
 const GenerationPipeline = dynamic(
   () => import("@/components/generate/GenerationPipeline").then((m) => m.GenerationPipeline),
@@ -42,6 +50,7 @@ const TEMPLATE_FIELDS = [
   "story_type",
   "story_template",
   "scene_count",
+  "dynamic_scenes",
   "word_count",
   "scene_narration_style",
   "scene_duration",
@@ -50,16 +59,6 @@ const TEMPLATE_FIELDS = [
   "image_style",
   "tts_provider",
   "tts_voice",
-  "subtitle_enabled",
-  "subtitle_source",
-  "generate_subtitles",
-  "transcription_provider",
-  "transcription_language",
-  "subtitle_font",
-  "subtitle_size",
-  "subtitle_color",
-  "subtitle_position",
-  "subtitle_words_per_group",
   "transition",
   "resolution",
   "use_production_storyboard",
@@ -84,6 +83,7 @@ export default function GeneratePage() {
   const resolutions = useSettingsStore((s) => s.resolutions);
   const providers = useSettingsStore((s) => s.providers);
   const defaults = useSettingsStore((s) => s.defaults);
+  const defaultsHydrated = useSettingsStore((s) => s.hydrated);
 
   const skipDraftRestore = useMemo(() => {
     if (typeof window === "undefined") return true;
@@ -98,6 +98,7 @@ export default function GeneratePage() {
 
   const hasSyncedDefaults = useRef(false);
   useEffect(() => {
+    if (!defaultsHydrated) return;
     if (!hasSyncedDefaults.current) {
       hasSyncedDefaults.current = true;
       form.reset({
@@ -105,7 +106,7 @@ export default function GeneratePage() {
         ...buildGenerateDefaultValues(defaults),
       });
     }
-  }, [defaults, form]);
+  }, [defaults, defaultsHydrated, form]);
 
   const [contentSource, setContentSource] = useState<ContentSource>("concept");
   const [generating, setGenerating] = useState(false);
@@ -167,11 +168,8 @@ export default function GeneratePage() {
         if (field === "scene_count" || field === "word_count") updates[field] = parseInt(v, 10);
         else if (field === "scene_duration") updates[field] = parseFloat(v);
         else if (field === "inter_scene_pause_ms" || field === "transition_overlap_ms") updates[field] = parseInt(v, 10);
-        else if (field === "subtitle_size") updates[field] = parseInt(v, 10);
-        else if (field === "subtitle_words_per_group") updates[field] = parseInt(v, 10);
         else if (
-          field === "subtitle_enabled" ||
-          field === "generate_subtitles" ||
+          field === "dynamic_scenes" ||
           field === "use_production_storyboard" ||
           field === "match_scenes_to_audio"
         )
@@ -200,7 +198,7 @@ export default function GeneratePage() {
   const llmProviderWatch = useWatch({ control: form.control, name: "llm_provider" });
   const imageProviderWatch = useWatch({ control: form.control, name: "image_provider" });
   const ttsVoiceWatch = useWatch({ control: form.control, name: "tts_voice" });
-  const { data: voices = [] } = useVoicesQuery(ttsProvider);
+  const { data: voices = [] } = useVoicesQuery("kokoro");
   const { data: musicList = [] } = useMusicQuery();
   const uploadMusicMut = useUploadMusicMutation();
 
@@ -228,8 +226,19 @@ export default function GeneratePage() {
     const v = form.getValues();
     setPreviewingVoice(true);
     try {
-      const result = await api.previewVoice(v.tts_provider, v.tts_voice);
-      const url = getMediaUrl(result.path || result.url);
+      const result = await api.generateAudio({
+        text: "Hello! This is a preview of my Kokoro voice settings.",
+        provider: "kokoro",
+        voice: v.tts_voice,
+        speed: v.tts_speed,
+        response_format: v.tts_response_format,
+        normalize: v.tts_normalize,
+      });
+      const raw = result.url || result.path;
+      if (!raw) {
+        throw new Error("Missing audio preview URL");
+      }
+      const url = await resolveMediaPlaybackUrl(raw);
       const audio = new Audio(url);
       audio.play();
     } catch {
@@ -334,14 +343,14 @@ export default function GeneratePage() {
     [contentSource, pipelineMode, addJob, applyBackendFieldErrors, form, providers.image, providers.llm, providers.tts, router, voices]
   );
 
-  const canGenerate = useMemo(() => {
+  const generationChecks = useMemo(() => {
     const contentOk =
       contentSource === "concept" ? !!titleWatch?.trim() : !!customScriptWatch?.trim();
     const llmOk = providers.llm.some((p) => p.name === llmProviderWatch && p.configured);
     const imgOk = providers.image.some((p) => p.name === imageProviderWatch && p.configured);
     const ttsOk = providers.tts.some((p) => p.name === ttsProvider && p.configured);
     const voiceOk = voices.some((v) => v.id === ttsVoiceWatch);
-    return contentOk && llmOk && imgOk && ttsOk && voiceOk;
+    return { contentOk, llmOk, imgOk, ttsOk, voiceOk };
   }, [
     contentSource,
     titleWatch,
@@ -355,11 +364,95 @@ export default function GeneratePage() {
     providers.tts,
     voices,
   ]);
+  const canGenerate =
+    generationChecks.contentOk &&
+    generationChecks.llmOk &&
+    generationChecks.imgOk &&
+    generationChecks.ttsOk &&
+    generationChecks.voiceOk;
+
+  useEffect(() => {
+    if (ttsProvider === "kokoro") return;
+    form.setValue("tts_provider", "kokoro", {
+      shouldDirty: false,
+      shouldValidate: true,
+    });
+  }, [form, ttsProvider]);
+
+  useEffect(() => {
+    if (!voices.length) return;
+    if (voices.some((voice) => voice.id === ttsVoiceWatch)) return;
+    form.setValue("tts_voice", voices[0].id, {
+      shouldDirty: false,
+      shouldValidate: true,
+    });
+  }, [form, ttsVoiceWatch, voices]);
 
   const triggerGenerate = useCallback(() => {
     void form.handleSubmit(onSubmitValid)();
   }, [form, onSubmitValid]);
   const generateCtaLabel = pipelineMode === "manual" ? "Create scenes" : "Create full video";
+  const creationProgressSteps = useMemo<CreationProgressStep[]>(() => {
+    const contentStatus = generationChecks.contentOk ? "complete" : "active";
+    const visualsStatus = generationChecks.contentOk
+      ? generationChecks.imgOk
+        ? "complete"
+        : "active"
+      : "pending";
+    const audioStatus = generationChecks.contentOk && generationChecks.imgOk
+      ? generationChecks.ttsOk && generationChecks.voiceOk
+        ? "complete"
+        : "active"
+      : "pending";
+    const reviewStatus = canGenerate ? "active" : "blocked";
+
+    return [
+      {
+        id: "content",
+        label: "Content",
+        description: contentSource === "concept" ? "Title and story setup" : "Custom script input",
+        status: contentStatus,
+        hint: generationChecks.contentOk ? "Ready" : "Add required content",
+      },
+      {
+        id: "visuals",
+        label: "Visuals",
+        description: "Image model, style, transition, resolution",
+        status: visualsStatus,
+        hint: generationChecks.imgOk ? "Ready" : "Configure visual engine",
+      },
+      {
+        id: "audio",
+        label: "Audio",
+        description: "Voice, speed, and music",
+        status: audioStatus,
+        hint:
+          generationChecks.ttsOk && generationChecks.voiceOk
+            ? "Ready"
+            : "Select valid voice settings",
+      },
+      {
+        id: "review",
+        label: "Review & Start",
+        description: pipelineMode === "manual" ? "Create project storyboard" : "Run full pipeline",
+        status: reviewStatus,
+        hint: generating
+          ? "Submitting request..."
+          : canGenerate
+            ? "Ready to generate"
+            : "Resolve blocked fields",
+      },
+    ];
+  }, [
+    canGenerate,
+    contentSource,
+    generating,
+    generationChecks.contentOk,
+    generationChecks.imgOk,
+    generationChecks.ttsOk,
+    generationChecks.voiceOk,
+    pipelineMode,
+  ]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -376,48 +469,45 @@ export default function GeneratePage() {
   const activeJobs = jobs.filter((j) => (j.status === "queued" || j.status === "in_progress") && j.type === "video_render");
   const resolutionIds = resolutions.map((r) => r.id);
   const transitionIds = transitions.map((t) => t.id);
-  const showAsideColumn = useMemo(() => {
-    const pipelineTrackable = jobs.some(
-      (j) =>
-        j.type === "video_render" &&
-        (j.status === "queued" || j.status === "in_progress") &&
-        Boolean(j.project_id)
-    );
-    return activeJobs.length > 0 || pipelineTrackable;
-  }, [jobs, activeJobs.length]);
+  const pipelineTrackable = useMemo(
+    () =>
+      jobs.some(
+        (j) =>
+          j.type === "video_render" &&
+          (j.status === "queued" || j.status === "in_progress") &&
+          Boolean(j.project_id),
+      ),
+    [jobs],
+  );
 
   return (
     <FormProvider {...form}>
-      <div className="w-full min-w-0 max-w-none pb-8 text-slate-900 dark:text-slate-100">
-        <header className="mb-4 border-b border-border/50 pb-4">
-          <div className="min-w-0 space-y-1.5">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Generate</p>
-            <h1 className="text-balance text-2xl font-semibold tracking-tight sm:text-3xl">Create a short</h1>
-            <p className="max-w-2xl text-pretty text-sm leading-snug text-muted-foreground">
-              Set your story, adjust visuals and audio, then open the studio with a storyboard job.
-            </p>
-          </div>
-        </header>
-
-        <div
-          className={cn(
-            "grid w-full min-w-0 grid-cols-1 gap-5 lg:items-start lg:gap-6",
-            showAsideColumn && "lg:grid-cols-[minmax(0,1fr)_17rem] xl:grid-cols-[minmax(0,1fr)_18.5rem]"
-          )}
-        >
-          <div className="min-w-0 w-full space-y-4">
-            <section
-              aria-label="Live estimate"
-              className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm backdrop-blur-sm"
-            >
-              <div className="mb-2.5 flex flex-wrap items-center gap-2">
+      <CreationPageShell
+        className="pb-8 text-slate-900 dark:text-slate-100"
+        header={(
+          <CreationFlowHeader
+            eyebrow="Generate"
+            title="Create a short"
+            description="Set project-level overrides here, then continue scene-by-scene in Studio."
+            badges={(
+              <>
+                <Badge variant="secondary">
+                  {pipelineMode === "manual" ? "Step-by-step mode" : "One-click mode"}
+                </Badge>
+                <Badge variant="outline">
+                  {contentSource === "concept" ? "Concept source" : "Script source"}
+                </Badge>
+              </>
+            )}
+            actions={(
+              <>
                 <Button
                   type="button"
                   size="sm"
                   variant={pipelineMode === "manual" ? "default" : "outline"}
                   onClick={() => setPipelineMode("manual")}
                 >
-                  Step-by-step mode
+                  Step-by-step
                 </Button>
                 <Button
                   type="button"
@@ -425,150 +515,188 @@ export default function GeneratePage() {
                   variant={pipelineMode === "auto" ? "default" : "outline"}
                   onClick={() => setPipelineMode("auto")}
                 >
-                  One-click mode
+                  One-click
                 </Button>
-                <span className="text-xs text-muted-foreground">
-                  {pipelineMode === "manual"
-                    ? "Start with scenes first, then finish assets and export in Studio."
-                    : "Create scenes, assets, and final video in one run."}
-                </span>
-              </div>
-              <GenerateSummaryPanel control={form.control} variant="strip" />
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-sans text-[10px]">Ctrl</kbd>
-                <span className="mx-1">+</span>
-                <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-sans text-[10px]">Enter</kbd>
-                <span className="ml-1.5">to start when ready</span>
-              </p>
-            </section>
+                <Button type="button" size="sm" variant="ghost" asChild>
+                  <Link href="/scripts">Open Script Studio</Link>
+                </Button>
+              </>
+            )}
+          />
+        )}
+        intro={(
+          <section
+            aria-label="Live estimate"
+            className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm backdrop-blur-sm"
+          >
+            <GenerateSummaryPanel control={form.control} variant="strip" />
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-sans text-[10px]">Ctrl</kbd>
+              <span className="mx-1">+</span>
+              <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-sans text-[10px]">Enter</kbd>
+              <span className="ml-1.5">to start when ready</span>
+            </p>
+          </section>
+        )}
+        aside={(
+          <>
+            <CreationProgressRail steps={creationProgressSteps} />
+            {pipelineTrackable || activeJobs.length > 0 ? <GenerationPipeline /> : null}
 
-            <ViralIdeasSection
-              setContentSource={setContentSourceCb}
-              setSectionsOpen={setSectionsOpen}
-              validResolutionIds={resolutionIds}
-              validTransitionIds={transitionIds}
-            />
-
-            <div id="gen-content" className="scroll-mt-20 w-full min-w-0">
-              <div className="section-neon section-neon--content w-full min-w-0 rounded-xl border border-border/60 bg-card/40 shadow-sm">
-                <CollapsibleCard
-                  title="Content"
-                  icon={<Sparkles className="h-4 w-4 opacity-90" />}
-                  open={sectionsOpen.content}
-                  onOpenChange={(open) => setSectionsOpen((prev) => ({ ...prev, content: open }))}
-                >
-                  <ContentSourceTabs value={contentSource} onChange={setContentSourceCb} />
-
-                  {contentSource === "concept" && (
-                    <ConceptFields
-                      generating={generating}
-                      canGenerate={canGenerate}
-                      onGenerate={triggerGenerate}
-                      generateLabel={generateCtaLabel}
-                    />
-                  )}
-                  {contentSource === "script" && (
-                    <ScriptFields
-                      generating={generating}
-                      canGenerate={canGenerate}
-                      onGenerate={triggerGenerate}
-                      generateLabel={generateCtaLabel}
-                    />
-                  )}
-
-                  <StorySettingsCard
-                    storyTypes={storyTypes}
-                    llmProviders={providers.llm}
-                  />
-                </CollapsibleCard>
-              </div>
-            </div>
-
-            <div id="gen-visuals" className="scroll-mt-20 w-full min-w-0">
-              <div className="section-neon section-neon--visuals w-full min-w-0 rounded-xl border border-border/60 bg-card/40 shadow-sm">
-                <CollapsibleCard
-                  title="Visuals"
-                  icon={<Layers className="h-4 w-4 opacity-90" />}
-                  open={sectionsOpen.visuals}
-                  onOpenChange={(open) => setSectionsOpen((prev) => ({ ...prev, visuals: open }))}
-                >
-                  <VisualsCard
-                    imageProviders={providers.image}
-                    resolutions={resolutions}
-                    transitions={transitions}
-                  />
-                </CollapsibleCard>
-              </div>
-            </div>
-
-            <div id="gen-audio" className="scroll-mt-20 w-full min-w-0">
-              <div className="section-neon section-neon--audio w-full min-w-0 rounded-xl border border-border/60 bg-card/40 shadow-sm">
-                <CollapsibleCard
-                  title="Audio & Subtitles"
-                  icon={<Volume2 className="h-4 w-4 opacity-90" />}
-                  open={sectionsOpen.audio}
-                  onOpenChange={(open) => setSectionsOpen((prev) => ({ ...prev, audio: open }))}
-                >
-                  <AudioCard
-                    ttsProviders={providers.tts}
-                    voices={voices}
-                    musicList={musicList}
-                    previewingVoice={previewingVoice}
-                    uploadingMusic={uploadMusicMut.isPending}
-                    onVoicePreview={handleVoicePreview}
-                    onMusicUpload={handleMusicUpload}
-                  />
-                </CollapsibleCard>
-              </div>
-            </div>
-          </div>
-
-          {showAsideColumn && (
-            <aside className="min-w-0 w-full max-w-full space-y-3 lg:sticky lg:top-6 lg:self-start">
-              <GenerationPipeline />
-
-              {activeJobs.length > 0 && (
-                <Card className="section-neon section-neon--pipeline border-border/70 shadow-sm" size="2">
-                  <CardHeader className="space-y-0 p-3 pb-2">
-                    <CardTitle className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">
-                      Active tasks
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 px-3 pb-3 pt-0">
-                    {activeJobs.map((job) => (
-                      <div key={job.id} className="space-y-2">
-                        <div className="flex items-center justify-between gap-3 text-sm">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-muted-foreground">{job.type.replace(/_/g, " ")}</span>
-                              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
-                                {engineStageLabel(
-                                  inferCurrentStage(job, jobPipelines[job.id], jobDetails[job.id]),
-                                )}
-                              </span>
-                            </div>
-                            <p className="mt-1 text-[11px] text-muted-foreground">
-                              {summarizeEngineOutcome(job, jobPipelines[job.id], jobDetails[job.id])}
-                            </p>
+            {activeJobs.length > 0 && (
+              <Card className="section-neon section-neon--pipeline border-border/70 shadow-sm" size="2">
+                <CardHeader className="space-y-0 p-3 pb-2">
+                  <CardTitle className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">
+                    Active tasks
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 px-3 pb-3 pt-0">
+                  {activeJobs.map((job) => (
+                    <div key={job.id} className="space-y-2">
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">{job.type.replace(/_/g, " ")}</span>
+                            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
+                              {engineStageLabel(
+                                inferCurrentStage(job, jobPipelines[job.id], jobDetails[job.id]),
+                              )}
+                            </span>
                           </div>
-                          <span className="font-medium tabular-nums">{job.progress}%</span>
-                        </div>
-                        <LinearProgress value={job.progress} />
-                        {jobDetails[job.id] && (
-                          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary animate-pulse" />
-                            {jobDetails[job.id]}
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {summarizeEngineOutcome(job, jobPipelines[job.id], jobDetails[job.id])}
                           </p>
-                        )}
+                        </div>
+                        <span className="font-medium tabular-nums">{job.progress}%</span>
                       </div>
-                    ))}
-                  </CardContent>
-                </Card>
+                      <LinearProgress value={job.progress} />
+                      {jobDetails[job.id] ? (
+                        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary animate-pulse" />
+                          {jobDetails[job.id]}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )}
+      >
+        <ViralIdeasSection
+          setContentSource={setContentSourceCb}
+          setSectionsOpen={setSectionsOpen}
+          validResolutionIds={resolutionIds}
+          validTransitionIds={transitionIds}
+        />
+
+        <div id="gen-content" className="scroll-mt-20 w-full min-w-0">
+          <div className="section-neon section-neon--content w-full min-w-0 rounded-xl border border-border/60 bg-card/40 shadow-sm">
+            <CollapsibleCard
+              title="Content"
+              icon={<Sparkles className="h-4 w-4 opacity-90" />}
+              open={sectionsOpen.content}
+              onOpenChange={(open) => setSectionsOpen((prev) => ({ ...prev, content: open }))}
+            >
+              <ContentSourceTabs value={contentSource} onChange={setContentSourceCb} />
+
+              {contentSource === "concept" ? (
+                <ConceptFields
+                  generating={generating}
+                  canGenerate={canGenerate}
+                  onGenerate={triggerGenerate}
+                  generateLabel={generateCtaLabel}
+                  showInlineAction={false}
+                />
+              ) : (
+                <ScriptFields
+                  generating={generating}
+                  canGenerate={canGenerate}
+                  onGenerate={triggerGenerate}
+                  generateLabel={generateCtaLabel}
+                  showInlineAction={false}
+                />
               )}
-            </aside>
-          )}
+
+              <StorySettingsCard
+                storyTypes={storyTypes}
+                llmProviders={providers.llm}
+              />
+            </CollapsibleCard>
+          </div>
         </div>
-      </div>
+
+        <div id="gen-visuals" className="scroll-mt-20 w-full min-w-0">
+          <div className="section-neon section-neon--visuals w-full min-w-0 rounded-xl border border-border/60 bg-card/40 shadow-sm">
+            <CollapsibleCard
+              title="Visuals"
+              icon={<Layers className="h-4 w-4 opacity-90" />}
+              open={sectionsOpen.visuals}
+              onOpenChange={(open) => setSectionsOpen((prev) => ({ ...prev, visuals: open }))}
+            >
+              <VisualsCard
+                imageProviders={providers.image}
+                resolutions={resolutions}
+                transitions={transitions}
+              />
+            </CollapsibleCard>
+          </div>
+        </div>
+
+        <div id="gen-audio" className="scroll-mt-20 w-full min-w-0">
+          <div className="section-neon section-neon--audio w-full min-w-0 rounded-xl border border-border/60 bg-card/40 shadow-sm">
+            <CollapsibleCard
+              title="Audio & Subtitles"
+              icon={<Volume2 className="h-4 w-4 opacity-90" />}
+              open={sectionsOpen.audio}
+              onOpenChange={(open) => setSectionsOpen((prev) => ({ ...prev, audio: open }))}
+            >
+              <AudioCard
+                ttsProviders={providers.tts}
+                voices={voices}
+                musicList={musicList}
+                previewingVoice={previewingVoice}
+                uploadingMusic={uploadMusicMut.isPending}
+                onVoicePreview={handleVoicePreview}
+                onMusicUpload={handleMusicUpload}
+              />
+            </CollapsibleCard>
+          </div>
+        </div>
+
+        <CreationActionBar
+          primaryLabel={generateCtaLabel}
+          onPrimaryClick={triggerGenerate}
+          primaryDisabled={!canGenerate || generating}
+          primaryLoading={generating}
+          primaryLoadingLabel={pipelineMode === "manual" ? "Creating scenes..." : "Creating video..."}
+          secondaryActions={(
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant={pipelineMode === "manual" ? "default" : "outline"}
+                onClick={() => setPipelineMode("manual")}
+              >
+                Step-by-step
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={pipelineMode === "auto" ? "default" : "outline"}
+                onClick={() => setPipelineMode("auto")}
+              >
+                One-click
+              </Button>
+            </>
+          )}
+          helperText={pipelineMode === "manual"
+            ? "Starts in Studio at the Script step so you can review before assets/export."
+            : "Runs the full pipeline automatically and opens the project output when complete."
+          }
+        />
+      </CreationPageShell>
     </FormProvider>
   );
 }

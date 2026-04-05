@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Upload,
   X,
+  Sparkles,
   SlidersHorizontal,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";

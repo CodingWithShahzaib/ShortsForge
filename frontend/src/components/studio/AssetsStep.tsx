@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowLeft,
@@ -17,8 +17,8 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { Project, Scene, Job } from "@/lib/types";
-import { api, getMediaUrl } from "@/lib/api";
+import type { Project, Scene } from "@/lib/types";
+import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,7 +65,7 @@ function countAssets(scenes: Scene[]) {
 type Mode = "pre" | "generating" | "partial" | "review";
 
 const ASSET_GRID_CLASSNAME =
-  "grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8";
+  "grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6";
 
 function detectMode(scenes: Scene[], isGenerating: boolean): Mode {
   if (isGenerating) return "generating";
@@ -125,7 +125,6 @@ function GeneratedCard({
   const audioSrc = assetMediaSrc(audioAsset);
   const cardLabel = (scene.image_prompt || "").trim() || `Scene ${index + 1}`;
 
-  const [hovered, setHovered] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -137,8 +136,8 @@ function GeneratedCard({
       await api.regenerateSceneImage(projectId, scene.id);
       notify.success("Image regeneration started");
       onRefresh();
-    } catch (e: any) {
-      notify.error(e?.message || "Regeneration failed");
+    } catch (e: unknown) {
+      notify.error(e instanceof Error ? e.message : "Regeneration failed");
     } finally {
       setRegenerating(false);
     }
@@ -152,8 +151,8 @@ function GeneratedCard({
         await api.uploadSceneImage(projectId, scene.id, file);
         notify.success("Image uploaded");
         onRefresh();
-      } catch (err: any) {
-        notify.error(err?.message || "Upload failed");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Upload failed");
       }
       if (fileRef.current) fileRef.current.value = "";
     },
@@ -185,9 +184,7 @@ function GeneratedCard({
       initial={{ opacity: 0, filter: "blur(8px)", scale: 0.95 }}
       animate={{ opacity: 1, filter: "blur(0px)", scale: 1 }}
       transition={{ delay: index * 0.04, duration: 0.4, ease: "easeOut" }}
-      className="group relative flex flex-col overflow-hidden rounded-md border border-border/30 bg-card shadow-sm transition-shadow hover:shadow-md"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className="relative flex flex-col overflow-hidden rounded-md border border-border/30 bg-card shadow-sm"
     >
       {/* Image thumbnail */}
       <div className="relative aspect-5/4 w-full overflow-hidden bg-black/10">
@@ -216,53 +213,51 @@ function GeneratedCard({
           </span>
         )}
 
-        {/* Hover overlay for review mode */}
-        {isReview && (
-          <AnimatePresence>
-            {hovered && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15 }}
-                className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/50 backdrop-blur-[2px]"
-              >
-                <button
-                  onClick={handleRegenerate}
-                  disabled={regenerating}
-                  className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25 transition-colors"
-                  title="Regenerate"
-                >
-                  {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                </button>
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25 transition-colors"
-                  title="Upload"
-                >
-                  <Upload className="h-3 w-3" />
-                </button>
-                {audioSrc && (
-                  <button
-                    onClick={toggleAudio}
-                    className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25 transition-colors"
-                    title={playing ? "Stop" : "Play Audio"}
-                  >
-                    {playing ? <Volume2 className="h-3 w-3 text-emerald-400" /> : <Play className="h-3 w-3" />}
-                  </button>
-                )}
-                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        )}
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
       </div>
 
       {/* Bottom info */}
-      <div className="px-2 py-1.5">
+      <div className="space-y-1.5 px-2 py-1.5">
         <p className="truncate text-[10px] font-medium text-foreground/80">
           {cardLabel}
         </p>
+        {(isReview || !imgSrc || !audioSrc) ? (
+          <div className="flex flex-wrap items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-[10px]"
+              onClick={() => void handleRegenerate()}
+              disabled={regenerating}
+            >
+              {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Regenerate
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-[10px]"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload className="h-3 w-3" />
+              Upload
+            </Button>
+            {audioSrc ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-[10px]"
+                onClick={toggleAudio}
+              >
+                {playing ? <Volume2 className="h-3 w-3 text-emerald-500" /> : <Play className="h-3 w-3" />}
+                {playing ? "Stop audio" : "Play audio"}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </motion.div>
   );
@@ -493,7 +488,7 @@ function PreGenerationView({
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         {scenes.map((scene, i) => (
           <motion.div
             key={scene.id}
@@ -580,7 +575,7 @@ export default function AssetsStep({
       </div>
 
       {/* Scrollable content: only this region scrolls */}
-      <div className="min-h-0 flex-1 overflow-hidden pt-3">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-3 pr-1">
         <div className="mb-3 rounded-xl border border-border/50 bg-card/80 px-3.5 py-3 shadow-sm">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -684,8 +679,8 @@ export default function AssetsStep({
               <div>
                 <h3 className="text-sm font-semibold">Assets ready</h3>
                 <p className="text-xs text-muted-foreground">
-                  {withImage} image{withImage !== 1 && "s"}, {withAudio} audio clip{withAudio !== 1 && "s"}. Hover to
-                  regenerate or upload.
+                  {withImage} image{withImage !== 1 && "s"}, {withAudio} audio clip{withAudio !== 1 && "s"}. Use the
+                  action buttons on each card to regenerate, upload, or preview audio.
                 </p>
               </div>
             </div>

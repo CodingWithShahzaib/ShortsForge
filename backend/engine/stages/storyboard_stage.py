@@ -7,12 +7,15 @@ from sqlalchemy.orm import selectinload
 
 from backend.core.websocket_manager import ws_manager
 from backend.engine.context import EngineContext
+from backend.config import get_settings
 from backend.engine.planning import SceneSpec
 from backend.models import Project, Scene
+from backend.services.project_video_settings_service import apply_project_settings_snapshot
 from backend.services.script_service import (
     generate_story_and_storyboard,
     generate_video_production_script,
     normalize_scene_narration,
+    repair_storyboard_scene_narration,
 )
 
 
@@ -40,7 +43,7 @@ class StoryboardStage:
         result = await session.execute(
             select(Project)
             .where(Project.id == context.project_id)
-            .options(selectinload(Project.scenes))
+            .options(selectinload(Project.scenes), selectinload(Project.video_settings))
         )
         project = result.scalar_one()
         context.project_version = project.version
@@ -73,6 +76,7 @@ class StoryboardStage:
                     concept=project.title or "AI Video",
                     story_type=context.settings.story_type or project.story_type,
                     scene_count=context.settings.scene_count,
+                    dynamic_scenes=context.settings.dynamic_scenes,
                     image_style=context.settings.image_style,
                     resolution=context.settings.resolution,
                     transition=context.settings.transition,
@@ -90,6 +94,7 @@ class StoryboardStage:
                     script=script_text,
                     story_type=context.settings.story_type or project.story_type,
                     scene_count=context.settings.scene_count,
+                    dynamic_scenes=context.settings.dynamic_scenes,
                     image_style=context.settings.image_style,
                     resolution=context.settings.resolution,
                     transition=context.settings.transition,
@@ -111,7 +116,8 @@ class StoryboardStage:
             settings_dict["use_production_storyboard"] = bool(use_prod)
             if storyboard.get("visual_continuity"):
                 settings_dict["visual_continuity"] = storyboard.get("visual_continuity")
-            project.settings = settings_dict or project.settings
+            app = context.app_settings or get_settings()
+            apply_project_settings_snapshot(project, settings_dict, app)
             raw_scenes = storyboard.get("scenes", [])
 
             if isinstance(storyboard, dict) and storyboard.get("quality_issues"):
@@ -124,20 +130,43 @@ class StoryboardStage:
                 )
 
         raw_scenes = normalize_scene_narration(raw_scenes, script=project.script or "")
+        protected_scene_indexes = {
+            index
+            for index, scene in enumerate(raw_scenes)
+            if bool(scene.get("is_locked")) or bool(scene.get("is_manually_edited"))
+        }
+        raw_scenes, stage_issues = repair_storyboard_scene_narration(
+            raw_scenes,
+            script=project.script or "",
+            skip_indexes=protected_scene_indexes,
+        )
+        if stage_issues:
+            await ws_manager.send_progress(
+                context.job_id,
+                "video_render",
+                1,
+                "in_progress",
+                "Narration quality checks: " + "; ".join(stage_issues),
+            )
         normalized_scenes: list[SceneSpec] = []
         scene_duration_default = context.settings.scene_duration
+        forced_transition = (
+            context.settings.transition
+            if context.settings.transition in {"fade_in_fade_out", "zoom_in_zoom_out"}
+            else None
+        )
         for i, sc in enumerate(raw_scenes):
             if use_prod:
                 narration = (sc.get("script") or sc.get("narration") or sc.get("subtitle") or "").strip()
                 subtitle = (sc.get("subtitle") or narration).strip()
                 image_prompt = sc.get("image_prompt", "")
-                transition = "fade"
+                transition = context.settings.transition
                 scene_duration = sc.get("duration_seconds", scene_duration_default)
             else:
                 narration = (sc.get("narration") or sc.get("subtitle") or sc.get("script") or "").strip()
                 subtitle = (sc.get("subtitle") or narration).strip()
                 image_prompt = sc.get("image_prompt", "")
-                transition = sc.get("transition")
+                transition = forced_transition or sc.get("transition")
                 scene_duration = sc.get("duration", scene_duration_default)
 
             session.add(

@@ -1,6 +1,6 @@
 # ShortsForge
 
-**From script to reel in minutes.** AI-powered faceless video generation platform with LLM storyboards, multi-provider images and TTS, and FFmpeg rendering.
+**From script to reel in minutes.** AI-powered faceless video generation platform with LLM storyboards, multi-provider images, Kokoro TTS, and FFmpeg rendering.
 
 ---
 
@@ -24,7 +24,7 @@
 - **Multiple AI Providers**
   - **LLM:** OpenAI, Groq, OpenRouter
   - **Images:** Replicate, FAL, Together, Runware, Pollinations, OpenAI DALL-E
-  - **Voice/TTS:** Edge TTS, OpenAI TTS, ElevenLabs
+  - **Voice/TTS:** Kokoro TTS via Docker
 - **FFmpeg Rendering Pipeline** — Direct FFmpeg with filter_complex for transitions, ASS subtitles, hardware acceleration
 - **Real-time Progress** — WebSocket-based progress updates for all generation flows
 - **Scene Editor** — Visual scene management with drag-and-drop reordering
@@ -44,7 +44,7 @@
 | **Queue & Cache** | Redis |
 | **Storage** | Local filesystem or S3/MinIO |
 | **Video** | FFmpeg |
-| **AI** | OpenAI (GPT, TTS, Whisper, DALL-E), Groq, OpenRouter, Replicate, FAL, Together, Runware, ElevenLabs, Edge TTS |
+| **AI** | OpenAI (GPT, Whisper, DALL-E), Groq, OpenRouter, Replicate, FAL, Together, Runware, Kokoro TTS |
 
 ---
 
@@ -80,6 +80,7 @@ This starts:
 - **PostgreSQL** on `localhost:5432`
 - **Redis** on `localhost:6379`
 - **MinIO** on `localhost:9000` (API) and `localhost:9001` (Console)
+- **Kokoro TTS** on `localhost:8880`
 
 ### 3. Configure environment
 
@@ -136,11 +137,11 @@ npm run dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key (GPT, TTS, DALL-E, Whisper) | — |
+| `OPENAI_API_KEY` | OpenAI API key (GPT, DALL-E, Whisper) | — |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | `https://api.openai.com/v1` |
 | `GROQ_API_KEY` | Groq API key (LLM) | — |
 | `OPENROUTER_API_KEY` | OpenRouter API key (LLM) | — |
-| `ELEVENLABS_API_KEY` | ElevenLabs API key (TTS) | — |
+| `KOKORO_TTS_URL` | Kokoro TTS API base URL | `http://localhost:8880` |
 | `REPLICATE_API_KEY` | Replicate API key (images) | — |
 | `FAL_API_KEY` | FAL API key (images) | — |
 | `TOGETHER_API_KEY` | Together AI API key (images) | — |
@@ -190,7 +191,7 @@ ShortsForge/
 │   ├── services/            # Business logic
 │   ├── providers/           # AI provider implementations
 │   │   ├── image/          # Replicate, FAL, Together, Runware, OpenAI
-│   │   └── tts/            # Edge TTS, OpenAI TTS, ElevenLabs
+│   │   └── tts/            # Kokoro TTS provider
 │   ├── core/                # FFmpeg, Redis, task manager, WebSocket
 │   └── migrations/         # Database migrations
 ├── frontend/

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, model_validator
 
 TransitionId = Literal[
     "fade",
+    "fade_in_fade_out",
+    "zoom_in_zoom_out",
     "dissolve",
     "wipeleft",
     "wiperight",
@@ -103,6 +105,9 @@ class VideoStyleSettings(BaseModel):
     ken_burns_enabled: bool = True
     ken_burns_zoom_percent: float = Field(default=2.5, ge=0.0, le=8.0)
     ken_burns_motion: KenBurnsMotion = "auto"
+    breathing_enabled: bool = False
+    breathing_amplitude: float = Field(default=1.5, ge=0.0, le=5.0)
+    breathing_speed: float = Field(default=0.25, ge=0.05, le=1.0)
     film_grain_enabled: bool = False
     film_grain_intensity: float = Field(default=0.05, ge=0.0, le=0.25)
     vignette_enabled: bool = True
@@ -142,8 +147,11 @@ class AudioSettings(BaseModel):
     music_volume: float = Field(default=0.3, ge=0.0, le=1.0)
     ducking_enabled: bool = True
     ducking_amount: float = Field(default=-12.0, ge=-30.0, le=-1.0)
-    voice_provider: str = "elevenlabs"
+    voice_provider: str = "kokoro"
     voice_id: str | None = None
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    response_format: Literal["mp3", "wav", "opus", "flac", "m4a"] = "mp3"
+    normalize: bool = True
 
 
 class ProjectVideoSettingsBase(BaseModel):

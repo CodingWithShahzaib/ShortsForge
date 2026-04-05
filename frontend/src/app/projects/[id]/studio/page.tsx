@@ -30,7 +30,6 @@ import {
 import { StudioRecoveryBanner } from "@/components/studio/StudioRecoveryBanner";
 
 import { StudioHeader } from "@/components/studio/StudioHeader";
-import { StudioAmbientBackground } from "@/components/studio/StudioAmbientBackground";
 import { StudioStepper } from "@/components/studio/StudioStepper";
 import ScriptStep from "@/components/studio/ScriptStep";
 import AssetsStep from "@/components/studio/AssetsStep";
@@ -110,14 +109,6 @@ function detectInitialStep(project: Project, jobs: Job[]): number {
   return 1;
 }
 
-/** Spring-based step transition: horizontal slide + scale + blur (whole content pane). */
-const STEP_SPRING = {
-  type: "spring" as const,
-  stiffness: 320,
-  damping: 36,
-  mass: 0.88,
-};
-
 function buildStepVariants(reduceMotion: boolean | null) {
   if (reduceMotion) {
     return {
@@ -126,39 +117,25 @@ function buildStepVariants(reduceMotion: boolean | null) {
       exit: { opacity: 0 },
     };
   }
-  const slide = 52;
   return {
-    enter: (dir: number) => ({
-      x: dir > 0 ? slide : -slide,
+    enter: () => ({
       opacity: 0,
-      scale: 0.965,
-      filter: "blur(12px)",
+      y: 8,
     }),
     center: {
-      x: 0,
       opacity: 1,
-      scale: 1,
-      filter: "blur(0px)",
+      y: 0,
     },
-    exit: (dir: number) => ({
-      x: dir > 0 ? -slide * 0.92 : slide * 0.92,
+    exit: () => ({
       opacity: 0,
-      scale: 0.97,
-      filter: "blur(10px)",
+      y: -6,
     }),
   };
 }
 
 function stepTransition(reduceMotion: boolean | null) {
-  if (reduceMotion) {
-    return { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const };
-  }
-  return {
-    x: STEP_SPRING,
-    scale: { type: "spring" as const, stiffness: 400, damping: 38, mass: 0.85 },
-    opacity: { duration: 0.38, ease: [0.22, 1, 0.36, 1] as const },
-    filter: { duration: 0.42, ease: [0.22, 1, 0.36, 1] as const },
-  };
+  const duration = reduceMotion ? 0.16 : 0.22;
+  return { duration, ease: [0.22, 1, 0.36, 1] as const };
 }
 
 export default function StudioPage() {
@@ -581,7 +558,7 @@ export default function StudioPage() {
       },
       {
         stage: "compile" as const,
-        label: "Compile",
+        label: "Export",
         state:
           project?.status === "failed"
             ? "failed"
@@ -593,74 +570,6 @@ export default function StudioPage() {
       },
     ];
   }, [activeVideoJob, progressDetail, stepValidity, project?.status, completedVideoUrl, isVideoStale, assetsReadyForExport]);
-
-  const exportSummary = useMemo(() => {
-    const safeProgress = Math.min(Math.max(jobProgress, 0), 99);
-
-    if (activeVideoJob?.status === "queued") {
-      const stageLabel = engineStageLabel(effectiveEngineStage ?? "compile").toLowerCase();
-      return {
-        label: "Queued",
-        note: `Waiting to start ${stageLabel}`,
-      };
-    }
-
-    if (activeVideoJob?.status === "in_progress") {
-      if (safeProgress >= 99) {
-        return {
-          label: "Finalizing",
-          note: progressDetail || "Wrapping up the export and saving the final file",
-        };
-      }
-      return {
-        label: "Rendering",
-        note: progressDetail || `${engineStageLabel(effectiveEngineStage ?? "compile")} in progress`,
-      };
-    }
-
-    if (project?.status === "failed") {
-      return {
-        label: "Failed",
-        note: failureMessage || "Review the latest render failure",
-      };
-    }
-
-    if (completedVideoUrl) {
-      return {
-        label: isVideoStale ? "Outdated" : "Compiled",
-        note: isVideoStale ? "Project changed since the last successful export" : "Latest export is ready",
-      };
-    }
-
-    if (project?.status === "ready_for_compile" && assetsReadyForExport) {
-      return {
-        label: "Ready",
-        note: "All scenes, visuals, and audio are ready to export",
-      };
-    }
-
-    if (!assetsReadyForExport) {
-      return {
-        label: "Blocked",
-        note: "Finish narration, images, and audio before exporting",
-      };
-    }
-
-    return {
-      label: "Draft",
-      note: "Review pacing and settings before you export",
-    };
-  }, [
-    jobProgress,
-    activeVideoJob,
-    effectiveEngineStage,
-    progressDetail,
-    project?.status,
-    failureMessage,
-    completedVideoUrl,
-    isVideoStale,
-    assetsReadyForExport,
-  ]);
 
   const stepHints = useMemo(() => {
     const hints: Record<number, string | null> = {};
@@ -676,10 +585,10 @@ export default function StudioPage() {
       : "Generate scenes first";
     hints[2] = scenes.length ? "Drag to reorder, tune timing" : "Scenes required";
     hints[3] = completedVideoUrl
-      ? "Video compiled"
+      ? "Export ready"
       : project?.status === "ready_for_compile"
-        ? "Assets ready, compile next"
-        : "Ready to render";
+        ? "Assets ready, export next"
+        : "Ready to export";
     return hints;
   }, [scenes, completedVideoUrl, project?.status]);
 
@@ -694,7 +603,7 @@ export default function StudioPage() {
         ? "Done"
         : project?.status === "ready_for_compile"
           ? "Ready"
-          : "Render";
+          : "Export";
     return badges;
   }, [stepValidity, completedVideoUrl, isStoryboardGenerating, isAssetGenerating, isCompiling, project?.status]);
 
@@ -722,11 +631,14 @@ export default function StudioPage() {
 
   const runStudioStage = useCallback(async (stage: EngineStage) => {
     if (!project) return;
-    const job = stage === "storyboard"
+    const isFailedRecovery = project.status === "failed";
+    const job = isFailedRecovery
       ? await api.retryProject(project.id)
-      : stage === "assets"
-        ? await api.prepareAssets(project.id)
-        : await api.compileVideo(project.id);
+      : stage === "storyboard"
+        ? await api.retryProject(project.id)
+        : stage === "assets"
+          ? await api.prepareAssets(project.id)
+          : await api.compileVideo(project.id);
     addJob(job);
     setJobs((previous) => {
       const index = previous.findIndex((existingJob) => existingJob.id === job.id);
@@ -830,42 +742,6 @@ export default function StudioPage() {
     isStoryboardGenerating,
     jobProgress,
   ]);
-
-  const studioSummaryCards = useMemo(() => {
-    const narratedScenes = scenes.filter((scene) => ((scene.narration || scene.subtitle || "").trim())).length;
-    const imageScenes = scenes.filter((scene) => !!pickLatestAsset(scene.assets, "image")).length;
-    const audioScenes = scenes.filter((scene) => !!pickLatestAsset(scene.assets, "audio")).length;
-    return [
-      {
-        id: "storyboard",
-        label: "Storyboard",
-        value: `${narratedScenes}/${scenes.length || 0}`,
-        note: "Scenes with narration",
-        icon: FileText,
-      },
-      {
-        id: "images",
-        label: "Images",
-        value: `${imageScenes}/${scenes.length || 0}`,
-        note: "Visual assets ready",
-        icon: Images,
-      },
-      {
-        id: "audio",
-        label: "Audio",
-        value: `${audioScenes}/${scenes.length || 0}`,
-        note: "Voice assets ready",
-        icon: Sparkles,
-      },
-      {
-        id: "output",
-        label: "Output",
-        value: exportSummary.label,
-        note: exportSummary.note,
-        icon: Clapperboard,
-      },
-    ];
-  }, [scenes, exportSummary]);
 
   const handleSaveDraft = useCallback(() => {
     if (!projectId) return;
@@ -1048,7 +924,6 @@ export default function StudioPage() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
-      <StudioAmbientBackground stepIndex={currentStep} />
       <StudioHeader
         projectTitle={project.title || "Untitled"}
         currentStep={currentStep + 1}
@@ -1061,19 +936,6 @@ export default function StudioPage() {
         draftSavedAt={draftInfo?.savedAt ?? null}
         onClose={() => router.push(`/projects/${projectId}`)}
       />
-
-      <div className="grid grid-cols-2 gap-3 border-b border-border/15 bg-background/60 px-4 py-3 backdrop-blur-sm sm:grid-cols-4 sm:px-5">
-        {studioSummaryCards.map((item) => (
-          <div key={item.id} className="rounded-xl border border-border/50 bg-card/70 px-3 py-2.5 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{item.label}</p>
-              <item.icon className="h-3.5 w-3.5 text-primary/80" />
-            </div>
-            <p className="mt-1 text-sm font-semibold text-foreground">{item.value}</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">{item.note}</p>
-          </div>
-        ))}
-      </div>
 
       <div className="relative z-10 grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-rows-1 md:grid-cols-[240px_minmax(0,1fr)]">
         {/* ── Unified stepper rail (responsive) ── */}
@@ -1106,14 +968,6 @@ export default function StudioPage() {
 
         {/* Step content fills main; individual steps own scroll regions (e.g. Assets grid). */}
         <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-          {/* Film-gate corners */}
-          <div className="pointer-events-none absolute inset-0 z-10 hidden md:block">
-            <svg className="absolute top-4 left-4 h-4 w-4 text-muted-foreground/10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1"><path d="M0 6 L0 0 L6 0" /></svg>
-            <svg className="absolute top-4 right-4 h-4 w-4 text-muted-foreground/10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1"><path d="M10 0 L16 0 L16 6" /></svg>
-            <svg className="absolute bottom-4 left-4 h-4 w-4 text-muted-foreground/10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1"><path d="M0 10 L0 16 L6 16" /></svg>
-            <svg className="absolute bottom-4 right-4 h-4 w-4 text-muted-foreground/10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1"><path d="M10 16 L16 16 L16 10" /></svg>
-          </div>
-
           <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 pb-6 sm:px-5 md:px-6 lg:px-8 md:pt-5">
             {showRecoveryBanner && (
               <StudioRecoveryBanner

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from backend.config import Settings as AppConfig
 
 from backend.engine.planning import RenderPlan, ResolvedGenerationSettings, SceneSpec
 
@@ -32,3 +33,6 @@ class EngineContext:
     final_video_path: str | None = None
     final_video_url: str | None = None
     final_duration: float | None = None
+    # Application-level settings (runtime config). Optional for tests; orchestrator
+    # sets this when building the context.
+    app_settings: AppConfig | None = None

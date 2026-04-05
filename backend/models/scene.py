@@ -23,6 +23,7 @@ class Scene(Base):
     # Per-scene overrides for image generation (provider, style, negative_prompt, seed, etc.)
     scene_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_manually_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     user_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     trim_start_sec: Mapped[float] = mapped_column(Float, default=0.0)
     trim_end_sec: Mapped[float] = mapped_column(Float, default=0.0)

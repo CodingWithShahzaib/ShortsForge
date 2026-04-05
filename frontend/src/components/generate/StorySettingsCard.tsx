@@ -29,6 +29,7 @@ export const StorySettingsCard = memo(function StorySettingsCard({
   } = useFormContext<GenerateFormValues>();
   const useProductionStoryboard = useWatch({ control, name: "use_production_storyboard" });
   const matchScenesToAudio = useWatch({ control, name: "match_scenes_to_audio" });
+  const dynamicScenes = useWatch({ control, name: "dynamic_scenes" });
   const { data: storyTemplatesRemote = [] } = useStoryTemplatesQuery();
   const storyTemplates = useMemo(
     () =>
@@ -151,13 +152,31 @@ export const StorySettingsCard = memo(function StorySettingsCard({
                 type="number"
                 min={2}
                 max={100}
-                className={showError("scene_count") ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                disabled={dynamicScenes}
+                className={showError("scene_count") && !dynamicScenes ? "border-red-500 focus-visible:ring-red-500" : undefined}
                 {...register("scene_count", { valueAsNumber: true })}
               />
-              {showError("scene_count") ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                {dynamicScenes ? "AI will choose the scene breakdown that best completes the story." : "Set a fixed number of scenes."}
+              </p>
+              {showError("scene_count") && !dynamicScenes ? (
                 <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.scene_count?.message}</p>
               ) : null}
             </div>
+          </div>
+          <div className="flex items-start gap-2 pt-1">
+            <input
+              type="checkbox"
+              id="dynamic-scenes"
+              className="rounded"
+              {...register("dynamic_scenes")}
+            />
+            <label htmlFor="dynamic-scenes" className="text-sm font-medium cursor-pointer">
+              Let AI decide scene count
+              <span className="block text-xs text-muted-foreground font-normal">
+                Uses as many scenes as needed to finish the story cleanly, instead of forcing a manual count.
+              </span>
+            </label>
           </div>
           <div>
             <label className="text-sm font-medium mb-1 block">Narration per scene</label>
@@ -285,6 +304,11 @@ export const StorySettingsCard = memo(function StorySettingsCard({
           {matchScenesToAudio ? (
             <p className="text-xs text-emerald-600 dark:text-emerald-400">
               Scene lengths will follow narration.
+            </p>
+          ) : null}
+          {dynamicScenes ? (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+              Dynamic scenes are enabled.
             </p>
           ) : null}
         </div>

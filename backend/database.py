@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from sqlalchemy import event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -14,6 +15,19 @@ from backend.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
+def _should_disable_asyncpg_ssl_for_localhost(database_url: str) -> bool:
+    """Avoid SSL negotiation against local Docker Postgres unless explicitly requested."""
+    if not database_url.startswith("postgresql+asyncpg://"):
+        return False
+
+    url = make_url(database_url)
+    if url.query.get("ssl") is not None or url.query.get("sslmode") is not None:
+        return False
+
+    return url.host in {"localhost", "127.0.0.1", "::1"}
+
+
 # SQLite: longer timeout for lock contention; NullPool avoids pool-level locking; WAL reduces contention
 connect_args = {}
 engine_kw: dict = {"echo": False, "pool_pre_ping": True}
@@ -21,6 +35,8 @@ if "sqlite" in settings.database_url:
     connect_args["timeout"] = 60  # seconds to wait for lock
     engine_kw["poolclass"] = NullPool  # one connection per session, no pool contention
 else:
+    if _should_disable_asyncpg_ssl_for_localhost(settings.database_url):
+        connect_args["ssl"] = "disable"
     # Enable sane pooling defaults for Postgres/MySQL/etc.
     engine_kw["pool_size"] = settings.db_pool_size
     engine_kw["max_overflow"] = settings.db_max_overflow
@@ -147,6 +163,8 @@ def _ensure_scene_editor_columns(connection) -> None:
         cols = [row[1] for row in res.fetchall()]
         if "is_locked" not in cols:
             connection.execute(text("ALTER TABLE scenes ADD COLUMN is_locked BOOLEAN DEFAULT 0"))
+        if "is_manually_edited" not in cols:
+            connection.execute(text("ALTER TABLE scenes ADD COLUMN is_manually_edited BOOLEAN DEFAULT 0"))
         if "user_notes" not in cols:
             connection.execute(text("ALTER TABLE scenes ADD COLUMN user_notes TEXT"))
         if "trim_start_sec" not in cols:
@@ -156,6 +174,9 @@ def _ensure_scene_editor_columns(connection) -> None:
     elif dialect == "postgresql":
         connection.execute(
             text("ALTER TABLE scenes ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT false")
+        )
+        connection.execute(
+            text("ALTER TABLE scenes ADD COLUMN IF NOT EXISTS is_manually_edited BOOLEAN DEFAULT false")
         )
         connection.execute(
             text("ALTER TABLE scenes ADD COLUMN IF NOT EXISTS user_notes TEXT")

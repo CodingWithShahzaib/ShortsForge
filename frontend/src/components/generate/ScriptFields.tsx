@@ -14,6 +14,7 @@ type Props = {
   canGenerate: boolean;
   onGenerate: () => void;
   generateLabel?: string;
+  showInlineAction?: boolean;
 };
 
 export const ScriptFields = memo(function ScriptFields({
@@ -21,6 +22,7 @@ export const ScriptFields = memo(function ScriptFields({
   canGenerate,
   onGenerate,
   generateLabel = "Create scenes",
+  showInlineAction = true,
 }: Props) {
   const {
     register,
@@ -65,24 +67,26 @@ export const ScriptFields = memo(function ScriptFields({
             id="custom-script"
             aria-describedby="script-stats-hint"
           />
-          <Button
-            type="button"
-            variant="animated"
-            className="h-11 w-full shrink-0 px-4 text-sm font-semibold lg:mt-0 lg:w-44"
-            disabled={!canGenerate || generating}
-            onClick={onGenerate}
-          >
-            {generating ? (
-              <>
-                <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin inline-block" />{" "}
-                Generating…
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4 shrink-0" /> {generateLabel}
-              </>
-            )}
-          </Button>
+          {showInlineAction ? (
+            <Button
+              type="button"
+              variant="animated"
+              className="h-11 w-full shrink-0 px-4 text-sm font-semibold lg:mt-0 lg:w-44"
+              disabled={!canGenerate || generating}
+              onClick={onGenerate}
+            >
+              {generating ? (
+                <>
+                  <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin inline-block" />{" "}
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 shrink-0" /> {generateLabel}
+                </>
+              )}
+            </Button>
+          ) : null}
         </div>
       </Field>
       <div id="script-stats-hint" className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">

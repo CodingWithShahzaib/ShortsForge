@@ -23,6 +23,7 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
   const setTransitions = useSettingsStore((s) => s.setTransitions);
   const setResolutions = useSettingsStore((s) => s.setResolutions);
   const setDefaults = useSettingsStore((s) => s.setDefaults);
+  const setHydrated = useSettingsStore((s) => s.setHydrated);
   const queryClient = useQueryClient();
   const refreshTimeoutRef = useRef<number | null>(null);
 
@@ -68,14 +69,22 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
         llm_provider: s.default_llm_provider ?? "openai",
         llm_model: s.default_llm_model ?? "gpt-4o-mini",
         image_provider: s.default_image_provider ?? "replicate",
-        tts_provider: s.default_tts_provider ?? "edge",
-        tts_voice: s.default_tts_voice ?? "en-US-ChristopherNeural",
+        tts_provider: s.default_tts_provider ?? "kokoro",
+        tts_voice: s.default_tts_voice ?? "af_bella",
+        tts_speed: s.default_tts_speed ?? 1,
+        tts_response_format: s.default_tts_response_format ?? "mp3",
+        tts_normalize: s.default_tts_normalize ?? true,
         resolution: s.default_resolution ?? "1080x1920",
         transition: s.default_transition ?? "fade",
         image_style: s.default_image_style ?? "realistic",
         word_count: s.default_word_count ?? 400,
         scene_count: s.default_scene_count ?? 5,
         scene_narration_style: s.default_scene_narration_style ?? "balanced",
+        subtitle_enabled: s.default_subtitle_enabled ?? true,
+        subtitle_source: s.default_subtitle_source ?? "llm",
+        generate_subtitles: s.default_generate_subtitles ?? true,
+        transcription_provider: s.default_transcription_provider ?? "openai",
+        transcription_language: s.default_transcription_language ?? "en",
         inter_scene_pause_ms: s.default_inter_scene_pause_ms ?? 600,
         transition_overlap_ms: s.default_transition_overlap_ms ?? 250,
         use_production_storyboard: s.default_use_production_storyboard ?? true,
@@ -85,8 +94,10 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
         ...(s.subtitles ? { subtitles: s.subtitles } : {}),
         ...(s.audio ? { audio: s.audio } : {}),
       });
-    }).catch(() => {});
-  }, [setProviders, setTransitions, setResolutions, setDefaults]);
+    }).catch(() => {
+      setHydrated(true);
+    });
+  }, [setProviders, setTransitions, setResolutions, setDefaults, setHydrated]);
 
   return (
     <div className="flex h-screen overflow-hidden">

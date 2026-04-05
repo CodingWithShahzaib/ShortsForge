@@ -9,6 +9,11 @@ def _normalize_scene_narration_style(value: Any) -> str:
     return style if style in {"short", "balanced", "long"} else "balanced"
 
 
+def _normalize_tts_response_format(value: Any) -> str:
+    fmt = str(value or "").strip().lower()
+    return fmt if fmt in {"mp3", "wav", "opus", "flac", "m4a"} else "mp3"
+
+
 @dataclass(frozen=True)
 class ResolvedGenerationSettings:
     story_type: str = "general"
@@ -18,8 +23,11 @@ class ResolvedGenerationSettings:
     llm_model: str = "gpt-4o-mini"
     image_provider: str = "replicate"
     image_style: str = "realistic"
-    tts_provider: str = "edge"
-    tts_voice: str = "en-US-ChristopherNeural"
+    tts_provider: str = "kokoro"
+    tts_voice: str = "af_bella"
+    tts_speed: float = 1.0
+    tts_response_format: str = "mp3"
+    tts_normalize: bool = True
     resolution: str = "1080x1920"
     transition: str = "fade"
     subtitle_enabled: bool = True
@@ -44,6 +52,7 @@ class ResolvedGenerationSettings:
     ducking_enabled: bool = True
     ducking_amount: float = -12.0
     scene_count: int = 5
+    dynamic_scenes: bool = False
     word_count: int = 400
     scene_narration_style: str = "balanced"
     scene_duration: float = 5.0
@@ -57,6 +66,9 @@ class ResolvedGenerationSettings:
     ken_burns_enabled: bool = True
     ken_burns_zoom_percent: float = 2.5
     ken_burns_motion: str = "auto"
+    breathing_enabled: bool = False
+    breathing_amplitude: float = 1.5
+    breathing_speed: float = 0.25
     film_grain_enabled: bool = False
     film_grain_intensity: float = 0.05
     vignette_enabled: bool = True
@@ -82,8 +94,22 @@ class ResolvedGenerationSettings:
             llm_model=str(data.get("llm_model") or app_settings.default_llm_model or "gpt-4o-mini"),
             image_provider=str(data.get("image_provider") or app_settings.default_image_provider or "replicate"),
             image_style=str(data.get("image_style") or app_settings.default_image_style or "realistic"),
-            tts_provider=str(data.get("tts_provider") or app_settings.default_tts_provider or "edge"),
-            tts_voice=str(data.get("tts_voice") or app_settings.default_tts_voice or "en-US-ChristopherNeural"),
+            tts_provider=str(data.get("tts_provider") or app_settings.default_tts_provider or "kokoro"),
+            tts_voice=str(data.get("tts_voice") or app_settings.default_tts_voice or "af_bella"),
+            tts_speed=max(0.5, min(2.0, float(data.get("tts_speed") or app_get("default_tts_speed", 1.0) or 1.0))),
+            tts_response_format=_normalize_tts_response_format(
+                data.get("tts_response_format")
+                or app_get("default_tts_response_format", "mp3")
+                or "mp3"
+            ),
+            tts_normalize=bool(
+                data.get(
+                    "tts_normalize",
+                    app_get("default_tts_normalize")
+                    if app_get("default_tts_normalize") is not None
+                    else True,
+                )
+            ),
             resolution=str(data.get("resolution") or app_settings.default_resolution or "1080x1920"),
             transition=str(data.get("transition") or app_settings.default_transition or "fade"),
             subtitle_enabled=bool(data.get("subtitle_enabled", True)),
@@ -150,6 +176,7 @@ class ResolvedGenerationSettings:
             ),
             ducking_amount=float(data.get("ducking_amount") or app_get("default_ducking_amount", -12.0) or -12.0),
             scene_count=max(2, min(100, int(data.get("scene_count") or app_settings.default_scene_count or 5))),
+            dynamic_scenes=bool(data.get("dynamic_scenes", False)),
             word_count=max(150, min(800, int(data.get("word_count") or app_settings.default_word_count or 400))),
             scene_narration_style=_normalize_scene_narration_style(
                 data.get("scene_narration_style")
@@ -191,6 +218,22 @@ class ResolvedGenerationSettings:
                 min(8.0, float(data.get("ken_burns_zoom_percent") or app_get("default_ken_burns_zoom_percent", 2.5) or 2.5)),
             ),
             ken_burns_motion=str(data.get("ken_burns_motion") or app_get("default_ken_burns_motion", "auto") or "auto"),
+            breathing_enabled=bool(
+                data.get(
+                    "breathing_enabled",
+                    app_get("default_breathing_enabled")
+                    if app_get("default_breathing_enabled") is not None
+                    else False,
+                )
+            ),
+            breathing_amplitude=max(
+                0.0,
+                min(5.0, float(data.get("breathing_amplitude") or app_get("default_breathing_amplitude", 1.5) or 1.5)),
+            ),
+            breathing_speed=max(
+                0.05,
+                min(1.0, float(data.get("breathing_speed") or app_get("default_breathing_speed", 0.25) or 0.25)),
+            ),
             film_grain_enabled=bool(
                 data.get(
                     "film_grain_enabled",

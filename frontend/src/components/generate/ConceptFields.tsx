@@ -15,6 +15,7 @@ type Props = {
   canGenerate: boolean;
   onGenerate: () => void;
   generateLabel?: string;
+  showInlineAction?: boolean;
 };
 
 export const ConceptFields = memo(function ConceptFields({
@@ -22,6 +23,7 @@ export const ConceptFields = memo(function ConceptFields({
   canGenerate,
   onGenerate,
   generateLabel = "Create scenes",
+  showInlineAction = true,
 }: Props) {
   const {
     register,
@@ -64,9 +66,7 @@ export const ConceptFields = memo(function ConceptFields({
                 id="gen-title"
                 placeholder="e.g., 5 Mysterious Places on Earth..."
                 className={`h-10 text-sm ${showTitleError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
-                name={titleField.name}
-                ref={titleField.ref}
-                onChange={titleField.onChange}
+                {...titleField}
                 onBlur={(e) => {
                   void titleField.onBlur(e);
                   setTitleFocused(false);
@@ -74,24 +74,26 @@ export const ConceptFields = memo(function ConceptFields({
                 onFocus={() => setTitleFocused(true)}
               />
             </motion.div>
-            <Button
-              type="button"
-              variant="animated"
-              className="h-10 w-full shrink-0 px-3 text-sm font-semibold sm:w-auto sm:min-w-40"
-              disabled={!canGenerate || generating}
-              onClick={onGenerate}
-            >
-              {generating ? (
-                <>
-                  <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin inline-block" />{" "}
-                  Generating…
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4 shrink-0" /> {generateLabel}
-                </>
-              )}
-            </Button>
+            {showInlineAction ? (
+              <Button
+                type="button"
+                variant="animated"
+                className="h-10 w-full shrink-0 px-3 text-sm font-semibold sm:w-auto sm:min-w-40"
+                disabled={!canGenerate || generating}
+                onClick={onGenerate}
+              >
+                {generating ? (
+                  <>
+                    <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin inline-block" />{" "}
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4 shrink-0" /> {generateLabel}
+                  </>
+                )}
+              </Button>
+            ) : null}
           </div>
         </Field>
       </div>

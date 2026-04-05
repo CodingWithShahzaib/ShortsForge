@@ -29,8 +29,11 @@ class GenerateVideoRequest(BaseModel):
     llm_model: str = Field(default="gpt-4o-mini", min_length=1)
     image_provider: str = Field(default="replicate", min_length=1)
     image_style: str = Field(default="realistic", min_length=1)
-    tts_provider: str = Field(default="edge", min_length=1)
-    tts_voice: str = Field(default="en-US-ChristopherNeural", min_length=1)
+    tts_provider: Literal["kokoro"] = "kokoro"
+    tts_voice: str = Field(default="af_bella", min_length=1)
+    tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    tts_response_format: Literal["mp3", "wav", "opus", "flac", "m4a"] = "mp3"
+    tts_normalize: bool = True
     resolution: str = Field(default="1080x1920", min_length=3)
     transition: str = Field(default="fade", min_length=1)
     subtitle_enabled: bool = True
@@ -54,6 +57,7 @@ class GenerateVideoRequest(BaseModel):
     ducking_enabled: bool = True
     ducking_amount: float = Field(default=-12.0, ge=-30.0, le=-1.0)
     scene_count: int = Field(default=5, ge=2, le=100)
+    dynamic_scenes: bool = False
     word_count: int = Field(default=400, ge=150, le=800)
     scene_narration_style: Literal["short", "balanced", "long"] = "balanced"
     scene_duration: float = Field(default=5.0, ge=1.0, le=60.0)
@@ -67,6 +71,9 @@ class GenerateVideoRequest(BaseModel):
     ken_burns_enabled: bool = True
     ken_burns_zoom_percent: float = Field(default=2.5, ge=0.0, le=8.0)
     ken_burns_motion: Literal["zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down", "auto"] = "auto"
+    breathing_enabled: bool = False
+    breathing_amplitude: float = Field(default=1.5, ge=0.0, le=5.0)
+    breathing_speed: float = Field(default=0.25, ge=0.05, le=1.0)
     film_grain_enabled: bool = False
     film_grain_intensity: float = Field(default=0.05, ge=0.0, le=0.25)
     vignette_enabled: bool = True
@@ -103,6 +110,7 @@ class GenerateStoryboardRequest(BaseModel):
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
     scene_count: int = Field(default=5, ge=2, le=100)
+    dynamic_scenes: bool = False
     image_style: str = "realistic"
     resolution: str = "1080x1920"
     transition: str = "fade"
@@ -148,6 +156,7 @@ class GenerateVideoProductionScriptRequest(BaseModel):
     concept: str
     story_type: str = "general"
     scene_count: int = Field(default=5, ge=2, le=100)
+    dynamic_scenes: bool = False
     image_style: str = "realistic"
     resolution: str = "1080x1920"
     transition: str = "fade"
@@ -168,9 +177,11 @@ class GenerateImageRequest(BaseModel):
 
 class GenerateAudioRequest(BaseModel):
     text: str
-    provider: str = "edge"
-    voice: str = "en-US-ChristopherNeural"
-    speed: float = 1.0
+    provider: Literal["kokoro"] = "kokoro"
+    voice: str = "af_bella"
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    response_format: Literal["mp3", "wav", "opus", "flac", "m4a"] = "mp3"
+    normalize: bool = True
 
 
 class BatchGenerateRequest(BaseModel):

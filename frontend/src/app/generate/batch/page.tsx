@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { ArrowLeft, Layers, Play, Plus, Trash2, Type } from "lucide-react";
+import { ArrowLeft, Layers, Play, Type } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,45 +14,69 @@ import { notify } from "@/lib/notify";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { Job } from "@/lib/types";
-import { SCENE_NARRATION_STYLE_IDS, STORY_TEMPLATE_IDS } from "@/app/generate/schema";
+import {
+  SCENE_NARRATION_STYLE_IDS,
+  STORY_TEMPLATE_IDS,
+  SUBTITLE_SOURCES,
+  TRANSCRIPTION_PROVIDERS,
+} from "@/app/generate/schema";
+
+type SceneNarrationStyle = (typeof SCENE_NARRATION_STYLE_IDS)[number];
+type StoryTemplateId = (typeof STORY_TEMPLATE_IDS)[number];
+type SubtitleSource = (typeof SUBTITLE_SOURCES)[number];
+type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
+
+function isSceneNarrationStyle(value: string): value is SceneNarrationStyle {
+  return (SCENE_NARRATION_STYLE_IDS as readonly string[]).includes(value);
+}
+
+function isStoryTemplateId(value: string): value is StoryTemplateId {
+  return (STORY_TEMPLATE_IDS as readonly string[]).includes(value);
+}
+
+function isSubtitleSource(value: string): value is SubtitleSource {
+  return (SUBTITLE_SOURCES as readonly string[]).includes(value);
+}
+
+function isTranscriptionProvider(value: string): value is TranscriptionProvider {
+  return (TRANSCRIPTION_PROVIDERS as readonly string[]).includes(value);
+}
 
 export default function BatchGeneratePage() {
   const addJob = useProjectStore((s) => s.addJob);
   const jobs = useProjectStore((s) => s.jobs);
-  const transitions = useSettingsStore((s) => s.transitions);
   const resolutions = useSettingsStore((s) => s.resolutions);
   const providers = useSettingsStore((s) => s.providers);
   const defaults = useSettingsStore((s) => s.defaults);
+  const defaultsHydrated = useSettingsStore((s) => s.hydrated);
 
   const [count, setCount] = useState(3);
   const [baseSettings, setBaseSettings] = useState({
     title: "",
     story_type: "general",
-    story_template: "default" as const,
+    story_template: "default" as StoryTemplateId,
     llm_provider: defaults.llm_provider,
     llm_model: defaults.llm_model,
     image_provider: defaults.image_provider,
     image_style: defaults.image_style,
     tts_provider: defaults.tts_provider,
     tts_voice: defaults.tts_voice,
+    tts_speed: defaults.tts_speed,
+    tts_response_format: defaults.tts_response_format,
+    tts_normalize: defaults.tts_normalize,
     resolution: defaults.resolution,
     transition: defaults.transition,
-    subtitle_enabled: true,
-    subtitle_source: "llm",
-    generate_subtitles: true,
-    transcription_provider: "openai",
-    transcription_language: "en",
-    subtitle_font: "Arial",
-    subtitle_size: 48,
-    subtitle_color: "#FFFFFF",
-    subtitle_position: "bottom",
-    subtitle_words_per_group: 4,
+    subtitle_enabled: defaults.subtitle_enabled,
+    subtitle_source: defaults.subtitle_source,
+    generate_subtitles: defaults.generate_subtitles,
+    transcription_provider: defaults.transcription_provider,
+    transcription_language: defaults.transcription_language,
     background_music: "",
-    background_music_volume: 0.15,
+    background_music_volume: defaults.audio.music_volume,
     scene_count: defaults.scene_count ?? 5,
     word_count: defaults.word_count ?? 400,
     scene_narration_style: defaults.scene_narration_style ?? "balanced",
-    scene_duration: 5,
+    scene_duration: defaults.video_style.scene_duration_max,
     inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? 600,
     transition_overlap_ms: defaults.transition_overlap_ms ?? 250,
     use_production_storyboard: defaults.use_production_storyboard ?? true,
@@ -70,6 +94,7 @@ export default function BatchGeneratePage() {
 
   const hasSyncedDefaults = useRef(false);
   useEffect(() => {
+    if (!defaultsHydrated) return;
     if (!hasSyncedDefaults.current) {
       hasSyncedDefaults.current = true;
       setBaseSettings((f) => ({
@@ -80,11 +105,21 @@ export default function BatchGeneratePage() {
         image_style: defaults.image_style,
         tts_provider: defaults.tts_provider,
         tts_voice: defaults.tts_voice,
+        tts_speed: defaults.tts_speed,
+        tts_response_format: defaults.tts_response_format,
+        tts_normalize: defaults.tts_normalize,
         resolution: defaults.resolution,
         transition: defaults.transition,
+        subtitle_enabled: defaults.subtitle_enabled,
+        subtitle_source: defaults.subtitle_source,
+        generate_subtitles: defaults.generate_subtitles,
+        transcription_provider: defaults.transcription_provider,
+        transcription_language: defaults.transcription_language,
+        background_music_volume: defaults.audio.music_volume,
         scene_count: defaults.scene_count ?? 5,
         word_count: defaults.word_count ?? 400,
         scene_narration_style: defaults.scene_narration_style ?? "balanced",
+        scene_duration: defaults.video_style.scene_duration_max,
         inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? 600,
         transition_overlap_ms: defaults.transition_overlap_ms ?? 250,
         use_production_storyboard: defaults.use_production_storyboard ?? true,
@@ -92,7 +127,7 @@ export default function BatchGeneratePage() {
         visual_continuity: defaults.visual_continuity ?? "",
       }));
     }
-  }, [defaults]);
+  }, [defaults, defaultsHydrated]);
 
   const handleBatchGenerate = async () => {
     if (!baseSettings.title) return;
@@ -108,14 +143,15 @@ export default function BatchGeneratePage() {
         },
       });
       result.forEach((job: Job) => addJob(job));
-    } catch (err: any) {
-      notify.error(err?.message || "Batch creation failed");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Batch creation failed");
     } finally {
       setGenerating(false);
     }
   };
 
-  const update = (key: string, value: any) => setBaseSettings((f) => ({ ...f, [key]: value }));
+  const update = <K extends keyof typeof baseSettings>(key: K, value: (typeof baseSettings)[K]) =>
+    setBaseSettings((f) => ({ ...f, [key]: value }));
 
   const batchJobs = jobs.filter((j) => j.type === "video_render");
 
@@ -156,7 +192,11 @@ export default function BatchGeneratePage() {
               <label className="text-sm font-medium mb-1.5 block">Narration per scene</label>
               <Select
                 value={baseSettings.scene_narration_style}
-                onValueChange={(value) => update("scene_narration_style", value)}
+                onValueChange={(value) => {
+                  if (isSceneNarrationStyle(value)) {
+                    update("scene_narration_style", value);
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Narration density" />
@@ -189,7 +229,11 @@ export default function BatchGeneratePage() {
               <label className="text-sm font-medium mb-1.5 block">Narrative structure</label>
               <Select
                 value={baseSettings.story_template}
-                onValueChange={(value) => update("story_template", value)}
+                onValueChange={(value) => {
+                  if (isStoryTemplateId(value)) {
+                    update("story_template", value);
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Structure" />
@@ -263,7 +307,7 @@ export default function BatchGeneratePage() {
               </label>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium mb-1.5 block">Pause between scenes (ms)</label>
               <Input
@@ -284,16 +328,6 @@ export default function BatchGeneratePage() {
                 step={50}
                 value={baseSettings.transition_overlap_ms}
                 onChange={(e) => update("transition_overlap_ms", parseInt(e.target.value) || 0)}
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">Words per caption</label>
-              <Input
-                type="number"
-                min={2}
-                max={12}
-                value={baseSettings.subtitle_words_per_group}
-                onChange={(e) => update("subtitle_words_per_group", parseInt(e.target.value) || 4)}
               />
             </div>
           </div>
@@ -322,7 +356,14 @@ export default function BatchGeneratePage() {
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
                   <label className="text-sm font-medium mb-1.5 block">Caption source</label>
-                  <Select value={baseSettings.subtitle_source} onValueChange={(v) => update("subtitle_source", v)}>
+                  <Select
+                    value={baseSettings.subtitle_source}
+                    onValueChange={(v) => {
+                      if (isSubtitleSource(v)) {
+                        update("subtitle_source", v);
+                      }
+                    }}
+                  >
                     <SelectTrigger><SelectValue placeholder="Source" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="llm">AI-generated</SelectItem>
@@ -340,7 +381,14 @@ export default function BatchGeneratePage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Speech-to-text engine</label>
-                      <Select value={baseSettings.transcription_provider} onValueChange={(v) => update("transcription_provider", v)}>
+                      <Select
+                        value={baseSettings.transcription_provider}
+                        onValueChange={(v) => {
+                          if (isTranscriptionProvider(v)) {
+                            update("transcription_provider", v);
+                          }
+                        }}
+                      >
                         <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="openai">OpenAI (Whisper)</SelectItem>
@@ -354,41 +402,6 @@ export default function BatchGeneratePage() {
                     </div>
                   </div>
                 )}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Font</label>
-                  <Select value={baseSettings.subtitle_font} onValueChange={(v) => update("subtitle_font", v)}>
-                    <SelectTrigger><SelectValue placeholder="Font" /></SelectTrigger>
-                    <SelectContent>
-                      {["Arial", "Montserrat", "Roboto", "Impact", "Open Sans", "Georgia"].map((f) => (
-                        <SelectItem key={f} value={f}>{f}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Size</label>
-                  <Input type="number" min={24} max={96} value={baseSettings.subtitle_size} onChange={(e) => update("subtitle_size", parseInt(e.target.value) || 48)} />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Color</label>
-                  <div className="flex items-center gap-2">
-                    <Input type="color" value={baseSettings.subtitle_color} onChange={(e) => update("subtitle_color", e.target.value)} className="h-10 w-14 p-1 cursor-pointer" />
-                    <Input type="text" value={baseSettings.subtitle_color} onChange={(e) => update("subtitle_color", e.target.value)} className="flex-1 font-mono text-sm" />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Position</label>
-                  <Select value={baseSettings.subtitle_position} onValueChange={(v) => update("subtitle_position", v)}>
-                    <SelectTrigger><SelectValue placeholder="Position" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bottom">Bottom</SelectItem>
-                      <SelectItem value="top">Top</SelectItem>
-                      <SelectItem value="center">Center</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
               </div>
               </>
             )}

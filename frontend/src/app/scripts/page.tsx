@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Sparkles } from "lucide-react";
-
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
@@ -12,7 +10,6 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,8 +19,22 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SCENE_NARRATION_STYLE_IDS } from "@/app/generate/schema";
+import { CreationActionBar } from "@/components/creation/CreationActionBar";
+import { CreationFlowHeader } from "@/components/creation/CreationFlowHeader";
+import { CreationPageShell } from "@/components/creation/CreationPageShell";
+import { LinearProgress } from "@/components/ui/progress-linear";
+import {
+  CreationProgressRail,
+  type CreationProgressStep,
+} from "@/components/creation/CreationProgressRail";
+import type { ScriptQualityMetrics } from "@/lib/types";
 
 type ScriptMode = "video_production" | "basic";
+type SceneNarrationStyle = (typeof SCENE_NARRATION_STYLE_IDS)[number];
+
+function isSceneNarrationStyle(value: string): value is SceneNarrationStyle {
+  return (SCENE_NARRATION_STYLE_IDS as readonly string[]).includes(value);
+}
 
 interface VideoProductionScene {
   scene_number: number;
@@ -103,6 +114,7 @@ export default function ScriptsPage() {
   const addJob = useProjectStore((s) => s.addJob);
   const providers = useSettingsStore((s) => s.providers);
   const defaults = useSettingsStore((s) => s.defaults);
+  const defaultsHydrated = useSettingsStore((s) => s.hydrated);
 
   const [mode, setMode] = useState<ScriptMode>("video_production");
   const [editorTab, setEditorTab] = useState<"script" | "scenes">("scenes");
@@ -128,6 +140,7 @@ export default function ScriptsPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [replaceQuery, setReplaceQuery] = useState("");
+  const [outlineFilter, setOutlineFilter] = useState("");
   const [searchScope, setSearchScope] = useState<"script" | "scenes">("script");
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
 
@@ -135,6 +148,9 @@ export default function ScriptsPage() {
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiTarget, setAiTarget] = useState<"script" | "scene">("script");
   const [aiLoading, setAiLoading] = useState(false);
+  const [scriptQuality, setScriptQuality] = useState<ScriptQualityMetrics | null>(null);
+  const [qualityLoading, setQualityLoading] = useState(false);
+  const [qualityImproving, setQualityImproving] = useState(false);
 
   const [selectedSceneKey, setSelectedSceneKey] = useState<string | null>(null);
   const sceneRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -145,15 +161,10 @@ export default function ScriptsPage() {
     generate_subtitles: true,
     transcription_provider: "openai",
     transcription_language: "en",
-    subtitle_font: "Arial",
-    subtitle_size: 48,
-    subtitle_color: "#FFFFFF",
-    subtitle_position: "bottom" as "bottom" | "top" | "center",
-    subtitle_words_per_group: 4,
   });
 
   const [realismSettings, setRealismSettings] = useState({
-    scene_duration: 5,
+    scene_duration: defaults.video_style.scene_duration_max,
     scene_narration_style: defaults.scene_narration_style ?? "balanced",
     inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? 600,
     transition_overlap_ms: defaults.transition_overlap_ms ?? 250,
@@ -169,6 +180,7 @@ export default function ScriptsPage() {
 
   const hasSyncedDefaults = useRef(false);
   useEffect(() => {
+    if (!defaultsHydrated) return;
     if (!hasSyncedDefaults.current) {
       hasSyncedDefaults.current = true;
       setLlmProvider(defaults.llm_provider);
@@ -176,7 +188,7 @@ export default function ScriptsPage() {
       setSceneCount(defaults.scene_count ?? 5);
       setSplitCount(defaults.scene_count ?? 5);
       setRealismSettings({
-        scene_duration: 5,
+        scene_duration: defaults.video_style.scene_duration_max,
         scene_narration_style: defaults.scene_narration_style ?? "balanced",
         inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? 600,
         transition_overlap_ms: defaults.transition_overlap_ms ?? 250,
@@ -187,6 +199,7 @@ export default function ScriptsPage() {
     } else {
       setRealismSettings((prev) => ({
         ...prev,
+        scene_duration: defaults.video_style.scene_duration_max,
         scene_narration_style: defaults.scene_narration_style ?? prev.scene_narration_style,
         inter_scene_pause_ms: defaults.inter_scene_pause_ms ?? prev.inter_scene_pause_ms,
         transition_overlap_ms: defaults.transition_overlap_ms ?? prev.transition_overlap_ms,
@@ -196,9 +209,11 @@ export default function ScriptsPage() {
       }));
     }
   }, [
+    defaultsHydrated,
     defaults.llm_provider,
     defaults.word_count,
     defaults.scene_count,
+    defaults.video_style.scene_duration_max,
     defaults.scene_narration_style,
     defaults.inter_scene_pause_ms,
     defaults.transition_overlap_ms,
@@ -213,7 +228,12 @@ export default function ScriptsPage() {
     setSelectedSceneKey(null);
     setSearchScope(mode === "video_production" ? "scenes" : "script");
     setAiTarget(mode === "video_production" ? "scene" : "script");
+    setScriptQuality(null);
   }, [mode]);
+
+  useEffect(() => {
+    setScriptQuality(null);
+  }, [aiTarget, selectedSceneKey, script, scenes, videoProduction]);
 
   const scriptStats = useMemo(() => {
     const words = script.trim() ? script.trim().split(/\s+/).filter(Boolean).length : 0;
@@ -248,17 +268,25 @@ export default function ScriptsPage() {
     ];
   }, [mode, videoProduction, scenes, script, scriptStats.words]);
 
-  const makeRegex = (global = true) => {
+  const filteredOutlineItems = useMemo(() => {
+    const query = outlineFilter.trim().toLowerCase();
+    if (!query) return outlineItems;
+    return outlineItems.filter((item) =>
+      `${item.label} ${item.subtitle} ${item.meta}`.toLowerCase().includes(query),
+    );
+  }, [outlineFilter, outlineItems]);
+
+  const makeRegex = useCallback((global = true) => {
     if (!searchQuery.trim()) return null;
     const flags = `${searchCaseSensitive ? "" : "i"}${global ? "g" : ""}`;
     return new RegExp(escapeRegExp(searchQuery), flags);
-  };
+  }, [searchCaseSensitive, searchQuery]);
 
   const scriptMatchCount = useMemo(() => {
     const regex = makeRegex(true);
     if (!regex) return 0;
     return (script.match(regex) || []).length;
-  }, [script, searchQuery, searchCaseSensitive]);
+  }, [script, makeRegex]);
 
   const sceneMatchCount = useMemo(() => {
     const regex = makeRegex(true);
@@ -268,7 +296,7 @@ export default function ScriptsPage() {
         ? videoProduction?.scenes?.map((s) => `${s.script}\n${sceneImagePrompt(s)}`) || []
         : scenes.map((s) => `${s.narration ?? ""}\n${s.image_prompt ?? ""}\n${s.description ?? ""}`);
     return list.reduce((sum, text) => sum + (text.match(regex) || []).length, 0);
-  }, [mode, videoProduction, scenes, searchQuery, searchCaseSensitive]);
+  }, [mode, videoProduction, scenes, makeRegex]);
 
   const copyToClipboard = async (text: string, label: string, id?: string) => {
     try {
@@ -311,8 +339,8 @@ export default function ScriptsPage() {
         });
         setScript(result.script);
       }
-    } catch (err: any) {
-      notify.error(err?.message || "Generation failed");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setLoading(false);
     }
@@ -335,8 +363,8 @@ export default function ScriptsPage() {
       setScenes(result.scenes || []);
       notify.success(`Split into ${result.scenes?.length || 0} scenes`);
       setEditorTab("scenes");
-    } catch (err: any) {
-      notify.error(err?.message || "Split failed");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Split failed");
     } finally {
       setSplitting(false);
     }
@@ -424,12 +452,9 @@ export default function ScriptsPage() {
             custom_script: videoProduction.scenes.map((s) => s.script).join("\n\n"),
             scenes: scenesPayload,
             scene_count: videoProduction.scenes.length,
-            scene_duration: realismSettings.scene_duration,
             control_mode: "co_pilot",
             pipeline_mode: "manual",
             target_stage: "storyboard",
-            inter_scene_pause_ms: realismSettings.inter_scene_pause_ms,
-            transition_overlap_ms: realismSettings.transition_overlap_ms,
             ...subtitleSettings,
             ...realismSettings,
           }),
@@ -440,8 +465,8 @@ export default function ScriptsPage() {
           notify.success("Scene project is ready — opening project");
           router.push(`/projects/${job.project_id}`);
         }
-      } catch (err: any) {
-        notify.error(err?.message || "Failed to create project");
+      } catch (err: unknown) {
+        notify.error(err instanceof Error ? err.message : "Failed to create project");
       } finally {
         setTakingToVideo(false);
       }
@@ -464,12 +489,9 @@ export default function ScriptsPage() {
             custom_script: fullScript,
             scenes: scenesPayload,
             scene_count: scenes.length,
-            scene_duration: realismSettings.scene_duration,
             control_mode: "co_pilot",
             pipeline_mode: "manual",
             target_stage: "storyboard",
-            inter_scene_pause_ms: realismSettings.inter_scene_pause_ms,
-            transition_overlap_ms: realismSettings.transition_overlap_ms,
             ...subtitleSettings,
             ...realismSettings,
           }),
@@ -480,8 +502,8 @@ export default function ScriptsPage() {
           notify.success("Scene project is ready — opening project");
           router.push(`/projects/${job.project_id}`);
         }
-      } catch (err: any) {
-        notify.error(err?.message || "Failed to create project");
+      } catch (err: unknown) {
+        notify.error(err instanceof Error ? err.message : "Failed to create project");
       } finally {
         setTakingToVideo(false);
       }
@@ -500,11 +522,6 @@ export default function ScriptsPage() {
         generate_subtitles: String(subtitleSettings.generate_subtitles),
         transcription_provider: subtitleSettings.transcription_provider,
         transcription_language: subtitleSettings.transcription_language,
-        subtitle_size: String(subtitleSettings.subtitle_size),
-        subtitle_font: subtitleSettings.subtitle_font,
-        subtitle_color: subtitleSettings.subtitle_color,
-        subtitle_position: subtitleSettings.subtitle_position,
-        subtitle_words_per_group: String(subtitleSettings.subtitle_words_per_group),
         scene_duration: String(realismSettings.scene_duration),
         scene_narration_style: realismSettings.scene_narration_style,
         inter_scene_pause_ms: String(realismSettings.inter_scene_pause_ms),
@@ -625,6 +642,98 @@ export default function ScriptsPage() {
     notify.success(`Applied template: ${template.name}`);
   };
 
+  const resolveCurrentTextTarget = useCallback(() => {
+    if (aiTarget === "script") {
+      return {
+        text: script.trim(),
+        storyType,
+        isFirstScene: true,
+        previousNarrations: [] as string[],
+        apply: (next: string) => setScript(next),
+      };
+    }
+    if (selectedSceneKey?.startsWith("vp-")) {
+      const index = Number(selectedSceneKey.replace("vp-", ""));
+      const current = videoProduction?.scenes?.[index];
+      return {
+        text: (current?.script || "").trim(),
+        storyType,
+        isFirstScene: index === 0,
+        previousNarrations: (videoProduction?.scenes || [])
+          .slice(0, index)
+          .map((scene) => (scene.script || "").trim())
+          .filter(Boolean),
+        apply: (next: string) => updateVideoScene(index, { script: next }),
+      };
+    }
+    if (selectedSceneKey?.startsWith("basic-")) {
+      const index = Number(selectedSceneKey.replace("basic-", ""));
+      const current = scenes[index];
+      return {
+        text: (current?.narration || "").trim(),
+        storyType,
+        isFirstScene: index === 0,
+        previousNarrations: scenes
+          .slice(0, index)
+          .map((scene) => (scene.narration || "").trim())
+          .filter(Boolean),
+        apply: (next: string) => updateBasicScene(index, { narration: next }),
+      };
+    }
+    return null;
+  }, [aiTarget, scenes, script, selectedSceneKey, storyType, videoProduction]);
+
+  const analyzeSelectedScript = async () => {
+    const target = resolveCurrentTextTarget();
+    if (!target?.text) {
+      notify.error("Select a script or scene with narration first.");
+      return;
+    }
+    setQualityLoading(true);
+    try {
+      const result = await api.analyzeScriptQuality({
+        narration: target.text,
+        story_type: target.storyType,
+        is_first_scene: target.isFirstScene,
+        previous_narrations: target.previousNarrations,
+        llm_provider: llmProvider,
+        llm_model: defaults.llm_model,
+      });
+      setScriptQuality(result);
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Script analysis failed");
+    } finally {
+      setQualityLoading(false);
+    }
+  };
+
+  const improveSelectedScript = async () => {
+    const target = resolveCurrentTextTarget();
+    if (!target?.text) {
+      notify.error("Select a script or scene with narration first.");
+      return;
+    }
+    setQualityImproving(true);
+    try {
+      const result = await api.improveScriptQuality({
+        text: target.text,
+        story_type: target.storyType,
+        is_first_scene: target.isFirstScene,
+        previous_narrations: target.previousNarrations,
+        issues: scriptQuality?.issues.map((issue) => issue.code) ?? [],
+        llm_provider: llmProvider,
+        llm_model: defaults.llm_model,
+      });
+      target.apply(result.text);
+      setScriptQuality(result.metrics);
+      notify.success("Improved script applied.");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Script improvement failed");
+    } finally {
+      setQualityImproving(false);
+    }
+  };
+
   const handleApplyAi = async () => {
     const selectedPreset = AI_PRESETS.find((p) => p.id === aiPreset);
     const instruction = aiInstruction.trim() || selectedPreset?.prompt || "";
@@ -667,8 +776,8 @@ export default function ScriptsPage() {
       });
       applyFn(result.text);
       notify.success("AI update applied.");
-    } catch (err: any) {
-      notify.error(err?.message || "AI helper failed");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "AI helper failed");
     } finally {
       setAiLoading(false);
     }
@@ -680,74 +789,585 @@ export default function ScriptsPage() {
       : scenes.length > 0
         ? `Scenes (${scenes.length})`
         : "Outline";
+  const hasStructuredScenes = (videoProduction?.scenes?.length || 0) > 0 || scenes.length > 0;
+  const hasDraftContent = hasStructuredScenes || script.trim().length > 0;
+  const flowProgressSteps = useMemo<CreationProgressStep[]>(
+    () => [
+      {
+        id: "draft",
+        label: "Draft script",
+        description: "Write or generate your source script",
+        status: hasDraftContent ? "complete" : "active",
+        hint: hasDraftContent ? "Ready" : "Add draft content",
+      },
+      {
+        id: "scenes",
+        label: "Shape scenes",
+        description: "Split or edit scene-level narration and prompts",
+        status: hasStructuredScenes
+          ? "complete"
+          : hasDraftContent
+            ? "active"
+            : "pending",
+        hint: hasStructuredScenes ? "Ready" : "Create scene plan first",
+      },
+      {
+        id: "studio",
+        label: "Continue to Studio",
+        description: "Hand off to scene production workflow",
+        status: hasStructuredScenes ? "active" : "blocked",
+        hint: hasStructuredScenes
+          ? "Open project handoff"
+          : "Needs scenes before Studio handoff",
+      },
+    ],
+    [hasDraftContent, hasStructuredScenes],
+  );
+  const primaryFlowLabel = hasStructuredScenes ? "Send to Studio" : "Continue in Generate";
 
   return (
     <TooltipProvider>
-      <div className="flex h-full min-h-0 flex-col gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-1">
-            <h1 className="text-3xl font-bold tracking-tight">Script studio</h1>
-            <p className="text-sm text-muted-foreground">
-              Build your script, shape it into scenes, and send it to your project.
-            </p>
+      <CreationPageShell
+        className="h-full min-h-0"
+        contentClassName="min-h-0 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]"
+        header={(
+          <CreationFlowHeader
+            eyebrow="Script Studio"
+            title="Write, shape, and hand off"
+            description="Build your script, refine scene-level prompts, then continue to Studio."
+            badges={(
+              <>
+                <Badge variant="secondary">
+                  {mode === "video_production" ? "Scene plan mode" : "Basic script mode"}
+                </Badge>
+                <Badge variant="outline">{outlineHeader}</Badge>
+              </>
+            )}
+            actions={(
+              <>
+                <Button variant="outline" size="sm" onClick={() => setSearchOpen(true)}>
+                  Search & Replace
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleTakeToVideo}
+                  loading={takingToVideo}
+                  loadingLabel="Sending…"
+                >
+                  {primaryFlowLabel}
+                </Button>
+              </>
+            )}
+          />
+        )}
+        intro={(
+          <div className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Tabs value={mode} onValueChange={(value) => setMode(value as ScriptMode)}>
+                <TabsList>
+                  <TabsTrigger value="video_production">Scene plan</TabsTrigger>
+                  <TabsTrigger value="basic">Basic script</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {mode === "basic" ? (
+                <Badge variant="secondary" className="text-xs">
+                  {scriptStats.words} words
+                </Badge>
+              ) : null}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => setSearchOpen(true)}>
-              Search & Replace
-            </Button>
-            <Button variant="secondary" onClick={handleTakeToVideo} loading={takingToVideo} loadingLabel="Sending…">
-              Send to project
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Tabs value={mode} onValueChange={(value) => setMode(value as ScriptMode)}>
-            <TabsList>
-              <TabsTrigger value="video_production">Scene plan</TabsTrigger>
-              <TabsTrigger value="basic">Basic script</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        </div>
-
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[260px_minmax(0,1fr)_340px]">
-          <Card className="flex min-h-0 flex-col">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">{outlineHeader}</CardTitle>
-              <CardDescription className="text-xs">
-                Click to jump to any scene.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1">
-              <Command className="h-full bg-transparent">
-                <CommandInput placeholder="Filter scenes..." />
-                <CommandList className="mt-2">
-                  <CommandEmpty>No matches.</CommandEmpty>
-                  <CommandGroup heading="Outline">
-                    {outlineItems.map((item) => (
-                      <CommandItem
-                        key={item.id}
-                        value={`${item.label} ${item.subtitle} ${item.meta}`}
-                        onSelect={() => handleSelectOutline(item.id)}
-                        className={cn(
-                          "flex items-center justify-between gap-2 rounded-lg",
-                          selectedSceneKey === item.id && "bg-muted text-foreground"
-                        )}
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">{item.label}</p>
-                          <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+        )}
+        aside={(
+          <>
+            <CreationProgressRail steps={flowProgressSteps} />
+            <Card className="flex min-h-0 flex-col">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Tools</CardTitle>
+                <CardDescription className="text-xs">Generate, refine, and export.</CardDescription>
+              </CardHeader>
+              <CardContent className="min-h-0 flex-1">
+                <ScrollArea className="min-h-0 flex-1 pr-3">
+                  <div className="space-y-6 pb-4">
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium text-foreground">Generation</div>
+                      <div className="space-y-3">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Concept</label>
+                          <Textarea
+                            placeholder="e.g., A documentary about Tokyo at dusk..."
+                            value={concept}
+                            onChange={(e) => setConcept(e.target.value)}
+                            rows={3}
+                            className="resize-none border-border/60 text-sm"
+                          />
                         </div>
-                        <span className="text-[11px] text-muted-foreground">{item.meta}</span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </CardContent>
-          </Card>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Story type</label>
+                            <Select value={storyType} onValueChange={setStoryType}>
+                              <SelectTrigger className="border-border/60">
+                                <SelectValue placeholder="Select story type" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {storyTypes.map((t) => (
+                                  <SelectItem key={t.id} value={t.id}>
+                                    {t.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {mode === "video_production" ? (
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Scenes</label>
+                              <Input
+                                type="number"
+                                min={2}
+                                max={100}
+                                value={sceneCount}
+                                onChange={(e) =>
+                                  setSceneCount(Math.max(2, Math.min(100, parseInt(e.target.value) || 5)))
+                                }
+                                className="border-border/60"
+                              />
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Word count</label>
+                              <Input
+                                type="number"
+                                min={150}
+                                max={1000}
+                                value={wordCount}
+                                onChange={(e) => setWordCount(parseInt(e.target.value) || defaults.word_count || 400)}
+                                className="border-border/60"
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Story template</label>
+                          <Select value={storyTemplate} onValueChange={setStoryTemplate}>
+                            <SelectTrigger className="border-border/60">
+                              <SelectValue placeholder="Select template" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {storyTemplates.map((t) => (
+                                <SelectItem key={t.id} value={t.id}>
+                                  {t.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {storyTemplates.find((t) => t.id === storyTemplate)?.description ? (
+                            <p className="text-xs text-muted-foreground">
+                              {storyTemplates.find((t) => t.id === storyTemplate)?.description}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Script AI</label>
+                          <Select value={llmProvider} onValueChange={setLlmProvider}>
+                            <SelectTrigger className="border-border/60">
+                              <SelectValue placeholder="Select provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {providers.llm
+                                .filter((p) => p.configured)
+                                .map((p) => (
+                                  <SelectItem key={p.name} value={p.name}>
+                                    {p.name.charAt(0).toUpperCase() + p.name.slice(1)}
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Separator />
+                        <details className="group">
+                          <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+                            Scene realism
+                          </summary>
+                          <div className="mt-3 space-y-3">
+                            <div className="grid grid-cols-3 gap-3">
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Scene length</label>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={60}
+                                  step={0.5}
+                                  value={realismSettings.scene_duration}
+                                  onChange={(e) =>
+                                    setRealismSettings((s) => ({ ...s, scene_duration: parseFloat(e.target.value) || 5 }))
+                                  }
+                                  className="mt-1 border-border/60"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Pause (ms)</label>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={1200}
+                                  step={50}
+                                  value={realismSettings.inter_scene_pause_ms}
+                                  onChange={(e) =>
+                                    setRealismSettings((s) => ({ ...s, inter_scene_pause_ms: parseInt(e.target.value) || 0 }))
+                                  }
+                                  className="mt-1 border-border/60"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Overlap (ms)</label>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={800}
+                                  step={50}
+                                  value={realismSettings.transition_overlap_ms}
+                                  onChange={(e) =>
+                                    setRealismSettings((s) => ({ ...s, transition_overlap_ms: parseInt(e.target.value) || 0 }))
+                                  }
+                                  className="mt-1 border-border/60"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                                Narration per scene
+                              </label>
+                              <Select
+                                value={realismSettings.scene_narration_style}
+                                onValueChange={(value) => {
+                                  if (isSceneNarrationStyle(value)) {
+                                    setRealismSettings((s) => ({
+                                      ...s,
+                                      scene_narration_style: value,
+                                    }));
+                                  }
+                                }}
+                              >
+                                <SelectTrigger className="mt-1 border-border/60">
+                                  <SelectValue placeholder="Narration density" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {SCENE_NARRATION_STYLE_IDS.map((id) => (
+                                    <SelectItem key={id} value={id}>
+                                      {id === "short" ? "Short" : id === "long" ? "Long" : "Balanced"}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <label className="flex items-start gap-2 text-xs font-medium text-muted-foreground">
+                              <input
+                                type="checkbox"
+                                checked={realismSettings.use_production_storyboard}
+                                onChange={(e) =>
+                                  setRealismSettings((s) => ({ ...s, use_production_storyboard: e.target.checked }))
+                                }
+                              />
+                              Director-style scenes (camera + lighting details)
+                            </label>
+                            <label className="flex items-start gap-2 text-xs font-medium text-muted-foreground">
+                              <input
+                                type="checkbox"
+                                checked={realismSettings.match_scenes_to_audio}
+                                onChange={(e) =>
+                                  setRealismSettings((s) => ({ ...s, match_scenes_to_audio: e.target.checked }))
+                                }
+                              />
+                              Match scenes to narration length
+                            </label>
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Visual continuity</label>
+                              <Input
+                                value={realismSettings.visual_continuity}
+                                onChange={(e) =>
+                                  setRealismSettings((s) => ({ ...s, visual_continuity: e.target.value }))
+                                }
+                                className="mt-1 border-border/60"
+                                placeholder="e.g. teal-orange palette, rain, solitary figure"
+                              />
+                            </div>
+                          </div>
+                        </details>
 
-          <Card className="flex min-h-0 flex-col">
+                        <details className="group">
+                          <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+                            Caption settings
+                          </summary>
+                          <div className="mt-3 space-y-3">
+                            <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                              <input
+                                type="checkbox"
+                                checked={subtitleSettings.subtitle_enabled}
+                                onChange={(e) =>
+                                  setSubtitleSettings((s) => ({ ...s, subtitle_enabled: e.target.checked }))
+                                }
+                              />
+                              Enable subtitles
+                            </label>
+                            {subtitleSettings.subtitle_enabled ? (
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Source</label>
+                                  <Select
+                                    value={subtitleSettings.subtitle_source}
+                                    onValueChange={(v: "llm" | "transcription") =>
+                                      setSubtitleSettings((s) => ({ ...s, subtitle_source: v }))
+                                    }
+                                  >
+                                    <SelectTrigger className="mt-1 border-border/60">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="llm">AI-generated</SelectItem>
+                                      <SelectItem value="transcription">Speech-to-text from audio</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {subtitleSettings.subtitle_source === "llm" ? (
+                                  <label className="col-span-2 flex items-center gap-2 text-xs text-muted-foreground">
+                                    <input
+                                      type="checkbox"
+                                      checked={subtitleSettings.generate_subtitles}
+                                      onChange={(e) =>
+                                        setSubtitleSettings((s) => ({ ...s, generate_subtitles: e.target.checked }))
+                                      }
+                                    />
+                                    Generate captions with AI
+                                  </label>
+                                ) : null}
+                                {subtitleSettings.subtitle_source === "transcription" ? (
+                                  <div className="col-span-2 grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Provider</label>
+                                      <Select
+                                        value={subtitleSettings.transcription_provider}
+                                        onValueChange={(v) =>
+                                          setSubtitleSettings((s) => ({ ...s, transcription_provider: v }))
+                                        }
+                                      >
+                                        <SelectTrigger className="mt-1 border-border/60">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="openai">OpenAI</SelectItem>
+                                          <SelectItem value="groq">Groq</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div>
+                                      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Language</label>
+                                      <Input
+                                        value={subtitleSettings.transcription_language}
+                                        onChange={(e) =>
+                                          setSubtitleSettings((s) => ({ ...s, transcription_language: e.target.value }))
+                                        }
+                                        className="mt-1 border-border/60"
+                                      />
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        </details>
+                        <Button variant="secondary" onClick={handleGenerate} disabled={loading || !concept.trim()} className="w-full">
+                          {loading ? "Generating…" : mode === "video_production" ? "Generate scene plan" : "Generate script"}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium text-foreground">Templates</div>
+                      <div className="mt-3 space-y-3">
+                        {SCRIPT_TEMPLATES.map((template) => (
+                          <button
+                            key={template.id}
+                            onClick={() => handleApplyTemplate(template.id)}
+                            className="w-full rounded-lg border border-border/40 bg-background px-3 py-2 text-left text-sm transition hover:border-border"
+                          >
+                            <div className="font-medium">{template.name}</div>
+                            <div className="text-xs text-muted-foreground">{template.description}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium text-foreground">AI helpers</div>
+                      <div className="space-y-3">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Preset</label>
+                          <Select value={aiPreset} onValueChange={setAiPreset}>
+                            <SelectTrigger className="border-border/60">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {AI_PRESETS.map((preset) => (
+                                <SelectItem key={preset.id} value={preset.id}>
+                                  {preset.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Custom instruction</label>
+                          <Textarea
+                            value={aiInstruction}
+                            onChange={(e) => setAiInstruction(e.target.value)}
+                            rows={2}
+                            placeholder="Optional override, e.g. Make it sound more dramatic."
+                            className="resize-none border-border/60 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Apply to</label>
+                          <Select value={aiTarget} onValueChange={(v) => setAiTarget(v as "script" | "scene")}>
+                            <SelectTrigger className="border-border/60">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="script">Full script</SelectItem>
+                              <SelectItem value="scene">Selected scene</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {aiTarget === "scene" && !selectedSceneKey ? (
+                            <p className="text-xs text-muted-foreground">Select a scene in the outline first.</p>
+                          ) : null}
+                        </div>
+                        <Button variant="outline" onClick={handleApplyAi} disabled={aiLoading} className="w-full gap-2">
+                          {aiLoading ? "Applying…" : "Apply AI helper"}
+                        </Button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button variant="outline" onClick={() => void analyzeSelectedScript()} disabled={qualityLoading} className="gap-2">
+                            {qualityLoading ? "Analyzing…" : "Analyze script"}
+                          </Button>
+                          <Button variant="outline" onClick={() => void improveSelectedScript()} disabled={qualityImproving} className="gap-2">
+                            {qualityImproving ? "Improving…" : "Improve script"}
+                          </Button>
+                        </div>
+                        {scriptQuality ? (
+                          <div className="rounded-xl border border-border/50 bg-background/70 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                                Script quality
+                              </div>
+                              <Badge variant={scriptQuality.score >= 75 ? "success" : scriptQuality.score >= 55 ? "warning" : "error"}>
+                                {scriptQuality.score}/100
+                              </Badge>
+                            </div>
+                            <div className="mt-3">
+                              <LinearProgress value={scriptQuality.score} className="h-2" />
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                              <div className="rounded-lg border border-border/40 px-2.5 py-2">
+                                <div className="text-muted-foreground">Hook</div>
+                                <div className="mt-1 font-semibold text-foreground">{scriptQuality.hook_strength}/100</div>
+                              </div>
+                              <div className="rounded-lg border border-border/40 px-2.5 py-2">
+                                <div className="text-muted-foreground">Pacing</div>
+                                <div className="mt-1 font-semibold text-foreground">{scriptQuality.pacing_score}/100</div>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {scriptQuality.repetition_detected ? (
+                                <Badge variant="warning">Recent repetition</Badge>
+                              ) : (
+                                <Badge variant="success">No repetition</Badge>
+                              )}
+                              {scriptQuality.tts_issues.length > 0 ? (
+                                <Badge variant="warning">TTS cleanup needed</Badge>
+                              ) : (
+                                <Badge variant="success">TTS ready</Badge>
+                              )}
+                            </div>
+                            {scriptQuality.suggestions.length > 0 ? (
+                              <div className="mt-3 space-y-1.5 text-xs text-muted-foreground">
+                                {scriptQuality.suggestions.slice(0, 3).map((suggestion) => (
+                                  <p key={suggestion}>{suggestion}</p>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium text-foreground">Export</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button variant="outline" size="sm" onClick={handleCopyFullProduction} disabled={!videoProduction}>
+                          {copiedId === "full" ? "Copied" : "Copy all"}
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleCopyImagePrompts} disabled={!videoProduction}>
+                          {copiedId === "image-prompts" ? "Copied" : "Image prompts"}
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleDownloadTxt} disabled={!videoProduction}>
+                          .txt
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleDownloadJson} disabled={!videoProduction}>
+                          .json
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </>
+        )}
+      >
+        <Card className="flex min-h-0 flex-col">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">{outlineHeader}</CardTitle>
+            <CardDescription className="text-xs">
+              Jump between scenes and keep context visible while editing.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Input
+              value={outlineFilter}
+              onChange={(event) => setOutlineFilter(event.target.value)}
+              placeholder="Filter scenes"
+              className="border-border/60"
+            />
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredOutlineItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectOutline(item.id)}
+                  className={cn(
+                    "rounded-lg border border-border/60 bg-background px-3 py-2 text-left transition-colors",
+                    selectedSceneKey === item.id && "border-primary/40 bg-primary/5",
+                  )}
+                >
+                  <p className="truncate text-sm font-medium">{item.label}</p>
+                  <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">{item.meta}</p>
+                </button>
+              ))}
+              {filteredOutlineItems.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border/60 px-3 py-5 text-sm text-muted-foreground">
+                  No matching scenes.
+                </div>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="flex min-h-0 flex-col">
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -974,457 +1594,23 @@ export default function ScriptsPage() {
               )}
             </CardContent>
           </Card>
-
-          <Card className="flex min-h-0 flex-col">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Tools</CardTitle>
-              <CardDescription className="text-xs">Generate, refine, and export.</CardDescription>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1">
-              <ScrollArea className="min-h-0 flex-1 pr-3">
-                <div className="space-y-6 pb-4">
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium text-foreground">Generation</div>
-                    <div className="space-y-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Concept</label>
-                        <Textarea
-                          placeholder="e.g., A documentary about Tokyo at dusk..."
-                          value={concept}
-                          onChange={(e) => setConcept(e.target.value)}
-                          rows={3}
-                          className="resize-none border-border/60 text-sm"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Story type</label>
-                          <Select value={storyType} onValueChange={setStoryType}>
-                            <SelectTrigger className="border-border/60">
-                              <SelectValue placeholder="Select story type" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {storyTypes.map((t) => (
-                                <SelectItem key={t.id} value={t.id}>
-                                  {t.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {mode === "video_production" ? (
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Scenes</label>
-                            <Input
-                              type="number"
-                              min={2}
-                              max={100}
-                              value={sceneCount}
-                              onChange={(e) =>
-                                setSceneCount(Math.max(2, Math.min(100, parseInt(e.target.value) || 5)))
-                              }
-                              className="border-border/60"
-                            />
-                          </div>
-                        ) : (
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Word count</label>
-                            <Input
-                              type="number"
-                              min={150}
-                              max={1000}
-                              value={wordCount}
-                              onChange={(e) => setWordCount(parseInt(e.target.value) || defaults.word_count || 400)}
-                              className="border-border/60"
-                            />
-                          </div>
-                        )}
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Story template</label>
-                        <Select value={storyTemplate} onValueChange={setStoryTemplate}>
-                          <SelectTrigger className="border-border/60">
-                            <SelectValue placeholder="Select template" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {storyTemplates.map((t) => (
-                              <SelectItem key={t.id} value={t.id}>
-                                {t.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {storyTemplates.find((t) => t.id === storyTemplate)?.description && (
-                          <p className="text-xs text-muted-foreground">
-                            {storyTemplates.find((t) => t.id === storyTemplate)?.description}
-                          </p>
-                        )}
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Script AI</label>
-                        <Select value={llmProvider} onValueChange={setLlmProvider}>
-                          <SelectTrigger className="border-border/60">
-                            <SelectValue placeholder="Select provider" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {providers.llm
-                              .filter((p) => p.configured)
-                              .map((p) => (
-                                <SelectItem key={p.name} value={p.name}>
-                                  {p.name.charAt(0).toUpperCase() + p.name.slice(1)}
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <Separator />
-                      <details className="group">
-                        <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-                          Scene realism
-                        </summary>
-                        <div className="mt-3 space-y-3">
-                          <div className="grid grid-cols-3 gap-3">
-                            <div>
-                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Scene length</label>
-                              <Input
-                                type="number"
-                                min={1}
-                                max={60}
-                                step={0.5}
-                                value={realismSettings.scene_duration}
-                                onChange={(e) =>
-                                  setRealismSettings((s) => ({ ...s, scene_duration: parseFloat(e.target.value) || 5 }))
-                                }
-                                className="mt-1 border-border/60"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Pause (ms)</label>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={1200}
-                                step={50}
-                                value={realismSettings.inter_scene_pause_ms}
-                                onChange={(e) =>
-                                  setRealismSettings((s) => ({ ...s, inter_scene_pause_ms: parseInt(e.target.value) || 0 }))
-                                }
-                                className="mt-1 border-border/60"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Overlap (ms)</label>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={800}
-                                step={50}
-                                value={realismSettings.transition_overlap_ms}
-                                onChange={(e) =>
-                                  setRealismSettings((s) => ({ ...s, transition_overlap_ms: parseInt(e.target.value) || 0 }))
-                                }
-                                className="mt-1 border-border/60"
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                              Narration per scene
-                            </label>
-                            <Select
-                              value={realismSettings.scene_narration_style}
-                              onValueChange={(value) =>
-                                setRealismSettings((s) => ({ ...s, scene_narration_style: value }))
-                              }
-                            >
-                              <SelectTrigger className="mt-1 border-border/60">
-                                <SelectValue placeholder="Narration density" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {SCENE_NARRATION_STYLE_IDS.map((id) => (
-                                  <SelectItem key={id} value={id}>
-                                    {id === "short" ? "Short" : id === "long" ? "Long" : "Balanced"}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <label className="flex items-start gap-2 text-xs font-medium text-muted-foreground">
-                            <input
-                              type="checkbox"
-                              checked={realismSettings.use_production_storyboard}
-                              onChange={(e) =>
-                                setRealismSettings((s) => ({ ...s, use_production_storyboard: e.target.checked }))
-                              }
-                            />
-                            Director-style scenes (camera + lighting details)
-                          </label>
-                          <label className="flex items-start gap-2 text-xs font-medium text-muted-foreground">
-                            <input
-                              type="checkbox"
-                              checked={realismSettings.match_scenes_to_audio}
-                              onChange={(e) =>
-                                setRealismSettings((s) => ({ ...s, match_scenes_to_audio: e.target.checked }))
-                              }
-                            />
-                            Match scenes to narration length
-                          </label>
-                          <div>
-                            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Visual continuity</label>
-                            <Input
-                              value={realismSettings.visual_continuity}
-                              onChange={(e) =>
-                                setRealismSettings((s) => ({ ...s, visual_continuity: e.target.value }))
-                              }
-                              className="mt-1 border-border/60"
-                              placeholder="e.g. teal-orange palette, rain, solitary figure"
-                            />
-                          </div>
-                        </div>
-                      </details>
-
-                      <details className="group">
-                        <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-                          Caption settings
-                        </summary>
-                        <div className="mt-3 space-y-3">
-                          <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                            <input
-                              type="checkbox"
-                              checked={subtitleSettings.subtitle_enabled}
-                              onChange={(e) =>
-                                setSubtitleSettings((s) => ({ ...s, subtitle_enabled: e.target.checked }))
-                              }
-                            />
-                            Enable subtitles
-                          </label>
-                          {subtitleSettings.subtitle_enabled && (
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Source</label>
-                                <Select
-                                  value={subtitleSettings.subtitle_source}
-                                  onValueChange={(v: "llm" | "transcription") =>
-                                    setSubtitleSettings((s) => ({ ...s, subtitle_source: v }))
-                                  }
-                                >
-                                  <SelectTrigger className="mt-1 border-border/60">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="llm">AI-generated</SelectItem>
-                                    <SelectItem value="transcription">Speech-to-text from audio</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Size</label>
-                                <Input
-                                  type="number"
-                                  min={24}
-                                  max={96}
-                                  value={subtitleSettings.subtitle_size}
-                                  onChange={(e) =>
-                                    setSubtitleSettings((s) => ({ ...s, subtitle_size: parseInt(e.target.value) || 48 }))
-                                  }
-                                  className="mt-1 border-border/60"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Words per caption</label>
-                                <Input
-                                  type="number"
-                                  min={2}
-                                  max={12}
-                                  value={subtitleSettings.subtitle_words_per_group}
-                                  onChange={(e) =>
-                                    setSubtitleSettings((s) => ({ ...s, subtitle_words_per_group: parseInt(e.target.value) || 4 }))
-                                  }
-                                  className="mt-1 border-border/60"
-                                />
-                              </div>
-                              {subtitleSettings.subtitle_source === "llm" && (
-                                <label className="col-span-2 flex items-center gap-2 text-xs text-muted-foreground">
-                                  <input
-                                    type="checkbox"
-                                    checked={subtitleSettings.generate_subtitles}
-                                    onChange={(e) =>
-                                      setSubtitleSettings((s) => ({ ...s, generate_subtitles: e.target.checked }))
-                                    }
-                                  />
-                                  Generate captions with AI
-                                </label>
-                              )}
-                              {subtitleSettings.subtitle_source === "transcription" && (
-                                <div className="col-span-2 grid grid-cols-2 gap-3">
-                                  <div>
-                                    <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Provider</label>
-                                    <Select
-                                      value={subtitleSettings.transcription_provider}
-                                      onValueChange={(v) =>
-                                        setSubtitleSettings((s) => ({ ...s, transcription_provider: v }))
-                                      }
-                                    >
-                                      <SelectTrigger className="mt-1 border-border/60">
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        <SelectItem value="openai">OpenAI</SelectItem>
-                                        <SelectItem value="groq">Groq</SelectItem>
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div>
-                                    <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Language</label>
-                                    <Input
-                                      value={subtitleSettings.transcription_language}
-                                      onChange={(e) =>
-                                        setSubtitleSettings((s) => ({ ...s, transcription_language: e.target.value }))
-                                      }
-                                      className="mt-1 border-border/60"
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                              <div>
-                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Font</label>
-                                <Select
-                                  value={subtitleSettings.subtitle_font}
-                                  onValueChange={(v) => setSubtitleSettings((s) => ({ ...s, subtitle_font: v }))}
-                                >
-                                  <SelectTrigger className="mt-1 border-border/60">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {["Arial", "Montserrat", "Roboto", "Impact", "Open Sans", "Georgia"].map((f) => (
-                                      <SelectItem key={f} value={f}>
-                                        {f}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Position</label>
-                                <Select
-                                  value={subtitleSettings.subtitle_position}
-                                  onValueChange={(v: "bottom" | "top" | "center") =>
-                                    setSubtitleSettings((s) => ({ ...s, subtitle_position: v }))
-                                  }
-                                >
-                                  <SelectTrigger className="mt-1 border-border/60">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="bottom">Bottom</SelectItem>
-                                    <SelectItem value="top">Top</SelectItem>
-                                    <SelectItem value="center">Center</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                      <Button variant="secondary" onClick={handleGenerate} disabled={loading || !concept.trim()} className="w-full">
-                        {loading ? "Generating…" : mode === "video_production" ? "Generate scene plan" : "Generate script"}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium text-foreground">Templates</div>
-                    <div className="mt-3 space-y-3">
-                      {SCRIPT_TEMPLATES.map((template) => (
-                        <button
-                          key={template.id}
-                          onClick={() => handleApplyTemplate(template.id)}
-                          className="w-full rounded-lg border border-border/40 bg-background px-3 py-2 text-left text-sm transition hover:border-border"
-                        >
-                          <div className="font-medium">{template.name}</div>
-                          <div className="text-xs text-muted-foreground">{template.description}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium text-foreground">AI helpers</div>
-                    <div className="space-y-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Preset</label>
-                        <Select value={aiPreset} onValueChange={setAiPreset}>
-                          <SelectTrigger className="border-border/60">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {AI_PRESETS.map((preset) => (
-                              <SelectItem key={preset.id} value={preset.id}>
-                                {preset.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Custom instruction</label>
-                        <Textarea
-                          value={aiInstruction}
-                          onChange={(e) => setAiInstruction(e.target.value)}
-                          rows={2}
-                          placeholder="Optional override, e.g. Make it sound more dramatic."
-                          className="resize-none border-border/60 text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Apply to</label>
-                        <Select value={aiTarget} onValueChange={(v) => setAiTarget(v as "script" | "scene")}>
-                          <SelectTrigger className="border-border/60">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="script">Full script</SelectItem>
-                            <SelectItem value="scene">Selected scene</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        {aiTarget === "scene" && !selectedSceneKey && (
-                          <p className="text-xs text-muted-foreground">Select a scene in the outline first.</p>
-                        )}
-                      </div>
-                      <Button variant="outline" onClick={handleApplyAi} disabled={aiLoading} className="w-full gap-2">
-                        {aiLoading ? "Applying…" : "Apply AI helper"}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium text-foreground">Export</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button variant="outline" size="sm" onClick={handleCopyFullProduction} disabled={!videoProduction}>
-                        {copiedId === "full" ? "Copied" : "Copy all"}
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={handleCopyImagePrompts} disabled={!videoProduction}>
-                        {copiedId === "image-prompts" ? "Copied" : "Image prompts"}
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={handleDownloadTxt} disabled={!videoProduction}>
-                        .txt
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={handleDownloadJson} disabled={!videoProduction}>
-                        .json
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </ScrollArea>
-            </CardContent>
-          </Card>
-        </div>
+        <CreationActionBar
+          primaryLabel={primaryFlowLabel}
+          onPrimaryClick={handleTakeToVideo}
+          primaryLoading={takingToVideo}
+          primaryLoadingLabel="Sending…"
+          primaryDisabled={!hasDraftContent}
+          secondaryActions={(
+            <Button variant="outline" size="sm" onClick={() => setSearchOpen(true)}>
+              Search & Replace
+            </Button>
+          )}
+          helperText={hasStructuredScenes
+            ? "Scenes are ready. Continue to Studio for assets, arrangement, and export."
+            : "No scene plan yet. Continue in Generate with your current draft."
+          }
+        />
+      </CreationPageShell>
 
         <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
           <DialogContent>
@@ -1484,7 +1670,6 @@ export default function ScriptsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
     </TooltipProvider>
   );
 }

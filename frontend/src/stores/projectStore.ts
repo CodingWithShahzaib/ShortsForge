@@ -75,7 +75,7 @@ export const useProjectStore = create<ProjectStore>((set) => ({
     if (msg.type === "completed" || msg.type === "error") delete jobDetails[msg.job_id];
 
     const jobPipelines = { ...state.jobPipelines };
-    if (msg.pipeline && msg.job_id) {
+    if ("pipeline" in msg && msg.pipeline && msg.job_id) {
       jobPipelines[msg.job_id] = mergeJobPipelinePayload(jobPipelines[msg.job_id], msg.pipeline);
     }
     if (msg.type === "completed" || msg.type === "error") {

@@ -7,13 +7,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   Check,
   GripVertical,
   Image as ImageIcon,
-  Lightbulb,
   Plus,
   RefreshCw,
   Save,
@@ -28,7 +27,6 @@ import {
   closestCenter,
   useSensor,
   useSensors,
-  type DragCancelEvent,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -45,9 +43,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
-import { RoundBokehLayer } from "@/components/layout/RoundBokehLayer";
 import { BodyPortal } from "@/components/ui/drag-overlay-portal";
-import { STUDIO_STEP_COLORS } from "@/components/studio/studio-step-colors";
 import { appConfirm } from "@/stores/confirmDialogStore";
 import type { Project, Scene } from "@/lib/types";
 
@@ -69,23 +65,6 @@ interface ScriptStepProps {
   onNext: () => void;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Fun-facts / tips shown during generation                          */
-/* ------------------------------------------------------------------ */
-
-const FUN_FACTS = [
-  "Did you know? The average YouTube Short is watched for 8.5 seconds.",
-  "Tip: Hook viewers in the first 2 seconds for maximum retention.",
-  "Fun fact: Vertical videos get 90% more completion than landscape.",
-  "Tip: Curiosity gaps in your script keep viewers watching longer.",
-  "Did you know? Adding subtitles can boost engagement by 40%.",
-  "Tip: End with a question or CTA to drive comments and shares.",
-  "Fun fact: Most viral Shorts have 3–5 scene transitions.",
-  "Tip: Pacing matters — aim for a new visual every 2–3 seconds.",
-  "Did you know? 70% of Short views come from the algorithm, not subscribers.",
-  "Tip: A strong opening line is worth more than any thumbnail.",
-];
-
 const STORYBOARD_PHASES = [
   {
     label: "Read brief",
@@ -105,12 +84,6 @@ const STORYBOARD_PHASES = [
   },
 ] as const;
 
-const AURORA_BEAMS = [
-  { left: "-8%", top: "8%", width: "46%", height: "28%", rotate: "-12deg", opacity: 0.18 },
-  { right: "-10%", top: "24%", width: "42%", height: "30%", rotate: "14deg", opacity: 0.14 },
-  { left: "18%", bottom: "-12%", width: "54%", height: "34%", rotate: "8deg", opacity: 0.12 },
-] as const;
-
 /* ------------------------------------------------------------------ */
 /*  Generating Mode                                                    */
 /* ------------------------------------------------------------------ */
@@ -124,8 +97,6 @@ function GeneratingView({
   targetCount: number;
   progressDetail?: string;
 }) {
-  const [factIdx, setFactIdx] = useState(0);
-  const reduceMotion = useReducedMotion();
   const draftedScenes = scenes.length;
   const safeTargetCount = Math.max(targetCount, draftedScenes, 1);
   const normalizedDetail = (progressDetail || "").toLowerCase();
@@ -172,336 +143,86 @@ function GeneratingView({
   const hasDraftedScenes = draftedScenes > 0;
   const statusLabel = progressDetail?.trim() || activePhase.description;
 
-  useEffect(() => {
-    const t = setInterval(
-      () => setFactIdx((i) => (i + 1) % FUN_FACTS.length),
-      4000,
-    );
-    return () => clearInterval(t);
-  }, []);
-
   return (
-    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-3xl border border-border/40 bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.12),transparent_40%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--background)))] px-4 py-6 sm:px-6 sm:py-8">
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,hsl(var(--border)/0.08)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/0.08)_1px,transparent_1px)] bg-size-[36px_36px] opacity-40" />
-      {AURORA_BEAMS.map((beam, index) => (
-        <motion.div
-          key={index}
-          className="pointer-events-none absolute rounded-full blur-3xl"
-          style={{
-            ...beam,
-            background:
-              index === 1
-                ? "radial-gradient(circle, hsl(var(--accent) / 0.75) 0%, transparent 70%)"
-                : "radial-gradient(circle, hsl(var(--primary) / 0.85) 0%, transparent 72%)",
-          }}
-          animate={
-            reduceMotion
-              ? undefined
-              : {
-                  x: [0, index === 1 ? -18 : 18, 0],
-                  y: [0, index === 1 ? 14 : -14, 0],
-                  scale: [1, 1.06, 1],
-                }
-          }
-          transition={{
-            duration: 12 + index * 2.5,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-      <RoundBokehLayer
-        accent="var(--primary)"
-        glow="var(--accent)"
-        className="rounded-3xl opacity-70"
-      />
-
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: "easeOut" }}
-        className="relative z-10 w-full max-w-6xl overflow-hidden rounded-[28px] border border-white/10 bg-background/55 shadow-[0_30px_120px_-40px_hsl(var(--primary)/0.45)] backdrop-blur-2xl"
-      >
-        <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-white/20 to-transparent" />
-        <div className="grid gap-0 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-          <div className="relative overflow-hidden px-6 py-7 sm:px-8 sm:py-8">
-            <div className="pointer-events-none absolute inset-0 bg-linear-to-br from-primary/10 via-transparent to-transparent" />
-            <div className="relative flex h-full flex-col">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
-                  Storyboard engine
-                </span>
-                <span className="inline-flex rounded-full border border-border/60 bg-background/60 px-3 py-1 text-[11px] font-medium text-muted-foreground">
-                  {hasDraftedScenes ? "Draft assembled" : "In progress"}
-                </span>
-              </div>
-
-              <div className="mt-7 flex flex-col gap-6 xl:flex-row xl:items-center">
-                <div className="flex justify-center xl:justify-start">
-                  <div className="relative flex h-36 w-36 items-center justify-center">
-                    <motion.div
-                      className="absolute inset-0 rounded-full border border-primary/20"
-                      animate={
-                        reduceMotion
-                          ? undefined
-                          : { scale: [1, 1.08, 1], opacity: [0.35, 0.8, 0.35] }
-                      }
-                      transition={{ duration: 3.4, repeat: Infinity, ease: "easeInOut" }}
-                    />
-                    <motion.div
-                      className="absolute inset-[12px] rounded-full border border-accent/20"
-                      animate={
-                        reduceMotion
-                          ? undefined
-                          : { scale: [1.04, 0.98, 1.04], opacity: [0.25, 0.6, 0.25] }
-                      }
-                      transition={{ duration: 4.2, repeat: Infinity, ease: "easeInOut" }}
-                    />
-                    {!reduceMotion && (
-                      <motion.div
-                        className="absolute inset-0"
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 12, repeat: Infinity, ease: "linear" }}
-                      >
-                        <span className="absolute left-1/2 top-0 h-2.5 w-2.5 -translate-x-1/2 rounded-full bg-accent shadow-[0_0_20px_hsl(var(--accent)/0.75)]" />
-                      </motion.div>
-                    )}
-                    <motion.div
-                      className="relative flex h-24 w-24 items-center justify-center rounded-full bg-linear-to-br from-primary via-primary/85 to-accent text-primary-foreground shadow-[0_0_40px_hsl(var(--primary)/0.45)]"
-                      animate={reduceMotion ? undefined : { scale: [0.98, 1.03, 0.98] }}
-                      transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-                    >
-                      <Sparkles className="h-9 w-9" />
-                    </motion.div>
-                  </div>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <motion.p
-                    key={activePhase.label}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.35 }}
-                    className="text-sm font-medium text-primary/85"
-                  >
-                    {activePhase.label}
-                  </motion.p>
-                  <h2 className="mt-2 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-                    Building your story structure and preparing scene-ready beats
-                  </h2>
-                  <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-                    The engine is analyzing your brief, drafting the narrative flow, and preparing a storyboard handoff for visuals. This is a phase-based process, so progress updates here reflect workflow stages instead of fake per-scene percentages.
-                  </p>
-
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <div className="rounded-2xl border border-border/60 bg-background/55 px-4 py-3">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                        Workflow
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-foreground">
-                        {hasDraftedScenes ? "Storyboard drafted" : "Generating"}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-border/60 bg-background/55 px-4 py-3">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                        Target scenes
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-foreground">
-                        {safeTargetCount}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-8">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    Current status
-                  </p>
-                  <p className="text-sm font-medium text-foreground/80">
-                    {hasDraftedScenes ? "Almost ready" : activePhase.label}
-                  </p>
-                </div>
-                <div className="mt-3 h-3 overflow-hidden rounded-full border border-border/60 bg-background/60">
-                  <div className="relative h-full overflow-hidden rounded-full bg-linear-to-r from-primary/75 via-cyan-400/80 to-accent/75">
-                    {!reduceMotion && (
-                      <motion.div
-                        className="absolute inset-y-0 left-[-30%] w-1/3 bg-linear-to-r from-transparent via-white/45 to-transparent"
-                        animate={{ x: ["0%", "360%"] }}
-                        transition={{ duration: 1.6, repeat: Infinity, ease: "linear" }}
-                      />
-                    )}
-                  </div>
-                </div>
-                <p className="mt-3 text-sm text-muted-foreground">
-                  {statusLabel}
-                </p>
-              </div>
-
-              <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {STORYBOARD_PHASES.map((phase, index) => {
-                  const isDone = hasDraftedScenes ? index <= activePhaseIndex : index < activePhaseIndex;
-                  const isActive = index === activePhaseIndex && !hasDraftedScenes;
-                  const phaseColor = STUDIO_STEP_COLORS[index % STUDIO_STEP_COLORS.length];
-                  const shimmerEnabled = !reduceMotion && !isDone;
-                  return (
-                    <motion.div
-                      key={phase.label}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.35, delay: index * 0.06 }}
-                      className={cn(
-                        "relative overflow-hidden rounded-2xl border px-4 py-3",
-                        isActive &&
-                          "border-primary/30 bg-primary/10 shadow-[0_0_0_1px_hsl(var(--primary)/0.08)]",
-                        isDone && "border-emerald-500/25 bg-emerald-500/8",
-                        !isDone && !isActive && "border-border/60 bg-background/45",
-                      )}
-                    >
-                      {shimmerEnabled && (
-                        <motion.div
-                          aria-hidden
-                          className="pointer-events-none absolute inset-y-0 left-[-55%] w-[62%] skew-x-[-20deg]"
-                          animate={{ x: ["0%", "235%"] }}
-                          transition={{
-                            duration: isActive ? 1.55 : 2.1,
-                            repeat: Infinity,
-                            repeatDelay: isActive ? 0.2 : 0.45,
-                            ease: "easeInOut",
-                            delay: index * 0.14,
-                          }}
-                          style={{
-                            background: `linear-gradient(90deg, transparent 0%, hsl(${phaseColor.accent} / ${isActive ? 0.08 : 0.04}) 25%, hsl(0 0% 100% / ${isActive ? 0.26 : 0.14}) 50%, hsl(${phaseColor.glow} / ${isActive ? 0.14 : 0.08}) 72%, transparent 100%)`,
-                          }}
-                        />
-                      )}
-                      <div
-                        aria-hidden
-                        className="pointer-events-none absolute inset-x-0 top-0 h-px"
-                        style={{
-                          background: `linear-gradient(90deg, transparent, hsl(${phaseColor.accent} / ${isActive ? 0.45 : 0.18}), transparent)`,
-                        }}
-                      />
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            "relative inline-flex h-6 w-6 items-center justify-center rounded-full border text-[11px] font-semibold",
-                            isDone &&
-                              "border-emerald-500/30 bg-emerald-500/12 text-emerald-400",
-                            isActive && "border-primary/40 bg-primary/15 text-primary",
-                            !isDone &&
-                              !isActive &&
-                              "border-border/60 text-muted-foreground",
-                          )}
-                        >
-                          {isDone ? <Check className="h-3.5 w-3.5" /> : index + 1}
-                        </span>
-                        <p className="text-sm font-semibold text-foreground">
-                          {phase.label}
-                        </p>
-                      </div>
-                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                        {phase.description}
-                      </p>
-                    </motion.div>
-                  );
-                })}
-              </div>
-
-              <div className="relative mt-6 h-12 overflow-hidden rounded-2xl border border-border/50 bg-background/40 px-4">
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={factIdx}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.35 }}
-                    className="absolute inset-0 flex items-center gap-2 px-4"
-                  >
-                    <Lightbulb className="h-4 w-4 shrink-0 text-yellow-400" />
-                    <p className="text-sm text-muted-foreground">
-                      {FUN_FACTS[factIdx]}
-                    </p>
-                  </motion.div>
-                </AnimatePresence>
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-white/10 bg-black/10 px-6 py-7 sm:px-8 lg:border-l lg:border-t-0">
-            <div className="flex h-full flex-col">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    Live storyboard feed
-                  </p>
-                  <h3 className="mt-2 text-xl font-semibold tracking-tight text-foreground">
-                    Storyboard activity
-                  </h3>
-                </div>
-                <div className="rounded-full border border-border/60 bg-background/55 px-3 py-1 text-xs font-medium text-muted-foreground">
-                  {hasDraftedScenes ? `${draftedScenes} drafted` : "Live status"}
-                </div>
-              </div>
-
-              <div className="mt-5 flex flex-1 flex-col gap-3">
-                {recentScenes.length === 0 ? (
-                  <div className="flex flex-1 items-center justify-center rounded-3xl border border-dashed border-border/60 bg-background/35 px-6 py-10 text-center">
-                    <div className="max-w-xs">
-                      <motion.div
-                        className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary"
-                        animate={reduceMotion ? undefined : { scale: [1, 1.04, 1] }}
-                        transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
-                      >
-                        <RefreshCw className="h-5 w-5" />
-                      </motion.div>
-                      <p className="mt-4 text-sm font-medium text-foreground">
-                        Storyboard is being assembled
-                      </p>
-                      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                        Scenes are generated together at the end of this pass, so this panel reflects backend activity and phase changes instead of pretending beats are streaming in one by one.
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <AnimatePresence mode="popLayout">
-                    {recentScenes.map((scene, index) => {
-                      const sceneNumber = draftedScenes - index;
-                      return (
-                        <motion.div
-                          key={scene.id}
-                          initial={{ opacity: 0, x: 28, scale: 0.98 }}
-                          animate={{ opacity: 1, x: 0, scale: 1 }}
-                          exit={{ opacity: 0, x: -18, scale: 0.98 }}
-                          transition={{ duration: 0.35, delay: index * 0.05 }}
-                          className="rounded-3xl border border-white/10 bg-background/45 p-4 shadow-[inset_0_1px_0_hsl(0_0%_100%/0.05)]"
-                        >
-                          <div className="flex items-start gap-3">
-                            <span className="inline-flex h-9 min-w-9 items-center justify-center rounded-2xl bg-linear-to-br from-primary to-accent px-2 text-sm font-bold text-primary-foreground shadow-[0_10px_30px_-15px_hsl(var(--primary)/0.85)]">
-                              {sceneNumber}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary/85">
-                                Scene {sceneNumber}
-                              </p>
-                              <p className="mt-2 line-clamp-4 text-sm leading-relaxed text-foreground/90">
-                                {scene.narration ||
-                                  scene.subtitle ||
-                                  "Drafting narration..."}
-                              </p>
-                            </div>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </AnimatePresence>
-                )}
-              </div>
-            </div>
-          </div>
+    <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-8">
+      <div className="w-full max-w-4xl rounded-2xl border border-border/60 bg-card/85 p-5 shadow-sm sm:p-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
+            Storyboard engine
+          </span>
+          <span className="inline-flex rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-medium text-muted-foreground">
+            {hasDraftedScenes ? "Draft assembled" : "Generating"}
+          </span>
+          <span className="inline-flex rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-medium text-muted-foreground">
+            Target {safeTargetCount} scenes
+          </span>
         </div>
-      </motion.div>
+
+        <h2 className="mt-4 text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+          Building your storyboard
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Progress is phase-based while the system prepares scene-ready beats.
+        </p>
+
+        <ol className="mt-4 grid gap-2 sm:grid-cols-2">
+          {STORYBOARD_PHASES.map((phase, index) => {
+            const isDone = hasDraftedScenes ? index <= activePhaseIndex : index < activePhaseIndex;
+            const isActive = !hasDraftedScenes && index === activePhaseIndex;
+            return (
+              <li
+                key={phase.label}
+                className={cn(
+                  "rounded-xl border px-3 py-2.5",
+                  isDone && "border-emerald-500/30 bg-emerald-500/5",
+                  isActive && "border-primary/35 bg-primary/5",
+                  !isDone && !isActive && "border-border/60 bg-background/70",
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "inline-flex h-6 w-6 items-center justify-center rounded-full border text-[11px] font-semibold",
+                      isDone && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+                      isActive && "border-primary/35 bg-primary/10 text-primary",
+                      !isDone && !isActive && "border-border/60 text-muted-foreground",
+                    )}
+                  >
+                    {isDone ? <Check className="h-3.5 w-3.5" /> : index + 1}
+                  </span>
+                  <p className="text-sm font-medium">{phase.label}</p>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{phase.description}</p>
+              </li>
+            );
+          })}
+        </ol>
+
+        <div className="mt-4 rounded-xl border border-border/60 bg-background/70 px-3 py-2.5">
+          <p className="text-xs font-medium text-foreground">Current status</p>
+          <p className="mt-1 text-sm text-muted-foreground">{statusLabel}</p>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-border/60 bg-background/70 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Latest scenes</p>
+          {recentScenes.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {recentScenes.map((scene, index) => (
+                <div key={scene.id} className="rounded-lg border border-border/50 bg-card/70 px-3 py-2">
+                  <p className="text-xs font-medium text-foreground">Scene {draftedScenes - index}</p>
+                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                    {scene.narration || scene.subtitle || "Drafting narration..."}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Scene cards will appear here as soon as generation completes.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -520,7 +241,6 @@ interface SceneCardProps {
     value: string,
   ) => void;
   onDelete: (id: string) => void;
-  totalScenes: number;
 }
 
 /** Lightweight clone under the cursor — avoids fighting framer-motion layout on the list item */
@@ -555,7 +275,6 @@ function SceneCard({
   localEdits,
   onLocalEdit,
   onDelete,
-  totalScenes,
 }: SceneCardProps) {
   const {
     attributes,
@@ -630,7 +349,7 @@ function SceneCard({
           <button
             type="button"
             onClick={() => onDelete(scene.id)}
-            className="rounded-md p-1 text-muted-foreground/40 opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+            className="rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive"
             title="Delete scene"
           >
             <Trash2 className="h-4 w-4" />
@@ -773,8 +492,8 @@ function EditingView({
       );
       notify.success(`Saved ${dirtySceneIds.length} scene(s).`);
       onScenesChange();
-    } catch (err: any) {
-      notify.error(err?.message || "Failed to save scenes.");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Failed to save scenes.");
     } finally {
       setSaving(false);
     }
@@ -820,9 +539,9 @@ function EditingView({
       if (workingScript) {
         try {
           generatedScenes = await splitWithScript(workingScript);
-        } catch (err: any) {
+        } catch (err: unknown) {
           notify.info(
-            err?.message
+            err instanceof Error
               ? `Could not re-split script: ${err.message}`
               : "Could not re-split script. Trying script regeneration fallback.",
           );
@@ -845,9 +564,9 @@ function EditingView({
             generatedScenes = await splitWithScript(workingScript);
             await api.updateProject(project.id, { script: workingScript });
           }
-        } catch (err: any) {
+        } catch (err: unknown) {
           notify.info(
-            err?.message
+            err instanceof Error
               ? `Script regeneration fallback failed: ${err.message}`
               : "Script regeneration fallback failed.",
           );
@@ -876,8 +595,8 @@ function EditingView({
       await Promise.all(updates);
       notify.success(`Recovered narration for ${updates.length} scene(s).`);
       onScenesChange();
-    } catch (err: any) {
-      notify.error(err?.message || "Failed to recover missing narration.");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Failed to recover missing narration.");
     } finally {
       setRepairingNarration(false);
     }
@@ -901,14 +620,14 @@ function EditingView({
       try {
         await api.reorderScenes(project.id, newOrder);
         onScenesChange();
-      } catch (err: any) {
-        notify.error(err?.message || "Failed to reorder scenes.");
+      } catch (err: unknown) {
+        notify.error(err instanceof Error ? err.message : "Failed to reorder scenes.");
       }
     },
     [orderedIds, project.id, onScenesChange],
   );
 
-  const handleDragCancel = useCallback((_event: DragCancelEvent) => {
+  const handleDragCancel = useCallback(() => {
     setActiveDragId(null);
   }, []);
 
@@ -932,8 +651,8 @@ function EditingView({
       });
       notify.success("Scene added.");
       onScenesChange();
-    } catch (err: any) {
-      notify.error(err?.message || "Failed to add scene.");
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : "Failed to add scene.");
     } finally {
       setAdding(false);
     }
@@ -954,8 +673,8 @@ function EditingView({
         await api.deleteScene(project.id, sceneId);
         notify.success("Scene deleted.");
         onScenesChange();
-      } catch (err: any) {
-        notify.error(err?.message || "Failed to delete scene.");
+      } catch (err: unknown) {
+        notify.error(err instanceof Error ? err.message : "Failed to delete scene.");
       }
     },
     [project.id, scenes.length, onScenesChange],
@@ -1063,7 +782,6 @@ function EditingView({
                         localEdits={localEdits}
                         onLocalEdit={handleLocalEdit}
                         onDelete={handleDeleteScene}
-                        totalScenes={scenes.length}
                       />
                     ))}
                   </AnimatePresence>

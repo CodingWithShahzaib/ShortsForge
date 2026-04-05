@@ -47,6 +47,7 @@ function Chip({
 export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control, variant = "default" }: Props) {
   const resolution = useWatch({ control, name: "resolution" });
   const scene_count = useWatch({ control, name: "scene_count" });
+  const dynamic_scenes = useWatch({ control, name: "dynamic_scenes" });
   const scene_duration = useWatch({ control, name: "scene_duration" });
   const scene_narration_style = useWatch({ control, name: "scene_narration_style" });
   const image_provider = useWatch({ control, name: "image_provider" });
@@ -57,7 +58,11 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
 
   const totalDuration = Math.max(1, Math.round(scene_count * scene_duration));
   const estRuntimeMin = Math.max(1, Math.round(totalDuration / 20));
-  const riskyCombo = scene_count >= 10 && scene_duration >= 6;
+  const riskyCombo = !dynamic_scenes && scene_count >= 10 && scene_duration >= 6;
+  const sceneDisplay = dynamic_scenes ? "AI decides" : scene_count;
+  const sceneDurationDisplay = dynamic_scenes ? "Adaptive" : `${scene_duration}s`;
+  const totalDurationDisplay = dynamic_scenes ? "Variable" : `~${totalDuration}s`;
+  const estRuntimeDisplay = dynamic_scenes ? "Variable" : `~${estRuntimeMin} min`;
 
   if (variant === "strip") {
     return (
@@ -65,11 +70,11 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         <div className="flex flex-wrap items-center gap-1.5">
           <Chip>{resolution}</Chip>
           <Chip>
-            {scene_count} scenes × {scene_duration}s
+            {dynamic_scenes ? `AI scenes × ${scene_duration}s target` : `${scene_count} scenes × ${scene_duration}s`}
           </Chip>
           <Chip>{scene_narration_style} scene copy</Chip>
-          <Chip>~{totalDuration}s video</Chip>
-          <Chip>~{estRuntimeMin} min render</Chip>
+          <Chip>{totalDurationDisplay} video</Chip>
+          <Chip>{estRuntimeDisplay} render</Chip>
           <Chip className="max-w-44 truncate sm:max-w-none" title={String(image_provider)}>
             {toFriendlyProvider(image_provider)}
           </Chip>
@@ -78,6 +83,7 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         <div className="flex flex-wrap gap-1 border-t border-border/50 pt-2">
           {riskyCombo ? <Badge variant="destructive">May take longer</Badge> : null}
           {!subtitle_enabled ? <Badge variant="outline">Subtitles off</Badge> : null}
+          {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
           {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
           {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
         </div>
@@ -91,17 +97,18 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Current settings</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           <Stat k="Resolution" v={resolution} />
-          <Stat k="Scenes" v={scene_count} />
-          <Stat k="Scene duration" v={`${scene_duration}s`} />
+          <Stat k="Scenes" v={sceneDisplay} />
+          <Stat k="Scene duration" v={sceneDurationDisplay} />
           <Stat k="Scene copy" v={scene_narration_style} />
-          <Stat k="~Video length" v={`~${totalDuration}s`} />
-          <Stat k="~Gen time" v={`~${estRuntimeMin} min`} />
+          <Stat k="~Video length" v={totalDurationDisplay} />
+          <Stat k="~Gen time" v={estRuntimeDisplay} />
           <Stat k="Image" v={toFriendlyProvider(image_provider)} />
           <Stat k="Voice" v={toFriendlyProvider(tts_provider)} />
         </div>
         <div className="flex flex-wrap gap-1.5">
           {riskyCombo ? <Badge variant="destructive">May take longer</Badge> : null}
           {!subtitle_enabled ? <Badge variant="outline">Subtitles off</Badge> : null}
+          {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
           {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
           {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
         </div>
@@ -117,11 +124,11 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
       </div>
       <div className="flex justify-between">
         <span>Scenes</span>
-        <span className="text-slate-900 dark:text-slate-100">{scene_count}</span>
+        <span className="text-slate-900 dark:text-slate-100">{sceneDisplay}</span>
       </div>
       <div className="flex justify-between">
         <span>Scene Duration</span>
-        <span className="text-slate-900 dark:text-slate-100">{scene_duration}s</span>
+        <span className="text-slate-900 dark:text-slate-100">{sceneDurationDisplay}</span>
       </div>
       <div className="flex justify-between">
         <span>Scene Copy</span>
@@ -137,16 +144,17 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
       </div>
       <div className="flex justify-between">
         <span>Estimated video length</span>
-        <span className="text-slate-900 dark:text-slate-100">~{totalDuration}s</span>
+        <span className="text-slate-900 dark:text-slate-100">{totalDurationDisplay}</span>
       </div>
       <div className="flex justify-between">
         <span>Estimated generation time</span>
-        <span className="text-slate-900 dark:text-slate-100">~{estRuntimeMin} min</span>
+        <span className="text-slate-900 dark:text-slate-100">{estRuntimeDisplay}</span>
       </div>
 
       <div className="pt-1 flex flex-wrap gap-1.5">
         {riskyCombo ? <Badge variant="destructive">May take longer</Badge> : null}
         {!subtitle_enabled ? <Badge variant="outline">Subtitles disabled</Badge> : null}
+        {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
         {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
         {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
       </div>

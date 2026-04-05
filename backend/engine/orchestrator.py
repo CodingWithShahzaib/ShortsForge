@@ -42,6 +42,7 @@ class ShortsForgeEngine:
             force_regenerate_scene_clips=request.force_regenerate_scene_clips,
             work_dir=work_dir,
             local_output_dir=local_output_dir,
+            app_settings=app_settings,
         )
 
     async def run(self, request: EngineRequest, session: Any) -> EngineResult:

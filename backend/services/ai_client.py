@@ -42,6 +42,7 @@ async def chat_completion(
     model: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 4096,
+    web_search: bool = False,
 ) -> str:
     settings = get_settings()
     llm = get_llm_provider(provider)
@@ -51,6 +52,8 @@ async def chat_completion(
         kwargs["model"] = model
     if _supports_temperature(model):
         kwargs["temperature"] = temperature
+    if web_search and isinstance(llm, OpenAILLMProvider):
+        kwargs["web_search"] = True
     return await llm.chat_completion(**kwargs)
 
 
@@ -77,7 +80,10 @@ def _supports_temperature(model: str | None) -> bool:
     if not model:
         return True
     normalized = model.lower()
-    return not (normalized.startswith("o1") or normalized.startswith("o3"))
+    return not (
+        normalized.startswith(("o1", "o3", "o4", "gpt-5"))
+        or "search-preview" in normalized
+    )
 
 
 async def transcribe_audio(

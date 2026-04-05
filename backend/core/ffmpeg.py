@@ -105,6 +105,12 @@ def normalize_transition(name: str | None) -> str:
         "slide_left": "slideleft",
         "slide_right": "slideright",
         "cross_fade": "crossfade",
+        "fade_in_out": "fade_in_fade_out",
+        "fadein_fadeout": "fade_in_fade_out",
+        "fade_out_in": "fade_in_fade_out",
+        "zoom_in_out": "zoom_in_zoom_out",
+        "zoomin_zoomout": "zoom_in_zoom_out",
+        "zoom_out_in": "zoom_in_zoom_out",
         "circle_open": "circleopen",
         "circle_close": "circleclose",
         "zoomin": "zoom_in",
@@ -115,6 +121,16 @@ def normalize_transition(name: str | None) -> str:
         "none": "none",
     }
     return aliases.get(n, n)
+
+
+def resolve_scene_transition(name: str | None, *, scene_index: int = 0) -> str:
+    """Resolve scene-level transition aliases, including alternating custom modes."""
+    t = normalize_transition(name)
+    if t == "zoom_in_zoom_out":
+        return "zoom_in" if scene_index % 2 == 0 else "zoom_out"
+    if t == "fade_in_fade_out":
+        return "fade"
+    return t
 
 
 def clamp_xfade_duration(durations: list[float], requested: float = 0.5) -> float:
@@ -235,8 +251,11 @@ async def create_image_clip(
     motion_effect: str | None = None,
     ken_burns_enabled: bool = False,
     ken_burns_zoom_percent: float = 2.5,
+    breathing_enabled: bool = False,
+    breathing_amplitude: float = 1.5,
+    breathing_speed: float = 0.25,
 ) -> str:
-    """Create a video clip from a still image with optional Ken Burns effect."""
+    """Create a video clip from a still image with optional Ken Burns and breathing effects."""
     transition = normalize_transition(transition)
     motion = normalize_transition(motion_effect or "")
     if motion not in ("zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down"):
@@ -245,6 +264,8 @@ async def create_image_clip(
         elif ken_burns_enabled:
             motion = "zoom_in"
     zoom_gain = max(0.0, min(float(ken_burns_zoom_percent or 0.0), 8.0)) / 100.0
+    breath_amp = max(0.0, min(float(breathing_amplitude or 0.0), 5.0)) / 100.0
+    breath_freq = max(0.05, min(float(breathing_speed or 0.25), 1.0))
 
     filter_parts = [f"scale={width}:{height}:force_original_aspect_ratio=decrease",
                     f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"]
@@ -253,29 +274,72 @@ async def create_image_clip(
         zoom_end_value = max(1.01, 1.0 + zoom_gain)
         zoom_start = "1" if motion == "zoom_in" else f"{zoom_end_value:.4f}"
         zoom_end = f"{zoom_end_value:.4f}" if motion == "zoom_in" else "1"
+        total_frames = int(duration * fps)
+        if breathing_enabled:
+            # Ken Burns zoom/pan + breathing pulse layered together
+            breath_expr = f"+{breath_amp}*sin(2*PI*{breath_freq}*on/{fps})"
+            zoom_expr = f"if(eq(on,0),{zoom_start},{zoom_start}+(({zoom_end}-{zoom_start})*on/{total_frames}){breath_expr})"
+        else:
+            zoom_expr = f"if(eq(on,0),{zoom_start},{zoom_start}+(({zoom_end}-{zoom_start})*on/{total_frames}))"
         filter_parts = [
             f"scale={width*2}:{height*2}:force_original_aspect_ratio=decrease",
             f"pad={width*2}:{height*2}:(ow-iw)/2:(oh-ih)/2:black",
-            f"zoompan=z='if(eq(on,0),{zoom_start},{zoom_start}+(({zoom_end}-{zoom_start})*on/({duration}*{fps})))'"
+            f"zoompan=z='{zoom_expr}'"
             f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-            f":d={int(duration*fps)}:s={width}x{height}:fps={fps}",
+            f":d={total_frames}:s={width}x{height}:fps={fps}",
         ]
     elif motion in ("pan_left", "pan_right"):
         direction = "on" if motion == "pan_right" else f"({int(duration*fps)}-on)"
-        filter_parts = [
-            f"scale={int(width*1.3)}:{height}:force_original_aspect_ratio=decrease",
-            f"pad={int(width*1.3)}:{height}:(ow-iw)/2:(oh-ih)/2:black",
-            f"zoompan=z=1:x='{direction}*{int(width*0.3)}/{int(duration*fps)}'"
-            f":y='0':d={int(duration*fps)}:s={width}x{height}:fps={fps}",
-        ]
+        total_frames = int(duration * fps)
+        if breathing_enabled:
+            # Breathing adds a subtle zoom pulse on top of the pan
+            breath_factor = 1.0 + breath_amp
+            filter_parts = [
+                f"scale={int(width*1.3*breath_factor)}:{int(height*breath_factor)}:force_original_aspect_ratio=decrease",
+                f"pad={int(width*1.3*breath_factor)}:{int(height*breath_factor)}:(ow-iw)/2:(oh-ih)/2:black",
+                f"zoompan=z='if(eq(on,0),{breath_factor},{breath_factor}+{breath_amp}*sin(2*PI*{breath_freq}*on/{fps})/{breath_factor})'"
+                f":x='{direction}*{int(width*0.3)}/{total_frames}'"
+                f":y='ih/2-(ih/zoom/2)':d={total_frames}:s={width}x{height}:fps={fps}",
+            ]
+        else:
+            filter_parts = [
+                f"scale={int(width*1.3)}:{height}:force_original_aspect_ratio=decrease",
+                f"pad={int(width*1.3)}:{height}:(ow-iw)/2:(oh-ih)/2:black",
+                f"zoompan=z=1:x='{direction}*{int(width*0.3)}/{int(duration*fps)}'"
+                f":y='0':d={int(duration*fps)}:s={width}x{height}:fps={fps}",
+            ]
     elif motion in ("pan_up", "pan_down"):
         direction = "on" if motion == "pan_down" else f"({int(duration*fps)}-on)"
+        total_frames = int(duration * fps)
+        if breathing_enabled:
+            breath_factor = 1.0 + breath_amp
+            filter_parts = [
+                f"scale={int(width*breath_factor)}:{int(height*1.3*breath_factor)}:force_original_aspect_ratio=decrease",
+                f"pad={int(width*breath_factor)}:{int(height*1.3*breath_factor)}:(ow-iw)/2:(oh-ih)/2:black",
+                f"zoompan=z='if(eq(on,0),{breath_factor},{breath_factor}+{breath_amp}*sin(2*PI*{breath_freq}*on/{fps})/{breath_factor})'"
+                f":x='iw/2-(iw/zoom/2)'"
+                f":y='{direction}*{int(height*0.3)}/{total_frames}'"
+                f":d={total_frames}:s={width}x{height}:fps={fps}",
+            ]
+        else:
+            filter_parts = [
+                f"scale={width}:{int(height*1.3)}:force_original_aspect_ratio=decrease",
+                f"pad={width}:{int(height*1.3)}:(ow-iw)/2:(oh-ih)/2:black",
+                f"zoompan=z=1:x='0'"
+                f":y='{direction}*{int(height*0.3)}/{int(duration*fps)}'"
+                f":d={int(duration*fps)}:s={width}x{height}:fps={fps}",
+            ]
+    elif breathing_enabled:
+        # No Ken Burns motion, just breathing pulse on static image
+        breath_base = 1.0 + breath_amp
+        total_frames = int(duration * fps)
+        zoom_expr = f"{breath_base}+{breath_amp}*sin(2*PI*{breath_freq}*on/{fps})"
         filter_parts = [
-            f"scale={width}:{int(height*1.3)}:force_original_aspect_ratio=decrease",
-            f"pad={width}:{int(height*1.3)}:(ow-iw)/2:(oh-ih)/2:black",
-            f"zoompan=z=1:x='0'"
-            f":y='{direction}*{int(height*0.3)}/{int(duration*fps)}'"
-            f":d={int(duration*fps)}:s={width}x{height}:fps={fps}",
+            f"scale={width*2}:{height*2}:force_original_aspect_ratio=decrease",
+            f"pad={width*2}:{height*2}:(ow-iw)/2:(oh-ih)/2:black",
+            f"zoompan=z='{zoom_expr}'"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={total_frames}:s={width}x{height}:fps={fps}",
         ]
     else:
         # Static hold; fade/dissolve/wipe/etc. are applied between clips (xfade), not on the still.
@@ -343,7 +407,7 @@ async def concat_with_transitions(
     current = "[0:v]"
     for i in range(1, n):
         trans = transition_types[i - 1] if i - 1 < len(transition_types) else "fade"
-        xfade_trans = map_transition_to_xfade(trans)
+        xfade_trans = map_transition_to_xfade(trans, boundary_index=i - 1)
         d_i = boundary_durations[i - 1]
         offset = sum(durations[:i]) - sum(boundary_durations[:i])
         out_label = f"[v{i}]"
@@ -369,9 +433,12 @@ async def concat_with_transitions(
     return output_path
 
 
-def map_transition_to_xfade(name: str | None) -> str:
+def map_transition_to_xfade(name: str | None, *, boundary_index: int = 0) -> str:
     """Map scene transition id to FFmpeg xfade transition name."""
     t = normalize_transition(name)
+    if t == "fade_in_fade_out":
+        # Alternate blend style on every boundary for a more rhythmic handoff.
+        return "fadeblack" if boundary_index % 2 == 0 else "fade"
     mapping = {
         "fade": "fade",
         "dissolve": "dissolve",
@@ -391,6 +458,7 @@ def map_transition_to_xfade(name: str | None) -> str:
         # Ken Burns / pan: blend with a directional crossfade (motion is already in the clip)
         "zoom_in": "fade",
         "zoom_out": "fade",
+        "zoom_in_zoom_out": "fade",
         "pan_left": "slideleft",
         "pan_right": "slideright",
         "pan_up": "slideup",

@@ -5,7 +5,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from backend.schemas.video_settings import ProjectVideoSettingsOut, SceneAssetOverrideOut
+from backend.schemas.video_settings import (
+    ProjectVideoSettingsOut,
+    ProjectVideoSettingsUpdate,
+    SceneAssetOverrideOut,
+)
 
 
 class SceneBase(BaseModel):
@@ -17,6 +21,7 @@ class SceneBase(BaseModel):
     scene_type: str = "image"
     scene_settings: dict[str, Any] | None = None
     is_locked: bool = False
+    is_manually_edited: bool = False
     user_notes: str | None = None
     trim_start_sec: float = 0.0
     trim_end_sec: float = 0.0
@@ -43,6 +48,7 @@ class SceneUpdate(BaseModel):
     order_index: int | None = None
     scene_settings: dict[str, Any] | None = None
     is_locked: bool | None = None
+    is_manually_edited: bool | None = None
     user_notes: str | None = None
     trim_start_sec: float | None = None
     trim_end_sec: float | None = None
@@ -123,6 +129,7 @@ class ProjectBase(BaseModel):
 class ProjectCreate(ProjectBase):
     script: str | None = None
     scenes: list[SceneCreate] | None = None
+    video_settings: ProjectVideoSettingsUpdate | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -131,6 +138,7 @@ class ProjectUpdate(BaseModel):
     script: str | None = None
     status: str | None = None
     settings: dict[str, Any] | None = None
+    video_settings: ProjectVideoSettingsUpdate | None = None
     control_mode: str | None = None
     expected_version: int | None = Field(
         default=None,

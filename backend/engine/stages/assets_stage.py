@@ -23,7 +23,7 @@ class AssetsStage:
         result = await context.session.execute(
             select(Scene)
             .where(Scene.project_id == context.project_id)
-            .options(selectinload(Scene.assets))
+            .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
             .order_by(Scene.order_index)
         )
         db_scenes = result.scalars().all()

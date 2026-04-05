@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from backend.config import get_settings
 from backend.engine.planning import ResolvedGenerationSettings, SceneSpec, build_timeline_plan
 from backend.models import Project, Scene
+from backend.services.project_video_settings_service import build_runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +106,16 @@ async def render_video(
 
     app_settings = get_settings()
     project_version: int | None = None
-    result = await session.execute(select(Project).where(Project.id == project_id))
+    result = await session.execute(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(selectinload(Project.video_settings))
+    )
     project = result.scalar_one_or_none()
     if project:
         project_version = project.version
         if settings is None:
-            settings = project.settings or {}
+            settings = build_runtime_settings(project, app_settings)
 
     resolved_settings = ResolvedGenerationSettings.from_mapping(settings or {}, app_settings)
     engine_scenes = None

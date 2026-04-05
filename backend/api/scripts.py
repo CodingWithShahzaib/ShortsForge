@@ -11,13 +11,20 @@ from backend.schemas import (
     GenerateStoryboardRequest,
     GenerateVideoProductionScriptRequest,
     RewriteScriptRequest,
+    ScriptAnalysisRequest,
+    ScriptImproveRequest,
+    ScriptImproveResponse,
+    ScriptQualityMetrics,
     StoryTemplateField,
 )
 from backend.schemas.generation import ViralIdeasRequest
 from backend.services.script_service import (
+    analyze_narration_quality,
+    analyze_hook_quality,
     generate_script,
     generate_story_and_storyboard,
     generate_video_production_script,
+    improve_narration_text,
     list_story_templates,
     rewrite_script,
     STORY_TYPES,
@@ -78,6 +85,73 @@ async def rewrite_script_endpoint(req: RewriteScriptRequest):
     return {"text": edited}
 
 
+@router.post("/analyze", response_model=ScriptQualityMetrics)
+async def analyze_script_quality_endpoint(req: ScriptAnalysisRequest):
+    narration = req.narration.strip()
+    if not narration:
+        raise HTTPException(status_code=400, detail="Narration is required")
+
+    hook_analysis = None
+    if req.is_first_scene:
+        hook_analysis = await analyze_hook_quality(
+            script_text=narration,
+            concept=narration,
+            story_type=req.story_type,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+        )
+
+    metrics = analyze_narration_quality(
+        narration,
+        story_type=req.story_type,
+        previous_narrations=req.previous_narrations,
+        hook_analysis=hook_analysis,
+        is_first_scene=req.is_first_scene,
+    )
+    return ScriptQualityMetrics.model_validate(metrics)
+
+
+@router.post("/improve", response_model=ScriptImproveResponse)
+async def improve_script_quality_endpoint(req: ScriptImproveRequest):
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    improved = await improve_narration_text(
+        text,
+        story_type=req.story_type,
+        previous_narrations=req.previous_narrations,
+        is_first_scene=req.is_first_scene,
+        issues=req.issues,
+        llm_provider=req.llm_provider,
+        llm_model=req.llm_model,
+        temperature=req.temperature,
+    )
+
+    hook_analysis = None
+    if req.is_first_scene:
+        hook_analysis = await analyze_hook_quality(
+            script_text=improved,
+            concept=improved,
+            story_type=req.story_type,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+        )
+
+    metrics = analyze_narration_quality(
+        improved,
+        story_type=req.story_type,
+        previous_narrations=req.previous_narrations,
+        hook_analysis=hook_analysis,
+        is_first_scene=req.is_first_scene,
+    )
+    return ScriptImproveResponse(
+        text=improved,
+        metrics=ScriptQualityMetrics.model_validate(metrics),
+        improvements_made=req.issues or ["hook", "pacing", "tts_clarity"],
+    )
+
+
 @router.post("/storyboard")
 async def generate_storyboard_endpoint(req: GenerateStoryboardRequest):
     _check_story_template(req.story_template)
@@ -87,6 +161,7 @@ async def generate_storyboard_endpoint(req: GenerateStoryboardRequest):
             script=req.script or None,
             story_type=req.story_type,
             scene_count=req.scene_count,
+            dynamic_scenes=req.dynamic_scenes,
             image_style=req.image_style,
             resolution=req.resolution,
             transition=req.transition,
@@ -109,6 +184,7 @@ async def generate_video_production_script_endpoint(req: GenerateVideoProduction
         concept=req.concept,
         story_type=req.story_type,
         scene_count=req.scene_count,
+        dynamic_scenes=req.dynamic_scenes,
         image_style=req.image_style,
         resolution=req.resolution,
         transition=req.transition,
@@ -134,6 +210,7 @@ async def list_story_templates_endpoint():
 class SplitScenesRequest(BaseModel):
     script: str
     scene_count: int = Field(default=5, ge=2, le=100)
+    dynamic_scenes: bool = False
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
     scene_narration_style: str = "balanced"
@@ -152,6 +229,7 @@ async def split_script_to_scenes(req: SplitScenesRequest):
         script=req.script,
         story_type=req.story_type,
         scene_count=req.scene_count,
+        dynamic_scenes=req.dynamic_scenes,
         image_style="realistic",
         scene_narration_style=req.scene_narration_style,
         generate_subtitles=req.generate_subtitles,

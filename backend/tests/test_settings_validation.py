@@ -8,6 +8,14 @@ from backend.schemas.settings import AppSettings
 
 
 class AppSettingsValidationTests(unittest.TestCase):
+    def test_accepts_custom_alternating_fade_transition(self) -> None:
+        settings = AppSettings(default_transition="fade_in_fade_out")
+        self.assertEqual(settings.default_transition, "fade_in_fade_out")
+
+    def test_accepts_custom_alternating_zoom_transition(self) -> None:
+        settings = AppSettings(default_transition="zoom_in_zoom_out")
+        self.assertEqual(settings.default_transition, "zoom_in_zoom_out")
+
     def test_rejects_invalid_default_transition(self) -> None:
         with self.assertRaises(ValidationError) as ctx:
             AppSettings(default_transition="cut")
@@ -35,6 +43,16 @@ class AppSettingsValidationTests(unittest.TestCase):
             AppSettings(default_scene_narration_style="extra_long")
         errors = ctx.exception.errors()
         self.assertTrue(any(err.get("loc") == ("default_scene_narration_style",) for err in errors))
+
+    def test_accepts_default_subtitle_source_transcription(self) -> None:
+        settings = AppSettings(default_subtitle_source="transcription")
+        self.assertEqual(settings.default_subtitle_source, "transcription")
+
+    def test_rejects_invalid_default_transcription_language(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            AppSettings(default_transcription_language="english")
+        errors = ctx.exception.errors()
+        self.assertTrue(any(err.get("loc") == ("default_transcription_language",) for err in errors))
 
 
 if __name__ == "__main__":

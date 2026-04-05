@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     # OpenRouter
     openrouter_api_key: str = ""
 
-    # ElevenLabs
-    elevenlabs_api_key: str = ""
+    # Kokoro TTS
+    kokoro_tts_url: str = ""
 
     # Image providers
     replicate_api_key: str = ""
@@ -72,14 +72,22 @@ class Settings(BaseSettings):
     default_llm_provider: str = "openai"
     default_llm_model: str = "gpt-4o-mini"
     default_image_provider: str = "replicate"
-    default_tts_provider: str = "edge"
-    default_tts_voice: str = "en-US-ChristopherNeural"
+    default_tts_provider: str = "kokoro"
+    default_tts_voice: str = "af_bella"
+    default_tts_speed: float = 1.0
+    default_tts_response_format: str = "mp3"
+    default_tts_normalize: bool = True
     default_resolution: str = "1080x1920"
     default_transition: str = "fade"
     default_image_style: str = "realistic"
     default_word_count: int = 400
     default_scene_count: int = 5
     default_scene_narration_style: str = "balanced"
+    default_subtitle_enabled: bool = True
+    default_subtitle_source: str = "llm"
+    default_generate_subtitles: bool = True
+    default_transcription_provider: str = "openai"
+    default_transcription_language: str = "en"
     default_inter_scene_pause_ms: int = 600
     default_transition_overlap_ms: int = 250
     default_use_production_storyboard: bool = True
@@ -88,6 +96,9 @@ class Settings(BaseSettings):
     default_ken_burns_enabled: bool = True
     default_ken_burns_zoom_percent: float = 2.5
     default_ken_burns_motion: str = "auto"
+    default_breathing_enabled: bool = False
+    default_breathing_amplitude: float = 1.5
+    default_breathing_speed: float = 0.25
     default_film_grain_enabled: bool = False
     default_film_grain_intensity: float = 0.05
     default_vignette_enabled: bool = True

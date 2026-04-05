@@ -18,8 +18,11 @@ class GenerationPlanTests(unittest.TestCase):
             default_llm_model="llama",
             default_image_provider="fal",
             default_image_style="cinematic",
-            default_tts_provider="elevenlabs",
-            default_tts_voice="voice-a",
+            default_tts_provider="kokoro",
+            default_tts_voice="af_bella",
+            default_tts_speed=1.15,
+            default_tts_response_format="wav",
+            default_tts_normalize=False,
             default_resolution="720x1280",
             default_transition="dissolve",
             default_scene_count=7,
@@ -38,7 +41,11 @@ class GenerationPlanTests(unittest.TestCase):
         self.assertEqual(resolved.story_type, "science")
         self.assertEqual(resolved.llm_provider, "groq")
         self.assertEqual(resolved.image_provider, "fal")
-        self.assertEqual(resolved.tts_provider, "elevenlabs")
+        self.assertEqual(resolved.tts_provider, "kokoro")
+        self.assertEqual(resolved.tts_voice, "af_bella")
+        self.assertAlmostEqual(resolved.tts_speed, 1.15)
+        self.assertEqual(resolved.tts_response_format, "wav")
+        self.assertFalse(resolved.tts_normalize)
         self.assertEqual(resolved.resolution, "720x1280")
         self.assertEqual(resolved.transition, "dissolve")
         self.assertEqual(resolved.scene_count, 7)
@@ -90,8 +97,11 @@ class GenerationPlanTests(unittest.TestCase):
             default_llm_model="gpt-4o-mini",
             default_image_provider="replicate",
             default_image_style="realistic",
-            default_tts_provider="edge",
-            default_tts_voice="voice-a",
+            default_tts_provider="kokoro",
+            default_tts_voice="af_bella",
+            default_tts_speed=1.0,
+            default_tts_response_format="mp3",
+            default_tts_normalize=True,
             default_resolution="1080x1920",
             default_transition="fade",
             default_scene_count=5,

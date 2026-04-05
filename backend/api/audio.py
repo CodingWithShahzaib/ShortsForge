@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 import uuid
 from pathlib import Path
@@ -13,17 +12,6 @@ from backend.schemas import GenerateAudioRequest
 from backend.services.audio_service import synthesize_speech, list_voices
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
-
-# Fallback Edge TTS voices when Microsoft API returns 503/network error
-EDGE_VOICES_FALLBACK = [
-    {"id": "en-US-ChristopherNeural", "name": "Christopher (en-US)", "locale": "en-US", "gender": "Male"},
-    {"id": "en-US-JennyNeural", "name": "Jenny (en-US)", "locale": "en-US", "gender": "Female"},
-    {"id": "en-US-GuyNeural", "name": "Guy (en-US)", "locale": "en-US", "gender": "Male"},
-    {"id": "en-US-AriaNeural", "name": "Aria (en-US)", "locale": "en-US", "gender": "Female"},
-    {"id": "en-GB-ThomasNeural", "name": "Thomas (en-GB)", "locale": "en-GB", "gender": "Male"},
-    {"id": "en-GB-SoniaNeural", "name": "Sonia (en-GB)", "locale": "en-GB", "gender": "Female"},
-]
 
 
 def _sanitize_music_filename(filename: str) -> str:
@@ -61,32 +49,26 @@ async def generate_audio_endpoint(req: GenerateAudioRequest):
         provider=req.provider,
         voice=req.voice,
         speed=req.speed,
+        response_format=req.response_format,
+        normalization_options={"normalize": req.normalize},
     )
     storage = get_storage()
     return {"path": path, "url": await storage.get_url(path)}
 
 
 @router.get("/voices")
-async def list_voices_endpoint(provider: str = "edge"):
+async def list_voices_endpoint(provider: str = "kokoro"):
     try:
         voices = await list_voices(provider)
         return voices
     except Exception as exc:
-        if provider == "edge":
-            logger.warning("Edge TTS voices API unavailable (%s), using fallback list", exc)
-            return EDGE_VOICES_FALLBACK
         raise HTTPException(503, f"TTS provider unavailable: {exc}")
 
 
 @router.get("/providers")
 async def list_tts_providers():
     settings = get_settings()
-    providers = [{"id": "edge", "name": "Edge TTS (Free)", "configured": True}]
-    if settings.openai_api_key:
-        providers.append({"id": "openai_tts", "name": "OpenAI TTS", "configured": True})
-    if settings.elevenlabs_api_key:
-        providers.append({"id": "elevenlabs", "name": "ElevenLabs", "configured": True})
-    return providers
+    return [{"id": "kokoro", "name": "Kokoro TTS (Docker)", "configured": bool(settings.kokoro_tts_url)}]
 
 
 @router.post("/music/upload")

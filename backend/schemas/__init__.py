@@ -37,6 +37,13 @@ from backend.schemas.video_settings import (
     SubtitleSettings,
     VideoStyleSettings,
 )
+from backend.schemas.script_quality import (
+    ScriptAnalysisRequest,
+    ScriptImproveRequest,
+    ScriptImproveResponse,
+    ScriptQualityIssue,
+    ScriptQualityMetrics,
+)
 
 __all__ = [
     "ProjectCreate", "ProjectUpdate", "ProjectOut", "ProjectListOut",
@@ -50,4 +57,6 @@ __all__ = [
     "ProjectVideoSettingsUpdate", "SafeZoneConfig", "SafeZoneResponse",
     "SceneAssetOverrideCreate", "SceneAssetOverrideOut", "SceneAssetOverrideUpdate",
     "SceneRegenerateRequest", "SubtitleSettings", "VideoStyleSettings",
+    "ScriptAnalysisRequest", "ScriptImproveRequest", "ScriptImproveResponse",
+    "ScriptQualityIssue", "ScriptQualityMetrics",
 ]

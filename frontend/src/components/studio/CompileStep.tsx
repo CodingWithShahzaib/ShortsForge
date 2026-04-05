@@ -28,6 +28,7 @@ import type { EngineStage, EngineStageState, Job, Project, Scene } from "@/lib/t
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LinearProgress } from "@/components/ui/progress-linear";
+import { cn } from "@/lib/utils";
 import CelebrationOverlay from "./CelebrationOverlay";
 
 type StageStatePresentation = {
@@ -98,7 +99,7 @@ const STAGE_META: Record<
   },
   compile: {
     icon: Clapperboard,
-    description: "Render scenes, subtitles, overlays, and final audio mix",
+    description: "Build the final export from scenes, subtitles, and audio",
   },
 };
 
@@ -165,204 +166,45 @@ function RenderActivityPanel({
   detail: string;
   sceneCount: number;
 }) {
-  const sceneTiles = Array.from({ length: Math.min(Math.max(sceneCount, 3), 6) }, (_, index) => index);
-  const waveformBars = Array.from({ length: 18 }, (_, index) => index);
-  const captionRows = Array.from({ length: 3 }, (_, index) => index);
+  const roundedProgress = Math.max(0, Math.min(100, Math.round(progress)));
+  const stageItems = [
+    { id: "storyboard", label: "Storyboard check", active: mode === "storyboard" || mode === "queued" },
+    { id: "assets", label: "Asset stitching", active: mode === "assets" || mode === "concat" },
+    { id: "audio", label: "Audio mix", active: mode === "audio" },
+    { id: "subtitles", label: "Subtitle burn-in", active: mode === "subtitles" },
+    { id: "finalizing", label: "Final package", active: mode === "finalizing" || mode === "render" },
+  ];
 
   return (
-    <div className="relative mt-6 overflow-hidden rounded-[28px] border border-border/40 bg-[#07111a] p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_80px_rgba(0,0,0,0.35)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.22),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(16,185,129,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0))]" />
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-cyan-300/60 to-transparent" />
-
-      <div className="relative flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-200/75">
-            Live render activity
-          </p>
-          <p className="mt-1 text-sm text-slate-300/80">
-            {detail}
-          </p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-right">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Observed progress</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-white">{Math.round(progress)}%</p>
-        </div>
+    <div className="mt-6 rounded-2xl border border-border/50 bg-background/60 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-foreground">Live export status</p>
+        <span className="rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-xs font-semibold tabular-nums text-foreground">
+          {roundedProgress}%
+        </span>
       </div>
+      <LinearProgress value={roundedProgress} className="mt-3 h-2.5" />
+      <p className="mt-3 text-sm text-muted-foreground">{detail}</p>
 
-      <div className="relative mt-5 min-h-[320px] overflow-hidden rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(4,10,16,0.96),rgba(7,16,25,0.92))]">
-        <motion.div
-          className="pointer-events-none absolute inset-0 opacity-70"
-          animate={{
-            background: [
-              "radial-gradient(circle at 20% 30%, rgba(34,211,238,0.18), transparent 30%), radial-gradient(circle at 80% 70%, rgba(16,185,129,0.14), transparent 28%)",
-              "radial-gradient(circle at 28% 36%, rgba(34,211,238,0.24), transparent 32%), radial-gradient(circle at 72% 64%, rgba(16,185,129,0.18), transparent 30%)",
-              "radial-gradient(circle at 20% 30%, rgba(34,211,238,0.18), transparent 30%), radial-gradient(circle at 80% 70%, rgba(16,185,129,0.14), transparent 28%)",
-            ],
-          }}
-          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
-        />
-
-        <div className="absolute inset-y-0 left-0 w-24 border-r border-dashed border-white/8">
-          {sceneTiles.map((tile) => (
-            <motion.div
-              key={tile}
-              className="absolute left-4 flex h-10 items-center gap-2 rounded-2xl border border-cyan-400/15 bg-cyan-400/8 px-3"
-              style={{ top: 26 + tile * 44 }}
-              animate={{
-                x:
-                  mode === "concat" || mode === "render"
-                    ? [0, 10, 0]
-                    : mode === "queued"
-                      ? [0, 0, 0]
-                      : [0, 6, 0],
-                opacity: [0.45, 1, 0.45],
-              }}
-              transition={{
-                duration: 1.8,
-                repeat: Infinity,
-                delay: tile * 0.14,
-                ease: "easeInOut",
-              }}
-            >
-              <span className="h-2 w-2 rounded-full bg-cyan-300" />
-              <span className="text-[11px] font-medium text-slate-200">S{tile + 1}</span>
-            </motion.div>
-          ))}
-        </div>
-
-        {(mode === "concat" || mode === "render" || mode === "assets" || mode === "storyboard") && (
-          <>
-            {sceneTiles.map((tile) => (
-              <motion.div
-                key={`scene-card-${tile}`}
-                className="absolute top-10 h-40 w-20 overflow-hidden rounded-[20px] border border-white/10 bg-[linear-gradient(180deg,rgba(21,32,43,0.95),rgba(8,15,23,0.95))] shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
-                style={{ left: 120 + tile * 42 }}
-                animate={{
-                  x:
-                    mode === "concat"
-                      ? [0, 48, 96]
-                      : mode === "render"
-                        ? [0, 18, 0]
-                        : [0, 10, 0],
-                  y: [0, tile % 2 === 0 ? -10 : 10, 0],
-                  scale:
-                    mode === "storyboard"
-                      ? [0.96, 1.03, 0.96]
-                      : [1, 1.04, 1],
-                  opacity: [0.48, 1, 0.48],
-                }}
-                transition={{
-                  duration: mode === "concat" ? 2.4 : 2.8,
-                  repeat: Infinity,
-                  delay: tile * 0.12,
-                  ease: "easeInOut",
-                }}
-              >
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.25),transparent_45%),linear-gradient(180deg,rgba(255,255,255,0.06),transparent)]" />
-                <div className="absolute inset-x-3 top-4 h-16 rounded-2xl bg-linear-to-br from-cyan-300/25 via-emerald-300/10 to-transparent" />
-                <div className="absolute inset-x-3 bottom-6 h-2 rounded-full bg-white/14" />
-                <div className="absolute inset-x-6 bottom-11 h-2 rounded-full bg-white/8" />
-              </motion.div>
-            ))}
-          </>
-        )}
-
-        <div className="absolute inset-y-8 right-6 left-[46%] rounded-[28px] border border-cyan-300/18 bg-[linear-gradient(180deg,rgba(10,24,36,0.92),rgba(5,12,18,0.98))] shadow-[0_0_0_1px_rgba(34,211,238,0.08),0_18px_60px_rgba(0,0,0,0.45)]">
-          <motion.div
-            className="absolute inset-x-6 top-0 h-px bg-linear-to-r from-transparent via-cyan-200/85 to-transparent"
-            animate={{ opacity: [0.25, 1, 0.25] }}
-            transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
-          />
-          <motion.div
-            className="absolute inset-x-6 h-16 bg-linear-to-b from-cyan-300/15 to-transparent"
-            animate={{ y: [0, 190, 0] }}
-            transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
-          />
-
-          <div className="absolute inset-x-6 top-6 flex items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-              Output frame
-            </span>
-            <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-cyan-100/80">
-              {mode}
-            </span>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        {stageItems.map((item) => (
+          <div
+            key={item.id}
+            className={cn(
+              "rounded-xl border px-3 py-2 text-xs",
+              item.active
+                ? "border-primary/35 bg-primary/5 text-foreground"
+                : "border-border/50 bg-background/70 text-muted-foreground",
+            )}
+          >
+            <p className="font-medium">{item.label}</p>
+            {item.id === "storyboard" ? (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {sceneCount} scene{sceneCount !== 1 ? "s" : ""} included
+              </p>
+            ) : null}
           </div>
-
-          <div className="absolute inset-x-6 top-14 bottom-6 overflow-hidden rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,27,40,0.96),rgba(4,8,13,0.98))]">
-            <motion.div
-              className="absolute inset-0"
-              animate={{
-                background: [
-                  "radial-gradient(circle at 30% 25%, rgba(251,191,36,0.22), transparent 26%), linear-gradient(180deg, rgba(15,32,46,0.96), rgba(3,9,15,0.98))",
-                  "radial-gradient(circle at 62% 22%, rgba(251,191,36,0.26), transparent 28%), linear-gradient(180deg, rgba(15,32,46,0.96), rgba(3,9,15,0.98))",
-                  "radial-gradient(circle at 30% 25%, rgba(251,191,36,0.22), transparent 26%), linear-gradient(180deg, rgba(15,32,46,0.96), rgba(3,9,15,0.98))",
-                ],
-              }}
-              transition={{ duration: 4.5, repeat: Infinity, ease: "easeInOut" }}
-            />
-
-            {(mode === "audio" || mode === "render" || mode === "concat" || mode === "finalizing") && (
-              <div className="absolute inset-x-6 bottom-8 flex items-end justify-center gap-1.5">
-                {waveformBars.map((bar) => (
-                  <motion.span
-                    key={bar}
-                    className="w-1.5 rounded-full bg-linear-to-t from-cyan-400/55 via-cyan-300/95 to-white/95"
-                    animate={{
-                      height:
-                        mode === "audio"
-                          ? [16, 56, 22, 48, 18]
-                          : [10, 26, 14, 22, 10],
-                      opacity: [0.5, 1, 0.6, 0.9, 0.5],
-                    }}
-                    transition={{
-                      duration: 1.5,
-                      repeat: Infinity,
-                      delay: bar * 0.04,
-                      ease: "easeInOut",
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {(mode === "subtitles" || mode === "render" || mode === "finalizing") && (
-              <div className="absolute inset-x-8 bottom-16 space-y-3">
-                {captionRows.map((row) => (
-                  <motion.div
-                    key={row}
-                    className="h-5 rounded-full border border-white/12 bg-black/35"
-                    animate={{
-                      x: [row === 1 ? 12 : -10, row === 1 ? -12 : 10, row === 1 ? 12 : -10],
-                      opacity: [0.45, 0.95, 0.45],
-                      width: row === 1 ? ["74%", "82%", "74%"] : ["58%", "66%", "58%"],
-                    }}
-                    transition={{
-                      duration: 2.2,
-                      repeat: Infinity,
-                      delay: row * 0.2,
-                      ease: "easeInOut",
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {mode === "finalizing" && (
-              <>
-                <motion.div
-                  className="absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/30"
-                  animate={{ scale: [0.85, 1.18, 0.85], opacity: [0.25, 0.85, 0.25] }}
-                  transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-                />
-                <motion.div
-                  className="absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full border border-emerald-300/20"
-                  animate={{ scale: [0.9, 1.06, 0.9], opacity: [0.18, 0.55, 0.18] }}
-                  transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-                />
-              </>
-            )}
-          </div>
-        </div>
+        ))}
       </div>
     </div>
   );
@@ -454,7 +296,7 @@ export default function CompileStep({
       },
       {
         stage: "compile",
-        label: "Compile",
+        label: "Export",
         state: completedVideoUrl && !videoIsStale ? "complete" : "pending",
       },
     ];
@@ -481,7 +323,7 @@ export default function CompileStep({
         ? "Storyboard"
         : activeStage === "assets"
           ? "Assets"
-          : "Compile";
+          : "Export";
 
     switch (surfaceStatus) {
       case "queued":
@@ -505,32 +347,32 @@ export default function CompileStep({
       case "completed":
         return {
           eyebrow: "Export ready",
-          title: "Your final video is compiled.",
+          title: "Your final video export is ready.",
           description: "This preview matches the latest successful export and is ready to download or share.",
         };
       case "stale":
         return {
           eyebrow: "Export outdated",
           title: "A previous export is available, but the project has changed.",
-          description: "The preview below is from an older successful render. Recompile to produce a new final video.",
+          description: "The preview below is from an older successful render. Export again to produce a new final video.",
         };
       case "failed":
         return {
           eyebrow: "Render failed",
           title: "The last export attempt did not finish.",
-          description: failureMessage?.trim() || "Review the failure details below, then retry the compile stage when you are ready.",
+          description: failureMessage?.trim() || "Review the failure details below, then retry export when you are ready.",
         };
       case "ready":
         return {
           eyebrow: "Ready to export",
           title: "Everything needed for the final render is in place.",
-          description: "Scenes, visuals, voice audio, and timing are ready. Start compile when you are happy with the arrangement.",
+          description: "Scenes, visuals, voice audio, and timing are ready. Start export when you are happy with the arrangement.",
         };
       case "blocked":
       default:
         return {
           eyebrow: "Export is blocked",
-          title: "Finish scene prep before compiling.",
+          title: "Finish scene prep before exporting.",
           description: "The backend can only produce a final render once narration, visuals, and audio are ready for every scene.",
         };
     }
@@ -543,7 +385,7 @@ export default function CompileStep({
           <AlertTriangle className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-foreground">Latest compile attempt failed</p>
+          <p className="font-semibold text-foreground">Latest export attempt failed</p>
           <p className="mt-1 wrap-break-word text-muted-foreground">
             {failureMessage?.trim() || "The render did not complete."}
           </p>
@@ -556,7 +398,7 @@ export default function CompileStep({
             onClick={() => void onRetryCompile()}
           >
             <RefreshCw className="h-4 w-4" />
-            Retry compile stage
+            Retry export
           </Button>
         </div>
       </div>
@@ -653,11 +495,11 @@ export default function CompileStep({
                     size="lg"
                     onClick={onStartCompile}
                     loading={pipelineBusy}
-                    loadingLabel={videoIsStale ? "Recompiling..." : "Starting compile..."}
+                    loadingLabel={videoIsStale ? "Exporting..." : "Starting export..."}
                     className="justify-center"
                   >
                     <Clapperboard className="h-4 w-4" />
-                    {videoIsStale ? "Recompile video" : "Compile again"}
+                    {videoIsStale ? "Export latest version" : "Export again"}
                   </Button>
                   <Button variant="primary" size="lg" asChild>
                     <a href={completedVideoUrl} download>
@@ -971,7 +813,7 @@ export default function CompileStep({
                     <span className="font-semibold text-foreground">{transitionOverlapMs}ms</span>
                   </div>
                   <p className="pt-1 leading-6">
-                    If the final export feels rushed or too static, go back to Arrange to adjust timing and then compile again.
+                    If the final export feels rushed or too static, go back to Arrange to adjust timing and then export again.
                   </p>
                 </div>
               </div>
@@ -988,8 +830,8 @@ export default function CompileStep({
               <>
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">
                   {videoIsStale
-                    ? "A previous export is available. Recompiling will replace it with a fresh final video."
-                    : "You already have a successful export. Compile again if you changed scenes, timing, or settings."}
+                    ? "A previous export is available. Exporting again will replace it with a fresh final video."
+                    : "You already have a successful export. Export again if you changed scenes, timing, or settings."}
                 </p>
                 <div className="mt-4 overflow-hidden rounded-2xl border border-border/40 bg-black">
                   <ReactPlayer
@@ -1002,7 +844,7 @@ export default function CompileStep({
               </>
             ) : (
               <div className="mt-3 rounded-2xl border border-dashed border-border/60 bg-background/45 px-4 py-6 text-sm leading-6 text-muted-foreground">
-                No successful export exists yet. Compile will produce the first final video for this project.
+                No successful export exists yet. Start export to produce the first final video for this project.
               </div>
             )}
           </div>
@@ -1017,11 +859,11 @@ export default function CompileStep({
                 size="lg"
                 onClick={onStartCompile}
                 loading={pipelineBusy}
-                loadingLabel="Starting compile..."
+                loadingLabel="Starting export..."
                 disabled={!allAssetsReady}
               >
                 <Clapperboard className="h-4 w-4" />
-                Compile final video
+                Export final video
               </Button>
               <Button variant="outline" size="lg" onClick={onBack}>
                 <ArrowLeft className="h-4 w-4" />

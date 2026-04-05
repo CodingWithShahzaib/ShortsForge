@@ -126,13 +126,17 @@ def generate_ass_subtitles(
     events = []
     groups = _group_words(words, words_per_group)
 
-    for group in groups:
+    for group_index, group in enumerate(groups):
         if not group:
             continue
-        start = group[0].get("start", 0)
-        end = group[-1].get("end", start + 1)
+        start = float(group[0].get("start", 0) or 0)
+        end = float(group[-1].get("end", start + 1) or (start + 1))
+        next_group_start = None
+        if group_index + 1 < len(groups) and groups[group_index + 1]:
+            next_group_start = float(groups[group_index + 1][0].get("start", end) or end)
+        group_visible_end = max(end, next_group_start) if next_group_start is not None else end
         start_ts = _time_to_ass(start)
-        end_ts = _time_to_ass(end)
+        end_ts = _time_to_ass(group_visible_end)
 
         for i, word_info in enumerate(group):
             text_parts = []
@@ -143,10 +147,16 @@ def generate_ass_subtitles(
                 else:
                     text_parts.append(word_text)
 
-            w_start = word_info.get("start", start)
-            w_end = word_info.get("end", w_start + 0.3)
+            w_start = float(word_info.get("start", start) or start)
+            w_end = float(word_info.get("end", w_start + 0.3) or (w_start + 0.3))
+            next_word_start = (
+                float(group[i + 1].get("start", group_visible_end) or group_visible_end)
+                if i + 1 < len(group)
+                else group_visible_end
+            )
+            display_end = max(w_end, next_word_start)
             line = (
-                f"Dialogue: 0,{_time_to_ass(w_start)},{_time_to_ass(w_end)},"
+                f"Dialogue: 0,{_time_to_ass(w_start)},{_time_to_ass(display_end)},"
                 f"Default,,0,0,0,,{' '.join(text_parts)}"
             )
             events.append(line)

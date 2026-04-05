@@ -85,6 +85,7 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
     from backend.engine import EngineRequest, ShortsForgeEngine
     from backend.engine.planning import ResolvedGenerationSettings, SceneSpec
     from backend.models import Job, Project
+    from backend.services.project_video_settings_service import build_runtime_settings
 
     project_id = params["project_id"]
     job_id = params["job_id"]
@@ -108,11 +109,11 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
             r2 = await session.execute(
                 select(Project)
                 .where(Project.id == project_id)
-                .options(selectinload(Project.scenes))
+                .options(selectinload(Project.scenes), selectinload(Project.video_settings))
             )
             project = r2.scalar_one()
-            if not settings and project.settings:
-                settings = project.settings
+            if not settings:
+                settings = build_runtime_settings(project, app_settings)
             resolved_settings = ResolvedGenerationSettings.from_mapping(settings, app_settings)
 
             pipeline_mode, target_stage = _resolve_pipeline_request(params, settings)
@@ -235,6 +236,10 @@ async def _run_asset_generate(
 ) -> dict[str, Any]:
     from backend.database import async_session
     from backend.models import Job, Project, Scene, Asset
+    from backend.services.project_video_settings_service import (
+        build_runtime_settings,
+        ensure_scene_asset_override,
+    )
     from backend.services.image_service import generate_image
     from backend.services.audio_service import synthesize_speech
     from backend.core.websocket_manager import ws_manager
@@ -261,9 +266,13 @@ async def _run_asset_generate(
         if not scene:
             raise ValueError("Scene not found")
 
-        r_proj = await session.execute(select(Project).where(Project.id == project_id))
+        r_proj = await session.execute(
+            select(Project)
+            .where(Project.id == project_id)
+            .options(selectinload(Project.video_settings))
+        )
         project = r_proj.scalar_one()
-        settings = project.settings or {}
+        settings = build_runtime_settings(project, app_settings)
 
         if asset_type == "image":
             for a in list(scene.assets):
@@ -341,6 +350,17 @@ async def _run_asset_generate(
 
             tts_provider = settings.get("tts_provider") or app_settings.default_tts_provider
             tts_voice = settings.get("tts_voice") or app_settings.default_tts_voice
+            tts_speed = float(settings.get("tts_speed") or app_settings.default_tts_speed or 1.0)
+            tts_response_format = str(
+                settings.get("tts_response_format") or app_settings.default_tts_response_format or "mp3"
+            )
+            tts_normalize = bool(
+                settings.get("tts_normalize")
+                if settings.get("tts_normalize") is not None
+                else app_settings.default_tts_normalize
+                if app_settings.default_tts_normalize is not None
+                else True
+            )
 
             audios = [a for a in scene.assets if a.type == "audio" and a.is_active]
             prev_id = None
@@ -356,7 +376,15 @@ async def _run_asset_generate(
             await session.flush()
 
             await ws_manager.send_progress(job_id, "asset_generate", 40, "in_progress", "Synthesizing speech")
-            audio_key = await synthesize_speech(narration, tts_provider, tts_voice, save=True)
+            audio_key = await synthesize_speech(
+                narration,
+                tts_provider,
+                tts_voice,
+                tts_speed,
+                save=True,
+                response_format=tts_response_format,
+                normalization_options={"normalize": tts_normalize},
+            )
             new_asset = Asset(
                 scene_id=scene_id,
                 type="audio",
@@ -365,7 +393,12 @@ async def _run_asset_generate(
                 source="ai_generated",
                 parent_asset_id=prev_id,
                 is_active=True,
-                metadata_={"voice": tts_voice},
+                metadata_={
+                    "voice": tts_voice,
+                    "speed": tts_speed,
+                    "response_format": tts_response_format,
+                    "normalize": tts_normalize,
+                },
             )
             session.add(new_asset)
             override_row = ensure_scene_asset_override(scene)

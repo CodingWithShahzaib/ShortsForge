@@ -12,6 +12,40 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { appConfirm } from "@/stores/confirmDialogStore";
 import { notify } from "@/lib/notify";
 import { useNotificationPrefsStore } from "@/stores/notificationPrefsStore";
+import {
+  SCENE_NARRATION_STYLE_IDS,
+  SUBTITLE_SOURCES,
+  TRANSCRIPTION_PROVIDERS,
+} from "@/app/generate/schema";
+
+type SceneNarrationStyle = (typeof SCENE_NARRATION_STYLE_IDS)[number];
+type SubtitleSource = (typeof SUBTITLE_SOURCES)[number];
+type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
+
+const TRANSCRIPTION_LANGUAGE_PATTERN = /^[a-z]{2}(-[A-Z]{2})?$/;
+
+function toSceneNarrationStyle(value: string): SceneNarrationStyle {
+  return (SCENE_NARRATION_STYLE_IDS as readonly string[]).includes(value)
+    ? (value as SceneNarrationStyle)
+    : "balanced";
+}
+
+function toSubtitleSource(value: string): SubtitleSource {
+  return (SUBTITLE_SOURCES as readonly string[]).includes(value)
+    ? (value as SubtitleSource)
+    : "llm";
+}
+
+function toTranscriptionProvider(value: string): TranscriptionProvider {
+  return (TRANSCRIPTION_PROVIDERS as readonly string[]).includes(value)
+    ? (value as TranscriptionProvider)
+    : "openai";
+}
+
+function toTranscriptionLanguage(value: string): string {
+  const trimmed = value.trim();
+  return TRANSCRIPTION_LANGUAGE_PATTERN.test(trimmed) ? trimmed : "en";
+}
 
 export default function SettingsPage() {
   const desktopNotifyEnabled = useNotificationPrefsStore((s) => s.desktopNotifyEnabled);
@@ -27,7 +61,6 @@ export default function SettingsPage() {
     openai_api_key: "",
     groq_api_key: "",
     openrouter_api_key: "",
-    elevenlabs_api_key: "",
     replicate_api_key: "",
     fal_api_key: "",
     together_api_key: "",
@@ -35,14 +68,22 @@ export default function SettingsPage() {
     default_llm_provider: "openai",
     default_llm_model: "gpt-4o-mini",
     default_image_provider: "replicate",
-    default_tts_provider: "edge",
-    default_tts_voice: "en-US-ChristopherNeural",
+    default_tts_provider: "kokoro",
+    default_tts_voice: "af_bella",
+    default_tts_speed: 1,
+    default_tts_response_format: "mp3",
+    default_tts_normalize: true,
     default_resolution: "1080x1920",
     default_transition: "fade",
     default_image_style: "realistic",
     default_word_count: 400,
     default_scene_count: 5,
     default_scene_narration_style: "balanced",
+    default_subtitle_enabled: true,
+    default_subtitle_source: "llm",
+    default_generate_subtitles: true,
+    default_transcription_provider: "openai",
+    default_transcription_language: "en",
     default_inter_scene_pause_ms: 600,
     default_transition_overlap_ms: 250,
     default_use_production_storyboard: true,
@@ -51,6 +92,9 @@ export default function SettingsPage() {
     default_ken_burns_enabled: true,
     default_ken_burns_zoom_percent: 2.5,
     default_ken_burns_motion: "auto",
+    default_breathing_enabled: false,
+    default_breathing_amplitude: 1.5,
+    default_breathing_speed: 0.25,
     default_film_grain_enabled: false,
     default_film_grain_intensity: 0.05,
     default_vignette_enabled: true,
@@ -90,7 +134,20 @@ export default function SettingsPage() {
     if (typeof Notification === "undefined") setNotifyPerm("unsupported");
     else setNotifyPerm(Notification.permission);
 
-    api.getSettings().then((s) => setForm((f) => ({ ...f, ...s }))).catch(() => {});
+    api.getSettings().then((s) => setForm((f) => ({
+      ...f,
+      ...s,
+      default_tts_provider: "kokoro",
+      default_tts_voice: s.default_tts_voice || "af_bella",
+      default_tts_speed: s.default_tts_speed ?? 1,
+      default_tts_response_format: s.default_tts_response_format || "mp3",
+      default_tts_normalize: s.default_tts_normalize ?? true,
+      default_subtitle_enabled: s.default_subtitle_enabled ?? true,
+      default_subtitle_source: s.default_subtitle_source || "llm",
+      default_generate_subtitles: s.default_generate_subtitles ?? true,
+      default_transcription_provider: s.default_transcription_provider || "openai",
+      default_transcription_language: s.default_transcription_language || "en",
+    }))).catch(() => {});
     api.redisStatus().then(setRedisStatus).catch(() => {});
     api.youtubeChannels().then(setYtStatus).catch(() => {});
 
@@ -166,6 +223,7 @@ export default function SettingsPage() {
         }
         updates[key] = String(value);
       });
+      updates.default_tts_provider = "kokoro";
       await api.updateSettings(updates);
       const p = await api.listProviders();
       setProviders(p);
@@ -173,14 +231,22 @@ export default function SettingsPage() {
         llm_provider: form.default_llm_provider,
         llm_model: form.default_llm_model || "gpt-4o-mini",
         image_provider: form.default_image_provider,
-        tts_provider: form.default_tts_provider,
-        tts_voice: form.default_tts_voice || "en-US-ChristopherNeural",
+        tts_provider: "kokoro",
+        tts_voice: form.default_tts_voice || "af_bella",
+        tts_speed: Number(form.default_tts_speed) || 1,
+        tts_response_format: (form.default_tts_response_format as any) || "mp3",
+        tts_normalize: Boolean(form.default_tts_normalize),
         resolution: form.default_resolution || "1080x1920",
         transition: form.default_transition || "fade",
         image_style: form.default_image_style || "realistic",
         word_count: Number(form.default_word_count) || 400,
         scene_count: Number(form.default_scene_count) || 5,
-        scene_narration_style: form.default_scene_narration_style || "balanced",
+        scene_narration_style: toSceneNarrationStyle(form.default_scene_narration_style),
+        subtitle_enabled: Boolean(form.default_subtitle_enabled),
+        subtitle_source: toSubtitleSource(form.default_subtitle_source),
+        generate_subtitles: Boolean(form.default_generate_subtitles),
+        transcription_provider: toTranscriptionProvider(form.default_transcription_provider),
+        transcription_language: toTranscriptionLanguage(form.default_transcription_language),
         inter_scene_pause_ms: Number(form.default_inter_scene_pause_ms) || 600,
         transition_overlap_ms: Number(form.default_transition_overlap_ms) || 250,
         use_production_storyboard: Boolean(form.default_use_production_storyboard),
@@ -190,6 +256,9 @@ export default function SettingsPage() {
           ken_burns_enabled: Boolean(form.default_ken_burns_enabled),
           ken_burns_zoom_percent: Number(form.default_ken_burns_zoom_percent) || 2.5,
           ken_burns_motion: (form.default_ken_burns_motion as any) || "auto",
+          breathing_enabled: Boolean(form.default_breathing_enabled),
+          breathing_amplitude: Number(form.default_breathing_amplitude) || 1.5,
+          breathing_speed: Number(form.default_breathing_speed) || 0.25,
           film_grain_enabled: Boolean(form.default_film_grain_enabled),
           film_grain_intensity: Number(form.default_film_grain_intensity) || 0.05,
           vignette_enabled: Boolean(form.default_vignette_enabled),
@@ -218,8 +287,11 @@ export default function SettingsPage() {
           music_volume: Number(form.default_music_volume) || 0.3,
           ducking_enabled: Boolean(form.default_ducking_enabled),
           ducking_amount: Number(form.default_ducking_amount) || -12,
-          voice_provider: form.default_tts_provider || "edge",
-          voice_id: form.default_tts_voice || "en-US-ChristopherNeural",
+          voice_provider: "kokoro",
+          voice_id: form.default_tts_voice || "af_bella",
+          speed: Number(form.default_tts_speed) || 1,
+          response_format: (form.default_tts_response_format as any) || "mp3",
+          normalize: Boolean(form.default_tts_normalize),
         },
       });
       setSaved(true);
@@ -285,10 +357,9 @@ export default function SettingsPage() {
   };
 
   const apiKeys = [
-    { key: "openai_api_key", label: "OpenAI API Key", desc: "Script AI, voice, speech-to-text, and images" },
+    { key: "openai_api_key", label: "OpenAI API Key", desc: "Script AI, speech-to-text, and images" },
     { key: "groq_api_key", label: "Groq API Key", desc: "Fast script AI models" },
     { key: "openrouter_api_key", label: "OpenRouter API Key", desc: "Access to multiple AI models" },
-    { key: "elevenlabs_api_key", label: "ElevenLabs API Key", desc: "Premium voice options" },
     { key: "replicate_api_key", label: "Replicate API Key", desc: "Image generation" },
     { key: "fal_api_key", label: "FAL AI API Key", desc: "Image generation" },
     { key: "together_api_key", label: "Together AI API Key", desc: "Image generation (free tier available)" },
@@ -316,11 +387,15 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2"><Settings className="h-8 w-8 text-cyan-500" /> Settings</h1>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">Configure API keys, defaults, and advanced setup</p>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Configure account defaults, provider access, and advanced setup for new projects</p>
         </div>
         <Button onClick={handleSave} disabled={saving}>
           {saving ? <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : saved ? <><CheckCircle className="h-4 w-4" /> Saved</> : <><Save className="h-4 w-4" /> Save</>}
         </Button>
+      </div>
+
+      <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+        <span className="font-medium text-slate-900 dark:text-slate-100">Scope:</span> these are account defaults for new projects. Once a project exists, Studio owns project overrides and scene-level edits.
       </div>
 
       <Card>
@@ -609,6 +684,94 @@ export default function SettingsPage() {
                   </p>
                 </div>
               </div>
+              <div className="rounded-xl border border-slate-200/80 dark:border-zinc-700 p-4 space-y-3">
+                <label className="flex items-start gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.default_subtitle_enabled)}
+                    onChange={(e) => update("default_subtitle_enabled", e.target.checked)}
+                  />
+                  <span>
+                    Enable subtitles by default
+                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                      Applied automatically for new projects created from Generate.
+                    </span>
+                  </span>
+                </label>
+
+                {Boolean(form.default_subtitle_enabled) ? (
+                  <>
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Default caption source</label>
+                      <Select
+                        value={String(form.default_subtitle_source || "llm")}
+                        onValueChange={(value) => update("default_subtitle_source", value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Caption source" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SUBTITLE_SOURCES.map((source) => (
+                            <SelectItem key={source} value={source}>
+                              {source === "llm"
+                                ? "AI-generated (per scene)"
+                                : "Speech-to-text from narration audio"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {form.default_subtitle_source === "llm" ? (
+                      <label className="flex items-start gap-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(form.default_generate_subtitles)}
+                          onChange={(e) => update("default_generate_subtitles", e.target.checked)}
+                        />
+                        <span>
+                          Generate subtitle text with AI
+                          <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                            Disable this if your scripts already include exact subtitle copy.
+                          </span>
+                        </span>
+                      </label>
+                    ) : (
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="text-sm font-medium mb-1 block">Speech-to-text engine</label>
+                          <Select
+                            value={String(form.default_transcription_provider || "openai")}
+                            onValueChange={(value) => update("default_transcription_provider", value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Transcription provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TRANSCRIPTION_PROVIDERS.map((provider) => (
+                                <SelectItem key={provider} value={provider}>
+                                  {provider === "openai" ? "OpenAI (Whisper)" : "Groq"}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium mb-1 block">Language code</label>
+                          <Input
+                            value={String(form.default_transcription_language || "en")}
+                            onChange={(e) => update("default_transcription_language", e.target.value)}
+                            placeholder="en or en-US"
+                          />
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                            Use a code like <code>en</code> or <code>en-US</code>.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="text-sm font-medium mb-1 block">Default pause between scenes (ms)</label>
@@ -724,22 +887,59 @@ export default function SettingsPage() {
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Default voice engine</label>
-                  <Select value={form.default_tts_provider} onValueChange={(value) => update("default_tts_provider", value)}>
+                  <label className="text-sm font-medium mb-1 block">Voice engine</label>
+                  <div className="flex h-10 items-center rounded-md border border-input bg-muted/30 px-3 text-sm">
+                    Kokoro TTS (Docker)
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Default voice expression</label>
+                  <Input placeholder="af_bella or af_bella+af_sky(2)" value={form.default_tts_voice} onChange={(e) => update("default_tts_voice", e.target.value)} />
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Default speech speed</label>
+                  <Input
+                    type="number"
+                    min={0.5}
+                    max={2}
+                    step={0.05}
+                    value={form.default_tts_speed ?? 1}
+                    onChange={(e) => update("default_tts_speed", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Default audio format</label>
+                  <Select
+                    value={String(form.default_tts_response_format || "mp3")}
+                    onValueChange={(value) => update("default_tts_response_format", value)}
+                  >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select provider" />
+                      <SelectValue placeholder="Format" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="edge">Edge Voice (Free)</SelectItem>
-                      <SelectItem value="openai_tts">OpenAI Voice</SelectItem>
-                      <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                      <SelectItem value="mp3">MP3</SelectItem>
+                      <SelectItem value="wav">WAV</SelectItem>
+                      <SelectItem value="opus">Opus</SelectItem>
+                      <SelectItem value="flac">FLAC</SelectItem>
+                      <SelectItem value="m4a">M4A</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Default voice ID</label>
-                  <Input placeholder="en-US-ChristopherNeural" value={form.default_tts_voice} onChange={(e) => update("default_tts_voice", e.target.value)} />
-                </div>
+                <label className="flex items-start gap-2 pt-7 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.default_tts_normalize)}
+                    onChange={(e) => update("default_tts_normalize", e.target.checked)}
+                  />
+                  <span>
+                    Normalize text
+                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                      Disable this if Kokoro over-corrects names, slang, or punctuation.
+                    </span>
+                  </span>
+                </label>
               </div>
             </CardContent>
           </Card>
@@ -771,7 +971,7 @@ export default function SettingsPage() {
                       <SelectValue placeholder="Transition" />
                     </SelectTrigger>
                     <SelectContent>
-                      {(transitions.length ? transitions : [{ id: "fade", name: "Fade" }, { id: "dissolve", name: "Dissolve" }, { id: "wipeleft", name: "Wipe Left" }]).map((t) => (
+                      {(transitions.length ? transitions : [{ id: "fade", name: "Fade" }, { id: "fade_in_fade_out", name: "Fade In / Fade Out" }, { id: "zoom_in_zoom_out", name: "Zoom In / Zoom Out" }, { id: "dissolve", name: "Dissolve" }, { id: "wipeleft", name: "Wipe Left" }]).map((t) => (
                         <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
                       ))}
                     </SelectContent>
@@ -828,6 +1028,22 @@ export default function SettingsPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.default_breathing_enabled)}
+                  onChange={(e) => update("default_breathing_enabled", e.target.checked)}
+                />
+                <span>Enable breathing effect</span>
+              </label>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Breathing amplitude %</label>
+                <Input type="number" min={0} max={5} step={0.1} value={form.default_breathing_amplitude ?? 1.5} onChange={(e) => update("default_breathing_amplitude", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Breathing speed (Hz)</label>
+                <Input type="number" min={0.05} max={1} step={0.05} value={form.default_breathing_speed ?? 0.25} onChange={(e) => update("default_breathing_speed", e.target.value)} />
+              </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">Transition duration (sec)</label>
                 <Input type="number" min={0} max={2} step={0.1} value={form.default_transition_duration_sec ?? 0.3} onChange={(e) => update("default_transition_duration_sec", e.target.value)} />
@@ -855,69 +1071,6 @@ export default function SettingsPage() {
               <div>
                 <label className="text-sm font-medium mb-1 block">Vignette intensity</label>
                 <Input type="number" min={0} max={0.5} step={0.01} value={form.default_vignette_intensity ?? 0.15} onChange={(e) => update("default_vignette_intensity", e.target.value)} />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Subtitle Defaults</CardTitle>
-              <CardDescription>Readability and safe-zone defaults for captions.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="text-sm font-medium mb-1 block">Font</label>
-                <Input value={form.default_subtitle_font ?? "Arial"} onChange={(e) => update("default_subtitle_font", e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Font size</label>
-                <Input type="number" min={18} max={96} value={form.default_subtitle_size ?? 48} onChange={(e) => update("default_subtitle_size", e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Text color</label>
-                <Input value={form.default_subtitle_color ?? "#FFFFFF"} onChange={(e) => update("default_subtitle_color", e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Position</label>
-                <Select value={String(form.default_subtitle_position || "bottom")} onValueChange={(value) => update("default_subtitle_position", value)}>
-                  <SelectTrigger><SelectValue placeholder="Position" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="bottom">Bottom</SelectItem>
-                    <SelectItem value="center">Center</SelectItem>
-                    <SelectItem value="top">Top</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Background opacity</label>
-                <Input type="number" min={0} max={1} step={0.05} value={form.default_subtitle_background_opacity ?? 0.65} onChange={(e) => update("default_subtitle_background_opacity", e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Words per group</label>
-                <Input type="number" min={1} max={12} value={form.default_subtitle_words_per_group ?? 4} onChange={(e) => update("default_subtitle_words_per_group", e.target.value)} />
-              </div>
-              <label className="flex items-start gap-2 text-sm font-medium">
-                <input type="checkbox" checked={Boolean(form.default_subtitle_shadow_enabled)} onChange={(e) => update("default_subtitle_shadow_enabled", e.target.checked)} />
-                <span>Enable subtitle shadow</span>
-              </label>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Shadow strength</label>
-                <Input type="number" min={0} max={2} step={0.05} value={form.default_subtitle_shadow_strength ?? 0.85} onChange={(e) => update("default_subtitle_shadow_strength", e.target.value)} />
-              </div>
-              <label className="flex items-start gap-2 text-sm font-medium">
-                <input type="checkbox" checked={Boolean(form.default_subtitle_safe_zone_enabled)} onChange={(e) => update("default_subtitle_safe_zone_enabled", e.target.checked)} />
-                <span>Use safe zones</span>
-              </label>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Safe zone preset</label>
-                <Select value={String(form.default_subtitle_safe_zone_platform || "tiktok")} onValueChange={(value) => update("default_subtitle_safe_zone_platform", value)}>
-                  <SelectTrigger><SelectValue placeholder="Preset" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="tiktok">TikTok</SelectItem>
-                    <SelectItem value="instagram_reel">Instagram Reel</SelectItem>
-                    <SelectItem value="youtube_short">YouTube Short</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             </CardContent>
           </Card>

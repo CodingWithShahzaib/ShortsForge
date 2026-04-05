@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Slider as RadixSlider } from "@radix-ui/themes";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   ChevronDown,
@@ -14,6 +14,7 @@ import {
   Link2,
   RefreshCw,
   Save,
+  Sparkles,
   Upload,
   Volume2,
 } from "lucide-react";
@@ -25,7 +26,6 @@ import {
   closestCenter,
   useSensor,
   useSensors,
-  type DragCancelEvent,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -41,19 +41,18 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
 import type {
   Project,
-  SafeZoneConfig,
-  SafeZonePlatform,
   Scene,
-  SubtitleSettings,
+  ScriptQualityMetrics,
   Transition,
 } from "@/lib/types";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LinearProgress } from "@/components/ui/progress-linear";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BodyPortal } from "@/components/ui/drag-overlay-portal";
 import {
   Card,
@@ -71,11 +70,6 @@ import {
   sceneStartTimes,
 } from "@/components/projects/scene-timeline-utils";
 import { getAudioDurationFromUrl } from "@/lib/audio-duration";
-import {
-  SAFE_ZONE_PRESETS,
-  SafeZoneOverlay,
-  resolveSafeZoneConfig,
-} from "@/components/studio/SafeZoneOverlay";
 
 const SCENE_DUR_MIN = 0.5;
 const SCENE_DUR_MAX = 15;
@@ -83,10 +77,6 @@ const INTER_SCENE_PAUSE_MIN = 0;
 const INTER_SCENE_PAUSE_MAX = 1200;
 const TRANSITION_OVERLAP_MIN = 0;
 const TRANSITION_OVERLAP_MAX = 800;
-const SAFE_ZONE_CONTENT_MIN_WIDTH = 0.22;
-const SAFE_ZONE_CONTENT_MIN_HEIGHT = 0.24;
-const SAFE_ZONE_CAPTION_MIN_WIDTH = 0.2;
-const SAFE_ZONE_CAPTION_MIN_HEIGHT = 0.08;
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                         */
@@ -95,6 +85,8 @@ const SAFE_ZONE_CAPTION_MIN_HEIGHT = 0.08;
 /** Mirrors backend `transition_service.AVAILABLE_TRANSITIONS` + none; used if settings API not loaded yet. */
 const FALLBACK_TRANSITIONS: Transition[] = [
   { id: "fade", name: "Fade", description: "Classic fade to black and back" },
+  { id: "fade_in_fade_out", name: "Fade In / Fade Out", description: "Alternates fade-out and fade-in accents between scene cuts" },
+  { id: "zoom_in_zoom_out", name: "Zoom In / Zoom Out", description: "Alternates zoom-in and zoom-out motion between scenes" },
   { id: "dissolve", name: "Dissolve", description: "Smooth cross-dissolve between scenes" },
   { id: "wipeleft", name: "Wipe Left", description: "Wipe from right to left" },
   { id: "wiperight", name: "Wipe Right", description: "Wipe from left to right" },
@@ -125,9 +117,6 @@ type SceneDraft = {
   transition_type?: string;
 };
 
-type SafeZoneNumericField = Exclude<keyof SafeZoneConfig, "platform">;
-type GuidePresetId = SafeZonePlatform | "custom";
-
 function formatTimecode(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_TIMECODE;
   let mins = Math.floor(seconds / 60);
@@ -144,86 +133,6 @@ function toBoundedInt(value: unknown, fallback: number, min: number, max: number
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.round(parsed)));
-}
-
-function safeZoneConfigKey(config: SafeZoneConfig | null | undefined): string {
-  return JSON.stringify(config ?? null);
-}
-
-function roundSafeZoneValue(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-function clampSafeZoneConfigField(
-  config: SafeZoneConfig,
-  field: SafeZoneNumericField,
-  rawValue: number,
-): SafeZoneConfig {
-  const next = { ...config };
-  const value = roundSafeZoneValue(rawValue);
-
-  switch (field) {
-    case "top_pct":
-      next.top_pct = Math.min(0.5, Math.max(0, value));
-      next.top_pct = Math.min(
-        next.top_pct,
-        1 - SAFE_ZONE_CONTENT_MIN_HEIGHT - next.bottom_pct,
-      );
-      break;
-    case "bottom_pct":
-      next.bottom_pct = Math.min(0.7, Math.max(0, value));
-      next.bottom_pct = Math.min(
-        next.bottom_pct,
-        1 - SAFE_ZONE_CONTENT_MIN_HEIGHT - next.top_pct,
-      );
-      break;
-    case "left_pct":
-      next.left_pct = Math.min(0.4, Math.max(0, value));
-      next.left_pct = Math.min(
-        next.left_pct,
-        1 - SAFE_ZONE_CONTENT_MIN_WIDTH - next.right_pct,
-      );
-      break;
-    case "right_pct":
-      next.right_pct = Math.min(0.4, Math.max(0, value));
-      next.right_pct = Math.min(
-        next.right_pct,
-        1 - SAFE_ZONE_CONTENT_MIN_WIDTH - next.left_pct,
-      );
-      break;
-    case "caption_band_left_pct":
-      next.caption_band_left_pct = Math.min(0.45, Math.max(0, value));
-      next.caption_band_left_pct = Math.min(
-        next.caption_band_left_pct,
-        1 - SAFE_ZONE_CAPTION_MIN_WIDTH - next.caption_band_right_pct,
-      );
-      break;
-    case "caption_band_right_pct":
-      next.caption_band_right_pct = Math.min(0.45, Math.max(0, value));
-      next.caption_band_right_pct = Math.min(
-        next.caption_band_right_pct,
-        1 - SAFE_ZONE_CAPTION_MIN_WIDTH - next.caption_band_left_pct,
-      );
-      break;
-    case "caption_band_top_pct":
-      next.caption_band_top_pct = Math.min(1, Math.max(0, value));
-      next.caption_band_top_pct = Math.min(
-        next.caption_band_top_pct,
-        next.caption_band_bottom_pct - SAFE_ZONE_CAPTION_MIN_HEIGHT,
-      );
-      break;
-    case "caption_band_bottom_pct":
-      next.caption_band_bottom_pct = Math.min(1, Math.max(0, value));
-      next.caption_band_bottom_pct = Math.max(
-        next.caption_band_bottom_pct,
-        next.caption_band_top_pct + SAFE_ZONE_CAPTION_MIN_HEIGHT,
-      );
-      break;
-    default:
-      return next;
-  }
-
-  return next;
 }
 
 /* ------------------------------------------------------------------ */
@@ -417,29 +326,11 @@ function SceneInspector({
   draft,
   onDraftChange,
   onSaveScene,
-  showSafeZone,
-  safeZonePlatform,
-  safeZoneConfig,
-  onSafeZoneChange,
-  onSafeZoneCommit,
-  onSafeZoneReset,
-  onSaveSafeZoneAsDefaults,
-  safeZoneSaving,
-  safeZoneDefaultsSaving,
 }: {
   scene: Scene;
   draft?: SceneDraft;
   onDraftChange: (sceneId: string, patch: SceneDraft) => void;
   onSaveScene: (sceneId: string) => Promise<boolean>;
-  showSafeZone: boolean;
-  safeZonePlatform: "tiktok" | "instagram_reel" | "youtube_short";
-  safeZoneConfig: SafeZoneConfig | null;
-  onSafeZoneChange: (config: SafeZoneConfig) => void;
-  onSafeZoneCommit: (config: SafeZoneConfig) => void;
-  onSafeZoneReset: () => void;
-  onSaveSafeZoneAsDefaults: (config: SafeZoneConfig) => void;
-  safeZoneSaving: boolean;
-  safeZoneDefaultsSaving: boolean;
 }) {
   const [narration, setNarration] = useState(
     draft?.narration ?? scene.narration ?? "",
@@ -456,64 +347,6 @@ function SceneInspector({
 
   const imgAsset = pickLatestAsset(scene.assets, "image");
   const imgSrc = assetMediaSrc(imgAsset);
-  const activeSafeZoneConfig = resolveSafeZoneConfig(
-    safeZonePlatform,
-    safeZoneConfig,
-  );
-  const selectedGuidePreset = (
-    (Object.keys(SAFE_ZONE_PRESETS) as SafeZonePlatform[]).find((presetPlatform) => {
-      const presetConfig = resolveSafeZoneConfig(
-        safeZonePlatform,
-        SAFE_ZONE_PRESETS[presetPlatform],
-      );
-      return safeZoneConfigKey(presetConfig) === safeZoneConfigKey(activeSafeZoneConfig);
-    }) ?? "custom"
-  ) as GuidePresetId;
-
-  const applySafeZoneField = (
-    field: SafeZoneNumericField,
-    nextValue: string,
-    commit: boolean,
-  ) => {
-    const parsed = Number(nextValue);
-    if (!Number.isFinite(parsed)) return;
-    const nextConfig = clampSafeZoneConfigField(
-      activeSafeZoneConfig,
-      field,
-      parsed / 100,
-    );
-    onSafeZoneChange(nextConfig);
-    if (commit) {
-      onSafeZoneCommit(nextConfig);
-    }
-  };
-
-  const applySafeZoneSlider = (
-    field: SafeZoneNumericField,
-    values: number[],
-    commit: boolean,
-  ) => {
-    const nextValue = values[0];
-    if (!Number.isFinite(nextValue)) return;
-    const nextConfig = clampSafeZoneConfigField(
-      activeSafeZoneConfig,
-      field,
-      nextValue / 100,
-    );
-    onSafeZoneChange(nextConfig);
-    if (commit) {
-      onSafeZoneCommit(nextConfig);
-    }
-  };
-
-  const snapToPreset = (presetPlatform: typeof safeZonePlatform) => {
-    const nextConfig = resolveSafeZoneConfig(
-      safeZonePlatform,
-      SAFE_ZONE_PRESETS[presetPlatform],
-    );
-    onSafeZoneChange(nextConfig);
-    onSafeZoneCommit(nextConfig);
-  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -574,226 +407,14 @@ function SceneInspector({
                 <ImageIcon className="h-12 w-12" />
               </div>
             )}
-            {showSafeZone ? (
-              <SafeZoneOverlay
-                platform={safeZonePlatform}
-                config={safeZoneConfig}
-                editable
-                onChange={onSafeZoneChange}
-                onCommit={onSafeZoneCommit}
-              />
-            ) : null}
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-2">
           <p className="text-[11px] text-muted-foreground">
-            Drag the frame and subtitle band. Use the corner handles to resize.
+            Preview of the selected frame for narration and prompt review.
           </p>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">
-              {safeZoneSaving ? "Saving guide..." : "Guide follows project subtitle settings"}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-[11px]"
-              onClick={onSafeZoneReset}
-              disabled={!showSafeZone || safeZoneSaving}
-            >
-              Reset guides
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => onSaveSafeZoneAsDefaults(activeSafeZoneConfig)}
-              disabled={!showSafeZone || safeZoneSaving || safeZoneDefaultsSaving}
-            >
-              {safeZoneDefaultsSaving ? "Saving defaults..." : "Save as defaults"}
-            </Button>
-          </div>
         </div>
       </div>
-
-      {showSafeZone ? (
-        <div className="rounded-xl border border-border/30 bg-background/75 p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Guide Controls
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Snap to a preset geometry or fine-tune the insets in percent.
-              </p>
-            </div>
-            <Tabs
-              value={selectedGuidePreset}
-              onValueChange={(value) => {
-                const presetValue = value as GuidePresetId;
-                switch (presetValue) {
-                  case "tiktok":
-                  case "instagram_reel":
-                  case "youtube_short":
-                    snapToPreset(presetValue);
-                    break;
-                  case "custom":
-                  default:
-                    break;
-                }
-              }}
-            >
-              <TabsList className="h-auto flex-wrap p-1">
-                <TabsTrigger value="tiktok" className="px-3 py-1.5 text-[11px]">
-                  TikTok
-                </TabsTrigger>
-                <TabsTrigger value="instagram_reel" className="px-3 py-1.5 text-[11px]">
-                  Reels
-                </TabsTrigger>
-                <TabsTrigger value="youtube_short" className="px-3 py-1.5 text-[11px]">
-                  Shorts
-                </TabsTrigger>
-                <TabsTrigger value="custom" disabled className="px-3 py-1.5 text-[11px]">
-                  Custom
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <div className="rounded-lg border border-border/30 bg-card/60 p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-200">
-                Frame Insets
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {(
-                  [
-                    ["top_pct", "Top", activeSafeZoneConfig.top_pct],
-                    ["bottom_pct", "Bottom", activeSafeZoneConfig.bottom_pct],
-                    ["left_pct", "Left", activeSafeZoneConfig.left_pct],
-                    ["right_pct", "Right", activeSafeZoneConfig.right_pct],
-                  ] as const
-                ).map(([field, label, value]) => (
-                  <label key={field} className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-muted-foreground">{label}</span>
-                      <span className="rounded-full border border-border/50 bg-background/70 px-2 py-0.5 text-[11px] font-semibold text-foreground">
-                        {(value * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <RadixSlider
-                      value={[value * 100]}
-                      min={0}
-                      max={50}
-                      step={0.5}
-                      size="2"
-                      variant="surface"
-                      color="cyan"
-                      radius="full"
-                      onValueChange={(values) =>
-                        applySafeZoneSlider(field, values, false)
-                      }
-                      onValueCommit={(values) =>
-                        applySafeZoneSlider(field, values, true)
-                      }
-                      disabled={safeZoneSaving}
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      max={50}
-                      step={0.5}
-                      value={(value * 100).toFixed(1)}
-                      onChange={(e) =>
-                        applySafeZoneField(field, e.target.value, false)
-                      }
-                      onBlur={(e) =>
-                        applySafeZoneField(field, e.target.value, true)
-                      }
-                      disabled={safeZoneSaving}
-                      className="h-9"
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-border/30 bg-card/60 p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-200">
-                Subtitle Insets
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {(
-                  [
-                    [
-                      "caption_band_top_pct",
-                      "Top",
-                      activeSafeZoneConfig.caption_band_top_pct,
-                    ],
-                    [
-                      "caption_band_bottom_pct",
-                      "Bottom",
-                      activeSafeZoneConfig.caption_band_bottom_pct,
-                    ],
-                    [
-                      "caption_band_left_pct",
-                      "Left",
-                      activeSafeZoneConfig.caption_band_left_pct,
-                    ],
-                    [
-                      "caption_band_right_pct",
-                      "Right",
-                      activeSafeZoneConfig.caption_band_right_pct,
-                    ],
-                  ] as const
-                ).map(([field, label, value]) => (
-                  <label key={field} className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-muted-foreground">{label}</span>
-                      <span className="rounded-full border border-border/50 bg-background/70 px-2 py-0.5 text-[11px] font-semibold text-foreground">
-                        {(value * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <RadixSlider
-                      value={[value * 100]}
-                      min={0}
-                      max={95}
-                      step={0.5}
-                      size="2"
-                      variant="surface"
-                      color="amber"
-                      radius="full"
-                      onValueChange={(values) =>
-                        applySafeZoneSlider(field, values, false)
-                      }
-                      onValueCommit={(values) =>
-                        applySafeZoneSlider(field, values, true)
-                      }
-                      disabled={safeZoneSaving}
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      max={95}
-                      step={0.5}
-                      value={(value * 100).toFixed(1)}
-                      onChange={(e) =>
-                        applySafeZoneField(field, e.target.value, false)
-                      }
-                      onBlur={(e) =>
-                        applySafeZoneField(field, e.target.value, true)
-                      }
-                      disabled={safeZoneSaving}
-                      className="h-9"
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {/* Narration + image prompt */}
       <div className="flex min-h-0 flex-1 flex-col gap-3 pb-2">
@@ -890,7 +511,7 @@ function SceneQuickTools({
     setDuration(draft?.duration ?? sceneDurationSec(scene));
     setTransitionType(draft?.transition_type ?? (scene.transition_type || "fade"));
     setTtsText((scene.narration || scene.subtitle || "").trim());
-  }, [scene.id, scene.duration, scene.transition_type, draft?.duration, draft?.transition_type]);
+  }, [scene, draft?.duration, draft?.transition_type]);
 
   const audioAsset = pickLatestAsset(scene.assets, "audio");
   const audioSrc = assetMediaSrc(audioAsset);
@@ -1158,6 +779,252 @@ function SceneQuickTools({
   );
 }
 
+function issueVariant(severity: "info" | "warning" | "error") {
+  if (severity === "error") return "error" as const;
+  if (severity === "warning") return "warning" as const;
+  return "secondary" as const;
+}
+
+function ScriptQualityPanel({
+  project,
+  scene,
+  draft,
+  orderedScenes,
+  sceneIndex,
+  onDraftChange,
+  onRefresh,
+}: {
+  project: Project;
+  scene: Scene;
+  draft?: SceneDraft;
+  orderedScenes: Scene[];
+  sceneIndex: number;
+  onDraftChange: (sceneId: string, patch: SceneDraft) => void;
+  onRefresh: () => void;
+}) {
+  const defaults = useSettingsStore((s) => s.defaults);
+  const [metrics, setMetrics] = useState<ScriptQualityMetrics | null>(scene.script_quality ?? null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [improving, setImproving] = useState(false);
+
+  const narrationText = (draft?.narration ?? scene.narration ?? scene.subtitle ?? "").trim();
+  const previousNarrations = useMemo(
+    () =>
+      orderedScenes
+        .slice(0, Math.max(0, sceneIndex))
+        .map((item) => (item.narration || item.subtitle || "").trim())
+        .filter(Boolean),
+    [orderedScenes, sceneIndex],
+  );
+
+  useEffect(() => {
+    setMetrics(scene.script_quality ?? null);
+  }, [scene.id, scene.script_quality]);
+
+  const analyze = async () => {
+    if (!narrationText) {
+      notify.error("Add narration before running script analysis.");
+      return;
+    }
+    setAnalyzing(true);
+    try {
+      const result = await api.analyzeScriptQuality({
+        narration: narrationText,
+        story_type: project.story_type,
+        is_first_scene: sceneIndex === 0,
+        previous_narrations: previousNarrations,
+        llm_provider: defaults.llm_provider,
+        llm_model: defaults.llm_model,
+      });
+      setMetrics(result);
+    } catch (error: unknown) {
+      notify.error(error instanceof Error ? error.message : "Failed to analyze narration.");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const applyCleanedText = async () => {
+    if (!metrics?.cleaned_text || metrics.cleaned_text === narrationText) {
+      return;
+    }
+    try {
+      await api.updateScene(project.id, scene.id, { narration: metrics.cleaned_text });
+      onDraftChange(scene.id, { narration: metrics.cleaned_text });
+      onRefresh();
+      notify.success("Applied cleaned narration text.");
+    } catch (error: unknown) {
+      notify.error(error instanceof Error ? error.message : "Failed to save cleaned narration.");
+    }
+  };
+
+  const improve = async () => {
+    if (!narrationText) {
+      notify.error("Add narration before improving it.");
+      return;
+    }
+    setImproving(true);
+    try {
+      const result = await api.improveScriptQuality({
+        text: narrationText,
+        story_type: project.story_type,
+        is_first_scene: sceneIndex === 0,
+        previous_narrations: previousNarrations,
+        issues: metrics?.issues.map((issue) => issue.code) ?? [],
+        llm_provider: defaults.llm_provider,
+        llm_model: defaults.llm_model,
+      });
+      setMetrics(result.metrics);
+      await api.updateScene(project.id, scene.id, { narration: result.text });
+      onDraftChange(scene.id, { narration: result.text });
+      onRefresh();
+      notify.success("Improved narration applied.");
+    } catch (error: unknown) {
+      notify.error(error instanceof Error ? error.message : "Failed to improve narration.");
+    } finally {
+      setImproving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-border/40 bg-background/50 p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-foreground/90">
+              Script quality
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Check hook strength, pacing, repetition, and TTS cleanup risk.
+            </p>
+          </div>
+          {metrics ? (
+            <Badge variant={metrics.score >= 75 ? "success" : metrics.score >= 55 ? "warning" : "error"}>
+              {metrics.score}/100
+            </Badge>
+          ) : null}
+        </div>
+
+        {metrics ? (
+          <div className="mt-3 space-y-3">
+            <div>
+              <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Quality score</span>
+                <span>{metrics.score}%</span>
+              </div>
+              <LinearProgress value={metrics.score} className="h-2" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-md border border-border/40 bg-card/70 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hook</p>
+                <p className="mt-1 text-sm font-semibold text-foreground">{metrics.hook_strength}/100</p>
+              </div>
+              <div className="rounded-md border border-border/40 bg-card/70 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Pacing</p>
+                <p className="mt-1 text-sm font-semibold text-foreground">{metrics.pacing_score}/100</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {metrics.repetition_detected ? (
+                <Badge variant="warning" className="gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  Repetition detected
+                </Badge>
+              ) : (
+                <Badge variant="success">No recent repetition</Badge>
+              )}
+              {metrics.tts_issues.length > 0 ? (
+                <Badge variant="warning">TTS cleanup needed</Badge>
+              ) : (
+                <Badge variant="success">TTS ready</Badge>
+              )}
+            </div>
+
+            {metrics.issues.length > 0 ? (
+              <div className="space-y-2">
+                {metrics.issues.map((issue) => (
+                  <div
+                    key={`${scene.id}-${issue.code}`}
+                    className="rounded-md border border-border/40 bg-card/70 px-2.5 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant={issueVariant(issue.severity)}>{issue.code}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{issue.message}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No major narration issues detected for this scene.
+              </p>
+            )}
+
+            {metrics.suggestions.length > 0 ? (
+              <div className="rounded-md border border-border/40 bg-card/70 px-2.5 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Suggestions
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {metrics.suggestions.map((suggestion) => (
+                    <p key={suggestion} className="text-xs leading-relaxed text-foreground/90">
+                      {suggestion}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Run analysis after editing narration to surface repetition and TTS issues.
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-full gap-1.5"
+          onClick={() => void analyze()}
+          loading={analyzing}
+          loadingLabel="Analyzing…"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Analyze Script
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full gap-1.5"
+          onClick={() => void improve()}
+          loading={improving}
+          loadingLabel="Improving…"
+          disabled={!narrationText}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Improve Script
+        </Button>
+        {metrics?.cleaned_text && metrics.cleaned_text !== narrationText ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="w-full"
+            onClick={() => void applyCleanedText()}
+          >
+            Apply Cleaned Text
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Scene configuration list (left panel)                             */
 /* ------------------------------------------------------------------ */
@@ -1230,7 +1097,7 @@ export default function ArrangeStep({
     setActiveDragId(event.active.id as string);
   }, []);
 
-  const handleDragCancel = useCallback((_event: DragCancelEvent) => {
+  const handleDragCancel = useCallback(() => {
     setActiveDragId(null);
     if (suppressSelectTimeoutRef.current) {
       window.clearTimeout(suppressSelectTimeoutRef.current);
@@ -1366,9 +1233,6 @@ export default function ArrangeStep({
   );
 
   const [matchingAll, setMatchingAll] = useState(false);
-  const [showSafeZone, setShowSafeZone] = useState(true);
-  const defaultSubtitleSettings = useSettingsStore((s) => s.defaults.subtitles);
-  const setDefaults = useSettingsStore((s) => s.setDefaults);
   const [interScenePauseMs, setInterScenePauseMs] = useState<number>(() =>
     toBoundedInt(project.settings?.inter_scene_pause_ms, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX)
   );
@@ -1387,24 +1251,6 @@ export default function ArrangeStep({
   const selectedHasImage = Boolean(
     selectedScene && pickLatestAsset(selectedScene.assets, "image"),
   );
-  const safeZonePlatform =
-    project.video_settings?.subtitles.safe_zone_platform ||
-    "tiktok";
-  const resolvedSubtitleSettings: SubtitleSettings =
-    project.video_settings?.subtitles ?? defaultSubtitleSettings;
-  const projectSafeZoneConfig =
-    project.video_settings?.subtitles.safe_zone_config ?? null;
-  const projectSafeZoneConfigKey = safeZoneConfigKey(
-    projectSafeZoneConfig,
-  );
-  const [safeZoneConfig, setSafeZoneConfig] = useState<SafeZoneConfig | null>(() =>
-    resolveSafeZoneConfig(
-      safeZonePlatform,
-      projectSafeZoneConfig,
-    ),
-  );
-  const [safeZoneSaving, setSafeZoneSaving] = useState(false);
-  const [safeZoneDefaultsSaving, setSafeZoneDefaultsSaving] = useState(false);
 
   useEffect(() => {
     setInterScenePauseMs(
@@ -1414,94 +1260,6 @@ export default function ArrangeStep({
       toBoundedInt(project.settings?.transition_overlap_ms, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX)
     );
   }, [project.id, project.settings?.inter_scene_pause_ms, project.settings?.transition_overlap_ms]);
-
-  useEffect(() => {
-    setSafeZoneConfig(
-      resolveSafeZoneConfig(
-        safeZonePlatform,
-        projectSafeZoneConfig,
-      ),
-    );
-  }, [
-    project.id,
-    projectSafeZoneConfig,
-    safeZonePlatform,
-    projectSafeZoneConfigKey,
-  ]);
-
-  const commitSafeZoneConfig = useCallback(
-    async (nextConfig: SafeZoneConfig) => {
-      const currentConfig = resolveSafeZoneConfig(
-        safeZonePlatform,
-        projectSafeZoneConfig,
-      );
-      if (safeZoneConfigKey(nextConfig) === safeZoneConfigKey(currentConfig)) {
-        return;
-      }
-      setSafeZoneSaving(true);
-      try {
-        await api.updateProjectVideoSettings(project.id, {
-          subtitles: {
-            ...resolvedSubtitleSettings,
-            safe_zone_platform: safeZonePlatform,
-            safe_zone_config: nextConfig,
-          },
-        });
-        onRefresh();
-      } catch (err: unknown) {
-        setSafeZoneConfig(currentConfig);
-        notify.error(
-          err instanceof Error
-            ? err.message
-            : "Failed to save subtitle guide settings",
-        );
-      } finally {
-        setSafeZoneSaving(false);
-      }
-    },
-    [
-      onRefresh,
-      project.id,
-      projectSafeZoneConfig,
-      resolvedSubtitleSettings,
-      safeZonePlatform,
-    ],
-  );
-
-  const resetSafeZoneConfig = useCallback(() => {
-    const preset = resolveSafeZoneConfig(safeZonePlatform, null);
-    setSafeZoneConfig(preset);
-    void commitSafeZoneConfig(preset);
-  }, [commitSafeZoneConfig, safeZonePlatform]);
-
-  const saveSafeZoneAsDefaults = useCallback(
-    async (nextConfig: SafeZoneConfig) => {
-      setSafeZoneDefaultsSaving(true);
-      try {
-        await api.updateSettings({
-          default_subtitle_safe_zone_platform: safeZonePlatform,
-          default_subtitle_safe_zone_config: nextConfig,
-        });
-        setDefaults({
-          subtitles: {
-            ...defaultSubtitleSettings,
-            safe_zone_platform: safeZonePlatform,
-            safe_zone_config: nextConfig,
-          },
-        });
-        notify.success("Saved guide defaults for new projects");
-      } catch (err: unknown) {
-        notify.error(
-          err instanceof Error
-            ? err.message
-            : "Failed to save default guide settings",
-        );
-      } finally {
-        setSafeZoneDefaultsSaving(false);
-      }
-    },
-    [defaultSubtitleSettings, safeZonePlatform, setDefaults],
-  );
 
   const matchAllScenesToAudio = useCallback(async () => {
     setMatchingAll(true);
@@ -1588,7 +1346,7 @@ export default function ArrangeStep({
           </span>
         </div>
         <Button onClick={onNext} variant="animated">
-          Compile Video
+          Export Video
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
@@ -1620,17 +1378,6 @@ export default function ArrangeStep({
             <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Selected audio</p>
               <p className="mt-1 text-sm font-semibold text-foreground">{selectedHasAudio ? "Ready" : "Missing"}</p>
-            </div>
-            <div className="flex items-center gap-2 rounded-full border border-border/40 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
-              <input
-                id="safe-zone-toggle"
-                type="checkbox"
-                checked={showSafeZone}
-                onChange={(e) => setShowSafeZone(e.target.checked)}
-              />
-              <label htmlFor="safe-zone-toggle" className="cursor-pointer">
-                Show safe zone overlay
-              </label>
             </div>
           </div>
         </div>
@@ -1725,15 +1472,6 @@ export default function ArrangeStep({
                     draft={sceneDrafts[selectedScene.id]}
                     onDraftChange={updateSceneDraft}
                     onSaveScene={saveSceneDraft}
-                    showSafeZone={showSafeZone}
-                    safeZonePlatform={safeZonePlatform}
-                    safeZoneConfig={safeZoneConfig}
-                    onSafeZoneChange={setSafeZoneConfig}
-                    onSafeZoneCommit={commitSafeZoneConfig}
-                    onSafeZoneReset={resetSafeZoneConfig}
-                    onSaveSafeZoneAsDefaults={(config) => void saveSafeZoneAsDefaults(config)}
-                    safeZoneSaving={safeZoneSaving}
-                    safeZoneDefaultsSaving={safeZoneDefaultsSaving}
                   />
                 </motion.div>
               )}
@@ -1750,99 +1488,120 @@ export default function ArrangeStep({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 pt-0">
-              <div className="space-y-1.5">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Scene tools</h4>
-                {selectedScene ? (
-                  <SceneQuickTools
-                    project={project}
-                    scene={selectedScene}
-                    draft={sceneDrafts[selectedScene.id]}
-                    onDraftChange={updateSceneDraft}
-                    onSaveScene={saveSceneDraft}
-                    onRefresh={onRefresh}
-                  />
-                ) : (
-                  <p className="text-xs text-muted-foreground">Select a scene to edit.</p>
-                )}
-              </div>
-
-              <Separator />
-
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Batch tools</h4>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full gap-1.5"
-                  disabled={matchingAll || !hasAnyAudio}
-                  onClick={() => void matchAllScenesToAudio()}
-                  title={
-                    hasAnyAudio
-                      ? "Set each scene duration to match its voiceover"
-                      : "Add voiceover in Assets first"
-                  }
-                >
-                  {matchingAll ? (
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              <details open className="rounded-lg border border-border/40 bg-background/40 p-3">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground/90">
+                  Scene
+                </summary>
+                <div className="mt-3 space-y-1.5">
+                  {selectedScene ? (
+                    <SceneQuickTools
+                      project={project}
+                      scene={selectedScene}
+                      draft={sceneDrafts[selectedScene.id]}
+                      onDraftChange={updateSceneDraft}
+                      onSaveScene={saveSceneDraft}
+                      onRefresh={onRefresh}
+                    />
                   ) : (
-                    <Link2 className="h-3.5 w-3.5" />
+                    <p className="text-xs text-muted-foreground">Select a scene to edit.</p>
                   )}
-                  Match all to audio
-                </Button>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-3">
-                <div className="space-y-0.5">
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Project pacing</h4>
-                  <p className="text-[11px] text-muted-foreground">Controls compile timing for this project.</p>
                 </div>
-                <div>
-                  <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Inter-scene pause (ms)
-                  </label>
-                  <Input
-                    type="number"
-                    min={INTER_SCENE_PAUSE_MIN}
-                    max={INTER_SCENE_PAUSE_MAX}
-                    step={50}
-                    value={interScenePauseMs}
-                    onChange={(e) => setInterScenePauseMs(toBoundedInt(e.target.value, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX))}
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Transition overlap (ms)
-                  </label>
-                  <Input
-                    type="number"
-                    min={TRANSITION_OVERLAP_MIN}
-                    max={TRANSITION_OVERLAP_MAX}
-                    step={50}
-                    value={transitionOverlapMs}
-                    onChange={(e) => setTransitionOverlapMs(toBoundedInt(e.target.value, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX))}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => void savePacingSettings()}
-                  loading={savingPacing}
-                  loadingLabel="Saving…"
-                >
-                  Save pacing
-                </Button>
-              </div>
+              </details>
 
-              <Separator />
+              <details open className="rounded-lg border border-border/40 bg-background/40 p-3">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground/90">
+                  Script Quality
+                </summary>
+                <div className="mt-3">
+                  {selectedScene ? (
+                    <ScriptQualityPanel
+                      project={project}
+                      scene={selectedScene}
+                      draft={sceneDrafts[selectedScene.id]}
+                      orderedScenes={orderedScenes}
+                      sceneIndex={selectedIndex}
+                      onDraftChange={updateSceneDraft}
+                      onRefresh={onRefresh}
+                    />
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Select a scene to analyze.</p>
+                  )}
+                </div>
+              </details>
 
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground/90">Selected scene</h4>
-                <div className="space-y-2 text-xs text-muted-foreground">
+              <details className="rounded-lg border border-border/40 bg-background/40 p-3">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground/90">
+                  Timing
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full gap-1.5"
+                    disabled={matchingAll || !hasAnyAudio}
+                    onClick={() => void matchAllScenesToAudio()}
+                    title={
+                      hasAnyAudio
+                        ? "Set each scene duration to match its voiceover"
+                        : "Add voiceover in Assets first"
+                    }
+                  >
+                    {matchingAll ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Link2 className="h-3.5 w-3.5" />
+                    )}
+                    Match all to audio
+                  </Button>
+
+                  <Separator />
+
+                  <div>
+                    <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Inter-scene pause (ms)
+                    </label>
+                    <Input
+                      type="number"
+                      min={INTER_SCENE_PAUSE_MIN}
+                      max={INTER_SCENE_PAUSE_MAX}
+                      step={50}
+                      value={interScenePauseMs}
+                      onChange={(e) => setInterScenePauseMs(toBoundedInt(e.target.value, 600, INTER_SCENE_PAUSE_MIN, INTER_SCENE_PAUSE_MAX))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Transition overlap (ms)
+                    </label>
+                    <Input
+                      type="number"
+                      min={TRANSITION_OVERLAP_MIN}
+                      max={TRANSITION_OVERLAP_MAX}
+                      step={50}
+                      value={transitionOverlapMs}
+                      onChange={(e) => setTransitionOverlapMs(toBoundedInt(e.target.value, 250, TRANSITION_OVERLAP_MIN, TRANSITION_OVERLAP_MAX))}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => void savePacingSettings()}
+                    loading={savingPacing}
+                    loadingLabel="Saving…"
+                  >
+                    Save pacing
+                  </Button>
+                </div>
+              </details>
+
+              <details className="rounded-lg border border-border/40 bg-background/40 p-3">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground/90">
+                  Advanced
+                </summary>
+                <div className="mt-3 space-y-2 text-xs text-muted-foreground">
                   <div className="flex items-center justify-between">
                     <span>Has image</span>
                     <span className={cn("font-semibold", selectedHasImage ? "text-foreground" : "text-muted-foreground")}>
@@ -1862,7 +1621,7 @@ export default function ArrangeStep({
                     </span>
                   </div>
                 </div>
-              </div>
+              </details>
             </CardContent>
           </Card>
         </section>

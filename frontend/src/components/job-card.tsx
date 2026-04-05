@@ -87,6 +87,11 @@ export function JobCard({
       second: "2-digit",
     });
 
+  const formatDebugField = (value: unknown): string => {
+    if (typeof value === "string" || typeof value === "number") return String(value);
+    return "n/a";
+  };
+
   const handlePreview = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -241,16 +246,11 @@ export function JobCard({
             </div>
             <div>
               <span className="font-semibold text-foreground">Trace ID:</span>{" "}
-              {job.result?.trace_id
-                ?? job.result?.trace
-                ?? job.error?.trace_id
-                ?? "n/a"}
+              {formatDebugField(job.result?.trace_id ?? job.result?.trace ?? job.error?.trace_id)}
             </div>
             <div>
               <span className="font-semibold text-foreground">Request ID:</span>{" "}
-              {job.result?.request_id
-                ?? job.error?.request_id
-                ?? "n/a"}
+              {formatDebugField(job.result?.request_id ?? job.error?.request_id)}
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 AVAILABLE_TRANSITIONS = {
     "fade": "Classic fade to black and back",
+    "fade_in_fade_out": "Alternates fade-out/fade-in accents between scene boundaries",
+    "zoom_in_zoom_out": "Alternates zoom-in and zoom-out motion between scenes",
     "dissolve": "Smooth cross-dissolve between scenes",
     "wipeleft": "Wipe from right to left",
     "wiperight": "Wipe from left to right",
@@ -27,5 +29,15 @@ AVAILABLE_TRANSITIONS = {
 
 
 def list_transitions() -> list[dict[str, str]]:
-    return [{"id": k, "name": k.replace("_", " ").title(), "description": v}
-            for k, v in AVAILABLE_TRANSITIONS.items()]
+    custom_names = {
+        "fade_in_fade_out": "Fade In / Fade Out",
+        "zoom_in_zoom_out": "Zoom In / Zoom Out",
+    }
+    return [
+        {
+            "id": k,
+            "name": custom_names.get(k, k.replace("_", " ").title()),
+            "description": v,
+        }
+        for k, v in AVAILABLE_TRANSITIONS.items()
+    ]

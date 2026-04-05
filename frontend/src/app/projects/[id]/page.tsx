@@ -210,10 +210,6 @@ export default function ProjectDetailPage() {
     generate_subtitles: true,
     transcription_provider: "openai",
     transcription_language: "en",
-    subtitle_font: "Arial",
-    subtitle_size: 48,
-    subtitle_color: "#FFFFFF",
-    subtitle_position: "bottom" as "bottom" | "top" | "center",
   });
   const [matchScenesToAudio, setMatchScenesToAudio] = useState(false);
   const [ytStatus, setYtStatus] = useState<YouTubeChannelsStatus | null>(null);
@@ -221,20 +217,26 @@ export default function ProjectDetailPage() {
   const refreshProject = useCallback(async () => {
     const p = await api.getProject(projectId);
     setProject(p);
-    if (p?.settings) {
+    if (p?.video_settings?.subtitles) {
       setSubtitleConfig((prev) => ({
         ...prev,
-        subtitle_enabled: p.settings.subtitle_enabled ?? prev.subtitle_enabled,
-        subtitle_source: p.settings.subtitle_source ?? prev.subtitle_source,
-        generate_subtitles: p.settings.generate_subtitles ?? prev.generate_subtitles,
-        transcription_provider: p.settings.transcription_provider ?? prev.transcription_provider,
-        transcription_language: p.settings.transcription_language ?? prev.transcription_language,
-        subtitle_font: p.settings.subtitle_font ?? prev.subtitle_font,
-        subtitle_size: p.settings.subtitle_size ?? prev.subtitle_size,
-        subtitle_color: p.settings.subtitle_color ?? prev.subtitle_color,
-        subtitle_position: p.settings.subtitle_position ?? prev.subtitle_position,
+        subtitle_enabled: p.settings?.subtitle_enabled ?? prev.subtitle_enabled,
+        subtitle_source: p.settings?.subtitle_source ?? prev.subtitle_source,
+        generate_subtitles: p.settings?.generate_subtitles ?? prev.generate_subtitles,
+        transcription_provider: p.settings?.transcription_provider ?? prev.transcription_provider,
+        transcription_language: p.settings?.transcription_language ?? prev.transcription_language,
       }));
-      setMatchScenesToAudio(p.settings.match_scenes_to_audio ?? false);
+    } else if (p?.settings) {
+      const settings = p.settings;
+      setSubtitleConfig((prev) => ({
+        ...prev,
+        subtitle_enabled: settings.subtitle_enabled ?? prev.subtitle_enabled,
+        subtitle_source: settings.subtitle_source ?? prev.subtitle_source,
+        generate_subtitles: settings.generate_subtitles ?? prev.generate_subtitles,
+        transcription_provider: settings.transcription_provider ?? prev.transcription_provider,
+        transcription_language: settings.transcription_language ?? prev.transcription_language,
+      }));
+      setMatchScenesToAudio(settings.match_scenes_to_audio ?? false);
     }
     return p;
   }, [projectId]);
@@ -355,14 +357,17 @@ export default function ProjectDetailPage() {
     }
     setCompiling(true);
     try {
-      const mergedSettings = {
-        ...(project.settings || {}),
-        ...subtitleConfig,
-        match_scenes_to_audio: matchScenesToAudio,
-      };
       try {
         await api.updateProject(projectId, {
-          settings: mergedSettings,
+          settings: {
+            ...(project.settings || {}),
+            subtitle_enabled: subtitleConfig.subtitle_enabled,
+            subtitle_source: subtitleConfig.subtitle_source,
+            generate_subtitles: subtitleConfig.generate_subtitles,
+            transcription_provider: subtitleConfig.transcription_provider,
+            transcription_language: subtitleConfig.transcription_language,
+            match_scenes_to_audio: matchScenesToAudio,
+          },
           expected_version: project.version,
         });
       } catch (e: unknown) {
@@ -376,7 +381,21 @@ export default function ProjectDetailPage() {
       const job = await api.compileVideo(projectId);
       addJob(job);
       setProject((p) =>
-        p ? { ...p, status: "generating", settings: mergedSettings } : null,
+        p
+          ? {
+              ...p,
+              status: "generating",
+              settings: {
+                ...(p.settings || {}),
+                subtitle_enabled: subtitleConfig.subtitle_enabled,
+                subtitle_source: subtitleConfig.subtitle_source,
+                generate_subtitles: subtitleConfig.generate_subtitles,
+                transcription_provider: subtitleConfig.transcription_provider,
+                transcription_language: subtitleConfig.transcription_language,
+                match_scenes_to_audio: matchScenesToAudio,
+              },
+            }
+          : null,
       );
     } catch (e: unknown) {
       notify.error(e instanceof Error ? e.message : "Export failed");
@@ -436,23 +455,10 @@ export default function ProjectDetailPage() {
     if (!project) return;
     setDuplicating(true);
     try {
-      const newProject = await api.createProject({
+      const newProject = await api.duplicateProject(project.id, {
         title: `${project.title} (Copy)`,
-        story_type: project.story_type,
-        script: project.script,
-        control_mode: project.control_mode || "co_pilot",
-        settings: project.settings,
-        scenes: project.scenes.map((s) => ({
-          narration: s.narration,
-          subtitle: s.subtitle || s.narration,
-          image_prompt: s.image_prompt,
-          transition_type: s.transition_type,
-          duration: s.duration,
-          scene_type: s.scene_type,
-          scene_settings: s.scene_settings ?? null,
-        })),
       });
-      router.push(`/projects/${newProject.id}`);
+      router.push(`/projects/${newProject.id}/studio`);
     } catch (e) {
       notify.error((e as Error).message);
     } finally {
@@ -603,7 +609,7 @@ export default function ProjectDetailPage() {
                 onClick={() => router.push(`/projects/${projectId}/studio`)}
               >
                 <Film className="h-3.5 w-3.5 mr-1.5" />
-                Open Studio
+                Continue in Studio
               </Button>
               <Button
                 size="sm"
@@ -668,6 +674,9 @@ export default function ProjectDetailPage() {
 
       {/* ─── Main Content ─── */}
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-4 rounded-2xl border border-violet-500/20 bg-violet-500/8 px-4 py-3 text-sm text-zinc-200">
+          This page is now a project overview. Use <span className="font-medium text-violet-300">Studio</span> for project-level edits, scene arrangement, and final export settings.
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] gap-6">
 
           {/* ─── Left: Preview & Timeline ─── */}

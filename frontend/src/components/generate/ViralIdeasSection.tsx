@@ -15,13 +15,11 @@ const APPLY_KEYS: (keyof GenerateFormValues)[] = [
   "story_type",
   "story_template",
   "scene_count",
+  "dynamic_scenes",
   "word_count",
   "scene_narration_style",
   "scene_duration",
   "image_style",
-  "subtitle_enabled",
-  "subtitle_source",
-  "generate_subtitles",
   "resolution",
   "transition",
   "use_production_storyboard",
@@ -114,8 +112,7 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
           const n = Number(v);
           if (!Number.isNaN(n)) setValue(key, n, { shouldDirty: true, shouldValidate: true });
         } else if (
-          key === "subtitle_enabled" ||
-          key === "generate_subtitles" ||
+          key === "dynamic_scenes" ||
           key === "use_production_storyboard" ||
           key === "match_scenes_to_audio"
         ) {
@@ -138,7 +135,7 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
   return (
     <Card
       size="2"
-      className="section-neon section-neon--violet w-full min-w-0 border-violet-500/20 bg-gradient-to-br from-violet-950/40 via-background to-cyan-950/20 dark:from-violet-950/30"
+      className="section-neon section-neon--violet w-full min-w-0 border-violet-500/20 bg-linear-to-br from-violet-950/40 via-background to-cyan-950/20 dark:from-violet-950/30"
     >
       <CardContent className="space-y-3 p-3 sm:p-3.5">
         <div className="space-y-0.5">
@@ -165,7 +162,7 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
             variant="animated"
             onClick={loadIdeas}
             disabled={loading}
-            className="h-8 w-full shrink-0 gap-1.5 px-3 text-sm sm:w-auto sm:min-w-[10rem]"
+            className="h-8 w-full shrink-0 gap-1.5 px-3 text-sm sm:w-auto sm:min-w-40"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {ideas.length ? "Refresh ideas" : "Find ideas"}

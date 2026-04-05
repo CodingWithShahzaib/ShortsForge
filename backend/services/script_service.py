@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import json
 import logging
 import math
@@ -9,6 +10,29 @@ from typing import Any
 from backend.services.ai_client import chat_completion
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_json_substring(raw: str) -> tuple[str | None, int, int]:
+    """
+    Attempt to find a balanced JSON substring in `raw`.
+    Returns (substring, start_index, end_index) or (None, -1, -1) if not found.
+    Handles both objects `{...}` and arrays `[...]`.
+    """
+    if not raw:
+        return None, -1, -1
+    for i, ch in enumerate(raw):
+        if ch in "{[":
+            open_ch = ch
+            close_ch = "}" if ch == "{" else "]"
+            depth = 0
+            for j in range(i, len(raw)):
+                if raw[j] == open_ch:
+                    depth += 1
+                elif raw[j] == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        return raw[i : j + 1], i, j + 1
+    return None, -1, -1
 
 STORY_TYPES = [
     "scary", "mystery", "bedtime", "philosophy", "life_pro_tips",
@@ -46,6 +70,36 @@ STORY_TEMPLATES_META: list[dict[str, str]] = [
         "name": "Urgent warning",
         "description": "Highlights the stakes and what to watch next without fear-driven language.",
     },
+    {
+        "id": "myth_vs_reality",
+        "name": "Myth vs reality",
+        "description": "Opens with a common belief, then flips it with evidence, context, and a sharper takeaway.",
+    },
+    {
+        "id": "countdown_reveal",
+        "name": "Countdown reveal",
+        "description": "Builds momentum through ranked beats that culminate in the strongest point last.",
+    },
+    {
+        "id": "before_after_shift",
+        "name": "Before / after shift",
+        "description": "Shows how a situation changed, what caused it, and why the difference matters now.",
+    },
+    {
+        "id": "domino_effect",
+        "name": "Domino effect",
+        "description": "Tracks how one trigger set off a chain of consequences that kept escalating.",
+    },
+    {
+        "id": "investigative_breakdown",
+        "name": "Investigative breakdown",
+        "description": "Follows clues, contradictions, and evidence until the bigger picture becomes clear.",
+    },
+    {
+        "id": "rise_fall_rebound",
+        "name": "Rise, fall, rebound",
+        "description": "Charts a sharp ascent, the breaking point, and the lesson or comeback that followed.",
+    },
 ]
 
 STORY_TEMPLATE_IDS: tuple[str, ...] = tuple(m["id"] for m in STORY_TEMPLATES_META)
@@ -69,6 +123,99 @@ SCENE_EMOTION_MAP = {
 
 MIN_IMAGE_PROMPT_WORDS = 400
 MAX_SCENE_COUNT = 100
+DYNAMIC_SCENE_MIN = 3
+DYNAMIC_SCENE_MAX = 12
+NARRATION_DUPLICATE_LOOKBACK = 3
+NARRATION_DUPLICATE_SIMILARITY = 0.9
+
+COMMON_TTS_TEXT_FIXES: tuple[tuple[str, str], ...] = (
+    ("M hoves", "moves"),
+    ("M oves", "moves"),
+    ("plan chette", "planchette"),
+    ("Oui ja", "Ouija"),
+    ("spine s", "spines"),
+)
+
+SPOKEN_WORD_CUES = ("spelling out", "saying", "whispering", "shouting")
+SENTENCE_BREAK_PREFIXES = (
+    "The",
+    "A",
+    "An",
+    "This",
+    "That",
+    "It",
+    "He",
+    "She",
+    "They",
+    "We",
+    "You",
+    "Then",
+    "Suddenly",
+    "Meanwhile",
+)
+
+STORY_TYPE_PACING_RULES: dict[str, dict[str, Any]] = {
+    "scary": {
+        "avg_words_min": 5,
+        "avg_words_max": 11,
+        "hook_style": "mystery and immediate danger",
+        "pacing_note": "Use shorter, tense sentences with frequent clean stops for suspense.",
+    },
+    "mystery": {
+        "avg_words_min": 6,
+        "avg_words_max": 12,
+        "hook_style": "curiosity and unanswered questions",
+        "pacing_note": "Let each line reveal a clue or contradiction before moving on.",
+    },
+    "motivational": {
+        "avg_words_min": 7,
+        "avg_words_max": 15,
+        "hook_style": "relatable struggle and turnaround",
+        "pacing_note": "Vary short punch lines with one fuller sentence that lands the insight.",
+    },
+    "history": {
+        "avg_words_min": 7,
+        "avg_words_max": 16,
+        "hook_style": "surprising historical relevance",
+        "pacing_note": "Balance clarity and momentum so facts still sound spoken, not textbook.",
+    },
+    "science": {
+        "avg_words_min": 7,
+        "avg_words_max": 15,
+        "hook_style": "counterintuitive fact or reveal",
+        "pacing_note": "Keep explanations tight and concrete with clean sentence boundaries.",
+    },
+    "fun_facts": {
+        "avg_words_min": 6,
+        "avg_words_max": 13,
+        "hook_style": "surprise and novelty",
+        "pacing_note": "Keep the delivery brisk and curiosity-driven with minimal filler.",
+    },
+    "life_pro_tips": {
+        "avg_words_min": 6,
+        "avg_words_max": 14,
+        "hook_style": "immediate usefulness",
+        "pacing_note": "Lead with practical payoff, then explain fast and clearly.",
+    },
+    "bedtime": {
+        "avg_words_min": 8,
+        "avg_words_max": 17,
+        "hook_style": "calm intrigue",
+        "pacing_note": "Use smoother, gentler lines with softer transitions between thoughts.",
+    },
+    "philosophy": {
+        "avg_words_min": 8,
+        "avg_words_max": 18,
+        "hook_style": "provocative question or idea",
+        "pacing_note": "Allow slightly fuller sentences, but keep each thought easy to speak aloud.",
+    },
+    "general": {
+        "avg_words_min": 6,
+        "avg_words_max": 14,
+        "hook_style": "clear relevance and curiosity",
+        "pacing_note": "Keep narration compact, visual, and easy for TTS to breathe through.",
+    },
+}
 
 
 def validate_story_template_field(value: str) -> str:
@@ -105,6 +252,15 @@ def resolve_scene_pacing_bounds(
         max(safe_min, style_min_floors[style]),
         max(safe_max, style_max_floors[style]),
     )
+
+
+def _resolve_dynamic_scene_target(script: str, scene_narration_style: str | None) -> int:
+    words = _count_words(script or "")
+    base = round(words / 55) if words else 5
+    style = normalize_scene_narration_style(scene_narration_style)
+    style_adjustment = {"short": 1, "balanced": 0, "long": -1}
+    target = base + style_adjustment[style]
+    return max(DYNAMIC_SCENE_MIN, min(DYNAMIC_SCENE_MAX, target))
 
 
 def _scene_narration_style_note(scene_narration_style: str) -> str:
@@ -161,6 +317,43 @@ STORY_TEMPLATE_SCRIPT_GUIDES: dict[str, str] = {
         "(3) Plausible outcomes—avoid panic rhetoric. (4) What the viewer can verify or do that is constructive. "
         "About {word_count} words (±10%). Category: {story_type}."
     ),
+    "myth_vs_reality": (
+        "Structure: (1) Hook with a belief, assumption, or viral claim people think is true. "
+        "(2) Explain why that belief feels persuasive. (3) Reveal what the reality actually is with concrete context, "
+        "evidence, or mechanism. (4) Close with the sharper takeaway or implication for the viewer. "
+        "Keep the tone clear and corrective, not smug. About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "countdown_reveal": (
+        "Structure: (1) Hook with a promise that multiple surprising points are coming. "
+        "(2) Move through 3-5 escalating beats in a ranked or stacked rhythm, saving the strongest beat for last. "
+        "(3) Make each beat concise but concrete. (4) End with the final reveal and why it matters. "
+        "Do not literally number the beats in the output unless it feels natural in spoken narration. "
+        "About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "before_after_shift": (
+        "Structure: (1) Hook with the contrast between how things used to be and how they are now. "
+        "(2) Paint the 'before' state with one or two concrete details. (3) Show the turning point or cause of change. "
+        "(4) Explain the 'after' state and why the shift matters to viewers now. "
+        "Keep the contrast vivid and easy to visualize. About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "domino_effect": (
+        "Structure: (1) Hook with one trigger event or decision. (2) Show the first consequence. "
+        "(3) Trace the chain reaction through escalating second- and third-order effects. "
+        "(4) End with the outcome people should pay attention to now. "
+        "Emphasize causality and momentum so each beat clearly leads to the next. "
+        "About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "investigative_breakdown": (
+        "Structure: (1) Hook with a contradiction, suspicious detail, or unanswered question. "
+        "(2) Walk through the clues or facts one by one. (3) Show how they connect into a bigger pattern or explanation. "
+        "(4) End with the clearest conclusion or open question that remains. "
+        "Tone: observant, precise, evidence-first. About {word_count} words (±10%). Category: {story_type}."
+    ),
+    "rise_fall_rebound": (
+        "Structure: (1) Hook with the peak moment or breakout success. (2) Show how the rise happened. "
+        "(3) Explain the setback, collapse, or reversal. (4) End with the rebound, lesson, or what happened next. "
+        "Keep the emotional arc strong without turning melodramatic. About {word_count} words (±10%). Category: {story_type}."
+    ),
 }
 
 
@@ -169,28 +362,48 @@ def list_story_templates() -> list[dict[str, str]]:
     return list(STORY_TEMPLATES_META)
 
 
-def _storyboard_arc_addon(scene_count: int, image_style: str, story_template: str) -> str:
+def _storyboard_arc_addon(
+    scene_count: int | None,
+    image_style: str,
+    story_template: str,
+    *,
+    dynamic_scenes: bool = False,
+) -> str:
     """Extra instructions when using a non-default story_template."""
-    n = max(2, min(MAX_SCENE_COUNT, int(scene_count)))
+    n = max(2, min(MAX_SCENE_COUNT, int(scene_count))) if scene_count else DYNAMIC_SCENE_MIN
     template_visual_notes = {
         "political_commentary": "Use symbolic imagery (scales, documents, crowds) not individual faces.",
         "corporate_expose": "Show systems, buildings, documents, data visualizations—professional aesthetic.",
         "historical_parallel": "Split between archival-style and modern imagery for contrast.",
         "urgent_warning": "High contrast, urgent colors (red/orange accents), clear stakes visualization.",
         "satirical_irony": "Visual contrast between stated claim and actual reality (split composition).",
+        "myth_vs_reality": "Visualize misconception versus truth with clear contrast, proof artifacts, or explanatory overlays implied through composition.",
+        "countdown_reveal": "Stage each scene as a stronger beat than the last; escalate scale, tension, or visual novelty toward the final scene.",
+        "before_after_shift": "Use contrast in setting, wardrobe, condition, or mood to make change feel immediate and legible.",
+        "domino_effect": "Show cause-and-effect visually through chained actions, spreading impact, or environments reacting over time.",
+        "investigative_breakdown": "Lean on clues, evidence boards, documents, timelines, screens, or physical traces rather than character portraits.",
+        "rise_fall_rebound": "Mirror the emotional arc with brighter ascent imagery, a low point with visual collapse, then a more grounded recovery.",
     }
     visual_note = template_visual_notes.get(story_template, "Match imagery to narration emotion.")
     lines = [
         "",
         f"NARRATIVE ARC ({story_template} template):",
-        f"- Split the script into exactly {n} scenes. narration for each scene must be copied verbatim from the script in order—no paraphrase.",
+        (
+            f"- Split the script into the number of scenes needed to complete the story cleanly, usually {DYNAMIC_SCENE_MIN}-{DYNAMIC_SCENE_MAX} scenes. "
+            "Choose the fewest scene breaks that preserve the full arc and keep narration copied verbatim from the script in order."
+            if dynamic_scenes
+            else f"- Split the script into exactly {n} scenes. narration for each scene must be copied verbatim from the script in order—no paraphrase."
+        ),
         f"- Visual note: {visual_note}",
         f"- image_prompt: detailed, in {image_style} style; vary composition and mood per beat.",
         "- Choose transition to match emotional shifts (e.g. dissolve or zoom_in for revelation; wipeleft/pan for pattern sequences).",
         "- Scene roles:",
         "- Scene 1: Hook—bold focal imagery, high clarity, symbolic or striking composition.",
     ]
-    if n == 2:
+    if dynamic_scenes:
+        lines.append("- Middle scenes: escalate the pattern only when a new beat is needed; do not add filler scenes.")
+        lines.append("- Final scene: land the revelation or close cleanly without truncating the story.")
+    elif n == 2:
         lines.append(
             "- Scene 2: Deliver pattern, revelation, and forward close in one continuous narration slice; strong lighting shift in imagery."
         )
@@ -256,6 +469,37 @@ def _ensure_scene_count_exact(
     return coerced
 
 
+def _coerce_dynamic_scene_count(
+    scenes: Any,
+    *,
+    fallback_script: str,
+    image_style: str,
+    scene_narration_style: str | None,
+) -> list[dict[str, Any]]:
+    target = _resolve_dynamic_scene_target(fallback_script, scene_narration_style)
+    fallback = _fallback_storyboard_scenes(
+        fallback_script,
+        scene_count=target,
+        image_style=image_style,
+    )
+    if not isinstance(scenes, list) or not scenes:
+        return fallback
+    coerced = [dict(sc or {}) for sc in scenes if isinstance(sc, dict)]
+    if not coerced:
+        return fallback
+    if len(coerced) < DYNAMIC_SCENE_MIN:
+        coerced.extend(fallback[len(coerced):DYNAMIC_SCENE_MIN])
+        return coerced
+    if len(coerced) > DYNAMIC_SCENE_MAX:
+        logger.warning(
+            "Adjusting dynamic storyboard scene count from %s to max %s",
+            len(coerced),
+            DYNAMIC_SCENE_MAX,
+        )
+        return coerced[:DYNAMIC_SCENE_MAX]
+    return coerced
+
+
 def _chunk_sentences_contiguous(text: str, target: int) -> list[list[str]]:
     """
     Split text into contiguous sentence buckets.
@@ -291,6 +535,142 @@ def _derive_narration_chunks(script: str, scene_count: int) -> list[str]:
 
     fallback = cleaned
     return [chunk or fallback for chunk in chunks]
+
+
+def _normalize_similarity_text(text: str) -> str:
+    collapsed = re.sub(r"\s+", " ", (text or "").strip().lower())
+    return re.sub(r"[^\w\s]", "", collapsed)
+
+
+def _narration_similarity(left: str, right: str) -> float:
+    a = _normalize_similarity_text(left)
+    b = _normalize_similarity_text(right)
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _max_recent_similarity(
+    text: str,
+    previous_texts: list[str],
+    *,
+    lookback: int = NARRATION_DUPLICATE_LOOKBACK,
+) -> float:
+    if not previous_texts:
+        return 0.0
+    recent = previous_texts[-max(1, lookback):]
+    return max((_narration_similarity(text, prev) for prev in recent), default=0.0)
+
+
+def clean_tts_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return ""
+
+    for wrong, right in COMMON_TTS_TEXT_FIXES:
+        cleaned = cleaned.replace(wrong, right)
+
+    cleaned = re.sub(r"\b([B-HJ-Zb-hj-z])\s+([a-z]{3,})\b", r"\1\2", cleaned)
+
+    cue_pattern = "|".join(re.escape(cue) for cue in SPOKEN_WORD_CUES)
+
+    def _quote_spoken_word(match: re.Match[str]) -> str:
+        cue = match.group(1)
+        word = match.group(2)
+        quoted = word.upper() if cue.lower() == "spelling out" else word
+        return f'{cue} "{quoted}"'
+
+    cleaned = re.sub(
+        rf"\b({cue_pattern})\s+([A-Za-z]{{3,}})\b",
+        _quote_spoken_word,
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    prefix_pattern = "|".join(SENTENCE_BREAK_PREFIXES)
+    cleaned = re.sub(
+        rf'(?<=[a-z0-9"\'])\s+(?=(?:{prefix_pattern})\b)',
+        ". ",
+        cleaned,
+    )
+    cleaned = re.sub(r"\s+([,.;!?])", r"\1", cleaned)
+    cleaned = re.sub(r"([,.;!?])([A-Za-z])", r"\1 \2", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"^([a-z])", lambda match: match.group(1).upper(), cleaned)
+    if cleaned.endswith('"') and len(cleaned) > 1 and cleaned[-2] not in ".!?":
+        cleaned = f"{cleaned}."
+    elif cleaned and cleaned[-1] not in ".!?\"'":
+        cleaned = f"{cleaned}."
+    return cleaned
+
+
+def repair_storyboard_scene_narration(
+    scenes: list[dict[str, Any]],
+    *,
+    script: str | None = None,
+    lookback: int = NARRATION_DUPLICATE_LOOKBACK,
+    similarity_threshold: float = NARRATION_DUPLICATE_SIMILARITY,
+    skip_indexes: set[int] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(scenes, list):
+        return [], []
+
+    fallback_chunks = _derive_narration_chunks(script or "", len(scenes))
+    protected = skip_indexes or set()
+    repaired: list[dict[str, Any]] = []
+    recent_narration: list[str] = []
+    issues: list[str] = []
+
+    for i, raw in enumerate(scenes):
+        scene = dict(raw or {})
+        original = (
+            (scene.get("narration") or "").strip()
+            or (scene.get("subtitle") or "").strip()
+            or (scene.get("script") or "").strip()
+            or fallback_chunks[i]
+        )
+
+        replacement = original
+        if i not in protected:
+            cleaned = clean_tts_text(original)
+            if cleaned and cleaned != original:
+                issues.append(f"Scene {i + 1}: cleaned narration text for TTS clarity.")
+            replacement = cleaned or original
+            recent_similarity = _max_recent_similarity(
+                replacement,
+                recent_narration,
+                lookback=lookback,
+            )
+            if recent_similarity >= similarity_threshold:
+                fallback = clean_tts_text(fallback_chunks[i])
+                fallback_similarity = _max_recent_similarity(
+                    fallback,
+                    recent_narration,
+                    lookback=lookback,
+                )
+                if (
+                    fallback
+                    and _normalize_similarity_text(fallback) != _normalize_similarity_text(replacement)
+                    and fallback_similarity < similarity_threshold
+                ):
+                    replacement = fallback
+                    issues.append(
+                        f"Scene {i + 1}: replaced repeated narration with script-aligned fallback."
+                    )
+                else:
+                    issues.append(f"Scene {i + 1}: repeated narration detected across nearby scenes.")
+
+        subtitle = (scene.get("subtitle") or "").strip()
+        script_text = (scene.get("script") or "").strip()
+        scene["narration"] = replacement
+        if not subtitle or subtitle == original or subtitle == replacement:
+            scene["subtitle"] = replacement
+        if not script_text or script_text == original or script_text == replacement:
+            scene["script"] = replacement
+        repaired.append(scene)
+        recent_narration.append(replacement)
+
+    return repaired, issues
 
 
 def normalize_scene_narration(
@@ -439,6 +819,11 @@ def _first_sentence(text: str) -> str:
     return parts[0].strip() if parts else cleaned
 
 
+def _story_type_pacing_rule(story_type: str | None) -> dict[str, Any]:
+    key = str(story_type or "general").strip().lower()
+    return STORY_TYPE_PACING_RULES.get(key, STORY_TYPE_PACING_RULES["general"])
+
+
 async def analyze_hook_quality(
     *,
     script_text: str,
@@ -476,14 +861,20 @@ async def analyze_hook_quality(
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
+        sub, start, end = _extract_json_substring(raw)
+        if sub:
             try:
-                payload = json.loads(raw[start:end])
+                payload = json.loads(sub)
             except json.JSONDecodeError:
+                logger.debug(
+                    "Failed to JSON-decode extracted payload for hook quality. start=%s end=%s snippet=%s",
+                    start,
+                    end,
+                    (sub[:1000] + "...") if len(sub) > 1000 else sub,
+                )
                 return {"weak": False, "reason": "", "suggestions": []}
         else:
+            logger.debug("No JSON substring found in hook quality response: %s", raw[:500])
             return {"weak": False, "reason": "", "suggestions": []}
     suggestions = payload.get("suggestions")
     if not isinstance(suggestions, list):
@@ -493,6 +884,199 @@ async def analyze_hook_quality(
         "reason": str(payload.get("reason") or "").strip(),
         "suggestions": [str(line).strip() for line in suggestions if str(line).strip()][:3],
     }
+
+
+def _estimate_pacing_score(text: str, story_type: str = "general") -> int:
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if part.strip()]
+    if not sentences:
+        return 0
+    word_counts = [_count_words(sentence) for sentence in sentences]
+    average_words = sum(word_counts) / max(1, len(word_counts))
+    rule = _story_type_pacing_rule(story_type)
+    min_words = int(rule["avg_words_min"])
+    max_words = int(rule["avg_words_max"])
+    score = 100
+    if average_words < min_words:
+        score -= 25
+    elif average_words > max_words:
+        score -= 20
+    if len(sentences) == 1 and _count_words(text) > max_words + 4:
+        score -= 20
+    if any(words > max_words + 8 for words in word_counts):
+        score -= 15
+    return max(0, min(100, score))
+
+
+def _basic_hook_strength(text: str) -> tuple[int, str]:
+    words = (text or "").strip().split()
+    hook_words = words[:15]
+    hook_text = " ".join(hook_words).strip()
+    if not hook_text:
+        return 0, ""
+
+    lower_text = hook_text.lower()
+    emotional_terms = {
+        "secret", "fear", "wrong", "warning", "shocking", "hidden", "cold",
+        "danger", "mystery", "survive", "truth", "trap", "terrifying",
+    }
+    emotional_count = sum(1 for word in re.findall(r"\b[\w'-]+\b", lower_text) if word in emotional_terms)
+    score = 30
+    if 8 <= len(hook_words) <= 15:
+        score += 20
+    if "?" in hook_text:
+        score += 20
+    if any(ch.isdigit() for ch in hook_text):
+        score += 10
+    if emotional_count >= 1:
+        score += 10
+    if emotional_count >= 2:
+        score += 10
+    return max(0, min(100, score)), hook_text
+
+
+def analyze_narration_quality(
+    text: str,
+    *,
+    story_type: str = "general",
+    previous_narrations: list[str] | None = None,
+    hook_analysis: dict[str, Any] | None = None,
+    is_first_scene: bool = False,
+) -> dict[str, Any]:
+    previous_narrations = previous_narrations or []
+    cleaned_text = clean_tts_text(text)
+    cleaned_changed = cleaned_text != (text or "").strip()
+    repetition_similarity = _max_recent_similarity(cleaned_text, previous_narrations)
+    repetition_detected = repetition_similarity >= NARRATION_DUPLICATE_SIMILARITY
+    pacing_rule = _story_type_pacing_rule(story_type)
+    pacing_score = _estimate_pacing_score(cleaned_text, story_type)
+    hook_strength, hook_text = _basic_hook_strength(cleaned_text if is_first_scene else "")
+
+    issues: list[dict[str, str]] = []
+    tts_issues: list[str] = []
+    suggestions: list[str] = []
+
+    if cleaned_changed:
+        tts_issues.append("spacing_or_punctuation")
+        issues.append(
+            {
+                "code": "tts_cleanup_needed",
+                "message": "Narration benefits from text cleanup before TTS.",
+                "severity": "warning",
+            }
+        )
+        suggestions.append("Apply the cleaned narration text before generating audio.")
+    if repetition_detected:
+        issues.append(
+            {
+                "code": "recent_repetition",
+                "message": "Narration is too similar to one of the previous three scenes.",
+                "severity": "warning",
+            }
+        )
+        suggestions.append("Rewrite this beat so it advances the story instead of repeating the prior scene.")
+    if pacing_score < 70:
+        issues.append(
+            {
+                "code": "pacing",
+                "message": (
+                    "Sentence pacing is likely too dense or too abrupt for natural narration. "
+                    f"Target style for {story_type}: {pacing_rule['pacing_note']}"
+                ),
+                "severity": "warning",
+            }
+        )
+        suggestions.append(
+            f"Adjust pacing for {story_type}: {pacing_rule['pacing_note']}"
+        )
+
+    hook_suggestions: list[str] = []
+    if is_first_scene and hook_analysis:
+        hook_strength = max(0, hook_strength - (25 if hook_analysis.get("weak") else 0))
+        hook_suggestions = [
+            str(line).strip()
+            for line in hook_analysis.get("suggestions", [])
+            if str(line).strip()
+        ][:3]
+        suggestions.extend(line for line in hook_suggestions if line not in suggestions)
+        if hook_analysis.get("weak"):
+            issues.append(
+                {
+                    "code": "weak_hook",
+                    "message": str(hook_analysis.get("reason") or "The opening hook is weak.").strip(),
+                    "severity": "warning",
+                }
+            )
+
+    score = 100
+    if cleaned_changed:
+        score -= 15
+    if repetition_detected:
+        score -= 30
+    score = min(score, pacing_score if pacing_score < 100 else score)
+    if is_first_scene:
+        score = min(score, max(40, hook_strength))
+    score = max(0, min(100, score))
+
+    return {
+        "score": score,
+        "hook_strength": hook_strength if is_first_scene else 0,
+        "pacing_score": pacing_score,
+        "repetition_detected": repetition_detected,
+        "tts_issues": tts_issues,
+        "suggestions": suggestions[:5],
+        "issues": issues,
+        "cleaned_text": cleaned_text,
+        "hook_text": hook_text if is_first_scene else None,
+        "hook_suggestions": hook_suggestions,
+    }
+
+
+async def improve_narration_text(
+    text: str,
+    *,
+    story_type: str = "general",
+    previous_narrations: list[str] | None = None,
+    is_first_scene: bool = False,
+    issues: list[str] | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    temperature: float = 0.4,
+) -> str:
+    cleaned = clean_tts_text(text)
+    previous_narrations = previous_narrations or []
+    issues = issues or []
+    issue_notes = ", ".join(issues) if issues else "pacing, TTS clarity, and repetition"
+    recent_context = "\n".join(f"- {line}" for line in previous_narrations[-NARRATION_DUPLICATE_LOOKBACK:] if line.strip())
+    pacing_rule = _story_type_pacing_rule(story_type)
+    opening_note = (
+        f"Strengthen the first sentence so it works as a short-form hook built on {pacing_rule['hook_style']}."
+        if is_first_scene
+        else "Keep the narration flowing naturally from the prior scene."
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You improve short-form video narration. "
+                "Return only the revised narration text with natural punctuation for TTS. "
+                "Do not add scene labels, bullets, or explanations."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Story type: {story_type}\n"
+                f"Current narration:\n{cleaned or text}\n\n"
+                f"Recent previous scenes:\n{recent_context or '- none'}\n\n"
+                f"Fix these issues: {issue_notes}\n"
+                f"Genre pacing note: {pacing_rule['pacing_note']}\n"
+                f"{opening_note}\n"
+                "Keep the line concise, emotionally engaging, and clearly different from the prior scenes."
+            ),
+        },
+    ]
+    improved = await chat_completion(messages, llm_provider, llm_model, temperature, max_tokens=220)
+    return clean_tts_text(improved)
 
 
 def _build_prompt_padding_blocks(
@@ -757,6 +1341,7 @@ async def generate_story_and_storyboard(
     script: str | None = None,
     story_type: str = "general",
     scene_count: int = 5,
+    dynamic_scenes: bool = False,
     image_style: str = "realistic",
     resolution: str = "1080x1920",
     transition: str = "fade",
@@ -801,6 +1386,7 @@ async def generate_story_and_storyboard(
             "so keep narration clear and well-punctuated for readability.\n"
         )
     narration_pacing_note = _scene_narration_style_note(scene_narration_style)
+    genre_pacing_note = _story_type_pacing_rule(story_type)["pacing_note"]
 
     continuity_note = ""
     if visual_continuity:
@@ -809,9 +1395,17 @@ async def generate_story_and_storyboard(
             "Apply it to color palette, mood, and recurring motifs.\n"
         )
 
+    if dynamic_scenes:
+        scene_prompt_instruction = (
+            "Given a narration script, split it into the number of scenes needed to complete the story naturally. "
+            f"Choose the fewest clear scene breaks that preserve the full arc, usually between {DYNAMIC_SCENE_MIN} and {DYNAMIC_SCENE_MAX} scenes. "
+            "Do not pad with filler scenes or cut the ending short. "
+        )
+    else:
+        scene_prompt_instruction = f"Given a narration script, split it into exactly {scene_count} scenes. "
     system_prompt = (
         f"You are a video storyboard planner for faceless short-form videos. "
-        f"Given a narration script, split it into exactly {scene_count} scenes. "
+        f"{scene_prompt_instruction}"
         f"{caption_note}"
         f"MEANINGFUL NARRATIVE REQUIREMENTS:\n"
         f"- Ensure one scene explicitly answers why this matters to the viewer.\n"
@@ -819,6 +1413,7 @@ async def generate_story_and_storyboard(
         f"- Keep narration detailed and concrete in every scene; avoid generic filler lines.\n"
         f"- Preserve chronology: scene narration must follow the script order without jumping ahead.\n"
         f"- Aim for scenes that usually land around {paced_min_duration}-{paced_max_duration} seconds of spoken narration before any cut.\n"
+        f"- Story-type pacing note: {genre_pacing_note}\n"
         f"- If a scene changes time, cause, or perspective, write the transition naturally in that scene's narration or provide an optional bridge_line field.\n"
         f"{narration_pacing_note}"
         f"SHOT VARIATION:\n"
@@ -839,12 +1434,17 @@ async def generate_story_and_storyboard(
         f"- optional bridge_line: only when needed, a short natural transition that should be spoken before the main narration\n"
         f"- image_prompt: A detailed image generation prompt in {image_style} style. "
         f"  Describe the visual scene vividly: subject, composition, lighting, mood, colors.\n"
-        f"- transition: One of: fade, dissolve, wipeleft, slideup, zoom_in, zoom_out, pan_left, pan_right\n\n"
+        f"- transition: One of: fade, fade_in_fade_out, zoom_in_zoom_out, dissolve, wipeleft, slideup, zoom_in, zoom_out, pan_left, pan_right\n\n"
         f"Return valid JSON with this structure:\n"
         f'{{"title": "...", "scenes": [{{"narration": "...", "image_prompt": "...", "transition": "..."}}]}}'
     )
     if story_template != "default":
-        system_prompt += _storyboard_arc_addon(scene_count, image_style, story_template)
+        system_prompt += _storyboard_arc_addon(
+            scene_count if not dynamic_scenes else None,
+            image_style,
+            story_template,
+            dynamic_scenes=dynamic_scenes,
+        )
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -869,27 +1469,50 @@ async def generate_story_and_storyboard(
     try:
         storyboard = json.loads(raw)
     except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            storyboard = json.loads(raw[start:end])
+        sub, start, end = _extract_json_substring(raw)
+        if sub:
+            try:
+                storyboard = json.loads(sub)
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "Failed to parse extracted storyboard JSON (start=%s end=%s): %s",
+                    start,
+                    end,
+                    e,
+                )
+                logger.debug("Raw LLM response snippet: %s", (sub[:2000] + "...") if len(sub) > 2000 else sub)
+                raise ValueError("Failed to parse storyboard JSON from LLM response")
         else:
+            logger.error("No JSON substring found in storyboard LLM response. Raw start: %s", raw[:500])
             raise ValueError("Failed to parse storyboard JSON from LLM response")
 
     scenes = storyboard.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         logger.warning("Storyboard response missing scenes; building fallback scenes.")
-    storyboard["scenes"] = _ensure_scene_count_exact(
-        scenes,
-        scene_count=scene_count,
-        fallback_script=script,
-        image_style=image_style,
+    storyboard["scenes"] = (
+        _coerce_dynamic_scene_count(
+            scenes,
+            fallback_script=script,
+            image_style=image_style,
+            scene_narration_style=scene_narration_style,
+        )
+        if dynamic_scenes
+        else _ensure_scene_count_exact(
+            scenes,
+            scene_count=scene_count,
+            fallback_script=script,
+            image_style=image_style,
+        )
     )
     storyboard["script"] = script
     if visual_continuity:
         storyboard["visual_continuity"] = visual_continuity
     normalized_scenes = normalize_scene_narration(
         storyboard.get("scenes", []),
+        script=script,
+    )
+    normalized_scenes, narration_issues = repair_storyboard_scene_narration(
+        normalized_scenes,
         script=script,
     )
     normalized_scenes = enforce_scene_pacing(
@@ -932,7 +1555,8 @@ async def generate_story_and_storyboard(
     if hook_analysis["suggestions"]:
         storyboard["hook_suggestions"] = hook_analysis["suggestions"]
     if with_quality_gate:
-        issues = validate_storyboard_quality(storyboard)
+        issues = list(narration_issues)
+        issues.extend(validate_storyboard_quality(storyboard))
         if hook_analysis["weak"]:
             detail = f" {hook_analysis['reason']}" if hook_analysis["reason"] else ""
             issues.append(f"Weak first-scene hook detected; consider a sharper opening line.{detail}")
@@ -988,6 +1612,7 @@ async def generate_video_production_script(
     concept: str,
     story_type: str = "general",
     scene_count: int = 5,
+    dynamic_scenes: bool = False,
     image_style: str = "realistic",
     resolution: str = "1080x1920",
     transition: str = "fade",
@@ -1007,17 +1632,27 @@ async def generate_video_production_script(
         max_duration=scene_duration_max,
     )
     narration_pacing_note = _scene_narration_style_note(scene_narration_style)
+    genre_pacing_note = _story_type_pacing_rule(story_type)["pacing_note"]
     continuity_note = ""
     if visual_continuity:
         continuity_note = f"\nVisual continuity: {visual_continuity}. Keep this consistent across scenes (palette/motif/mood)."
 
-    user_prompt = f"""Create a {scene_count}-scene storyboard for vertical shorts (still images + voiceover).
+    if dynamic_scenes:
+        scene_instruction = (
+            "Create a storyboard for vertical shorts (still images + voiceover). "
+            f"Choose the number of scenes needed to complete the story naturally, usually between {DYNAMIC_SCENE_MIN} and {DYNAMIC_SCENE_MAX} scenes, "
+            "and avoid filler cuts."
+        )
+    else:
+        scene_instruction = f"Create a {scene_count}-scene storyboard for vertical shorts (still images + voiceover)."
+    user_prompt = f"""{scene_instruction}
 
 Concept: {concept}
 Story type: {story_type}{continuity_note}
 
 Each scene should usually land around {paced_min_duration}-{paced_max_duration} seconds of spoken content.
 {narration_pacing_note.strip()}
+Story pacing note: {genre_pacing_note}
 **image_prompt** must be a single strong still-image description per scene.
 Use frontend visual settings exactly: style={image_style}, resolution={resolution}, transition={transition}.
 Each image_prompt must contain at least {max(120, int(min_image_prompt_words))} words.
@@ -1041,21 +1676,44 @@ Alternate wide/medium/close framing across scenes. If a scene needs a transition
     try:
         result = json.loads(raw)
     except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            result = json.loads(raw[start:end])
+        sub, start, end = _extract_json_substring(raw)
+        if sub:
+            try:
+                result = json.loads(sub)
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "Failed to parse extracted video production JSON (start=%s end=%s): %s",
+                    start,
+                    end,
+                    e,
+                )
+                logger.debug("Raw LLM response snippet: %s", (sub[:2000] + "...") if len(sub) > 2000 else sub)
+                raise ValueError("Failed to parse video production script JSON from LLM response")
         else:
+            logger.error("No JSON substring found in video production LLM response. Raw start: %s", raw[:500])
             raise ValueError("Failed to parse video production script JSON from LLM response")
 
-    raw_scenes = _ensure_scene_count_exact(
-        result.get("scenes", []),
-        scene_count=scene_count,
-        fallback_script=concept,
-        image_style=image_style,
+    raw_scenes = (
+        _coerce_dynamic_scene_count(
+            result.get("scenes", []),
+            fallback_script=concept,
+            image_style=image_style,
+            scene_narration_style=scene_narration_style,
+        )
+        if dynamic_scenes
+        else _ensure_scene_count_exact(
+            result.get("scenes", []),
+            scene_count=scene_count,
+            fallback_script=concept,
+            image_style=image_style,
+        )
     )
     scenes = normalize_scene_narration(
         raw_scenes,
+        script=concept,
+    )
+    scenes, narration_issues = repair_storyboard_scene_narration(
+        scenes,
         script=concept,
     )
     scenes = enforce_scene_pacing(
@@ -1113,7 +1771,8 @@ Alternate wide/medium/close framing across scenes. If a scene needs a transition
     )
     if visual_continuity:
         result["visual_continuity"] = visual_continuity
-    issues = validate_storyboard_quality({"scenes": scenes, "visual_continuity": visual_continuity})
+    issues = list(narration_issues)
+    issues.extend(validate_storyboard_quality({"scenes": scenes, "visual_continuity": visual_continuity}))
     hook_analysis = {"weak": False, "reason": "", "suggestions": []}
     if scenes:
         hook_analysis = await analyze_hook_quality(

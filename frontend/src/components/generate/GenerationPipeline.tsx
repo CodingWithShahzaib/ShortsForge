@@ -3,7 +3,6 @@
 import { memo, useMemo } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { Check, Loader2, Minus } from "lucide-react";
 import { useProjectStore } from "@/stores/projectStore";
 import { api } from "@/lib/api";
@@ -123,7 +122,7 @@ export const GenerationPipeline = memo(function GenerationPipeline() {
 
   return (
     <div
-      className="section-neon section-neon--pipeline rounded-xl border border-border bg-card text-card-foreground shadow-sm"
+      className="rounded-xl border border-border/70 bg-card text-card-foreground shadow-sm"
       aria-live="polite"
       aria-busy={busy}
     >
@@ -166,8 +165,7 @@ export const GenerationPipeline = memo(function GenerationPipeline() {
           <div className="overflow-x-auto">
             <div className="flex gap-2 min-w-max">
               {rows.map((row) => (
-                <motion.div
-                  layout
+                <div
                   key={`${row.index}-${row.sceneId ?? "pending"}`}
                   className={cn(
                     "w-[100px] shrink-0 rounded-lg border px-2 py-2 text-center",
@@ -195,7 +193,7 @@ export const GenerationPipeline = memo(function GenerationPipeline() {
                       Studio
                     </Link>
                   ) : null}
-                </motion.div>
+                </div>
               ))}
             </div>
           </div>

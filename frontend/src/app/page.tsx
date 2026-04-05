@@ -252,9 +252,13 @@ export default function DashboardPage() {
       ? summary.jobs.in_progress + summary.jobs.queued
       : jobs.filter((j) => j.status === "in_progress" || j.status === "queued").length;
 
+  const lastUpdatedValue =
+    summary && "last_updated" in summary ? summary.last_updated : null;
   const lastUpdatedLabel =
-    summary && "last_updated" in summary && summary.last_updated
-      ? `Updated ${new Date(summary.last_updated).toLocaleTimeString([], {
+    (typeof lastUpdatedValue === "string" ||
+      typeof lastUpdatedValue === "number" ||
+      lastUpdatedValue instanceof Date)
+      ? `Updated ${new Date(lastUpdatedValue).toLocaleTimeString([], {
           hour: "numeric",
           minute: "2-digit",
         })}`

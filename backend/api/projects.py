@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,10 +37,14 @@ from backend.schemas.video_settings import (
     SceneRegenerateRequest,
 )
 from backend.services.project_video_settings_service import (
+    apply_project_settings_snapshot,
     apply_project_video_settings_update,
     apply_scene_asset_override_update,
+    build_runtime_settings,
     ensure_project_video_settings_row,
     ensure_scene_asset_override,
+    sanitize_project_settings,
+    sync_project_video_settings_from_mapping,
 )
 
 router = APIRouter()
@@ -82,6 +87,19 @@ async def _load_scene_with_related(db: AsyncSession, project_id: str, scene_id: 
         .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     return result.scalar_one_or_none()
+
+
+def _scene_spoken_text(scene: Scene) -> str:
+    return ((scene.narration or "").strip() or (scene.subtitle or "").strip())
+
+
+def _invalidate_scene_audio(scene: Scene) -> None:
+    for asset in scene.assets:
+        if asset.type == "audio":
+            asset.is_active = False
+    override_row = ensure_scene_asset_override(scene)
+    override_row.manual_audio_path = None
+    override_row.audio_status = "none"
 
 
 def _scene_asset_storage_folder(asset_type: str) -> str:
@@ -232,16 +250,24 @@ async def create_project(
 ):
     from backend.config import get_settings
 
+    app_settings = get_settings()
     project = Project(
         title=data.title,
         story_type=data.story_type,
         script=data.script,
-        settings=data.settings,
+        settings=sanitize_project_settings(data.settings),
         control_mode=data.control_mode,
     )
     db.add(project)
     await db.flush()
-    ensure_project_video_settings_row(project, get_settings())
+    if data.video_settings is not None:
+        row = apply_project_video_settings_update(project, data.video_settings, app_settings)
+        db.add(row)
+    elif data.settings:
+        row = sync_project_video_settings_from_mapping(project, data.settings, app_settings)
+        db.add(row)
+    else:
+        ensure_project_video_settings_row(project, app_settings)
     if data.scenes:
         from backend.services.script_service import normalize_scene_narration
 
@@ -269,6 +295,7 @@ async def create_project(
                 scene_type=sc.scene_type,
                 scene_settings=sc.scene_settings,
                 is_locked=getattr(sc, "is_locked", False),
+                is_manually_edited=getattr(sc, "is_manually_edited", True),
                 user_notes=getattr(sc, "user_notes", None),
                 trim_start_sec=getattr(sc, "trim_start_sec", 0.0) or 0.0,
                 trim_end_sec=getattr(sc, "trim_end_sec", 0.0) or 0.0,
@@ -322,6 +349,11 @@ async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
         if idx >= len(normalized):
             break
         fixed = normalized[idx]
+        if scene.is_locked or getattr(scene, "is_manually_edited", False):
+            if scene.asset_override is None:
+                ensure_scene_asset_override(scene)
+                repaired = True
+            continue
         new_narration = (fixed.get("narration") or "").strip()
         new_subtitle = (fixed.get("subtitle") or "").strip()
         if new_narration and (scene.narration or "").strip() != new_narration:
@@ -357,12 +389,19 @@ async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
 async def update_project(
     project_id: str, data: ProjectUpdate, db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Project).where(Project.id == project_id))
+    from backend.config import get_settings
+
+    result = await db.execute(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(selectinload(Project.video_settings))
+    )
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
     payload = data.model_dump(exclude_unset=True)
     expected = payload.pop("expected_version", None)
+    video_settings_payload = payload.pop("video_settings", None)
     cur_v = project.version or 1
     if expected is not None and expected != cur_v:
         fresh = await db.execute(
@@ -384,7 +423,16 @@ async def update_project(
             },
         )
     for field, value in payload.items():
+        if field == "settings":
+            value = sanitize_project_settings(value)
         setattr(project, field, value)
+    if video_settings_payload is not None:
+        row = apply_project_video_settings_update(
+            project,
+            ProjectVideoSettingsUpdate.model_validate(video_settings_payload),
+            get_settings(),
+        )
+        db.add(row)
     project.version = cur_v + 1
     await db.commit()
     await db.refresh(project)
@@ -409,6 +457,127 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Project not found")
     await db.delete(project)
     await db.commit()
+
+
+class DuplicateProjectBody(BaseModel):
+    title: str | None = None
+
+
+@router.post("/{project_id}/duplicate", response_model=ProjectOut, status_code=201)
+async def duplicate_project(
+    project_id: str,
+    body: DuplicateProjectBody | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    from backend.config import get_settings
+
+    source = await _load_project_with_related(db, project_id)
+    if not source:
+        raise HTTPException(404, "Project not found")
+
+    app_settings = get_settings()
+    duplicate = Project(
+        title=(body.title.strip() if body and body.title and body.title.strip() else f"{source.title} (Copy)"),
+        story_type=source.story_type,
+        script=source.script,
+        status="ready_for_edit" if source.scenes else "draft",
+        control_mode=source.control_mode,
+        settings=copy.deepcopy(sanitize_project_settings(source.settings)),
+    )
+    db.add(duplicate)
+    await db.flush()
+
+    if source.video_settings is not None:
+        duplicate.video_settings = ProjectVideoSettings(
+            project_id=duplicate.id,
+            video_style=copy.deepcopy(source.video_settings.video_style),
+            subtitles=copy.deepcopy(source.video_settings.subtitles),
+            audio=copy.deepcopy(source.video_settings.audio),
+        )
+    else:
+        ensure_project_video_settings_row(duplicate, app_settings)
+
+    duplicate_scene_map: dict[str, Scene] = {}
+    asset_id_map: dict[str, str] = {}
+    ordered_scenes = sorted(source.scenes, key=lambda s: s.order_index)
+    for scene in ordered_scenes:
+        duplicated_scene = Scene(
+            project_id=duplicate.id,
+            order_index=scene.order_index,
+            narration=scene.narration,
+            subtitle=scene.subtitle,
+            image_prompt=scene.image_prompt,
+            transition_type=scene.transition_type,
+            duration=scene.duration,
+            scene_type=scene.scene_type,
+            scene_settings=copy.deepcopy(scene.scene_settings),
+            is_locked=scene.is_locked,
+            is_manually_edited=getattr(scene, "is_manually_edited", False),
+            user_notes=scene.user_notes,
+            trim_start_sec=scene.trim_start_sec,
+            trim_end_sec=scene.trim_end_sec,
+        )
+        db.add(duplicated_scene)
+        await db.flush()
+        duplicate_scene_map[scene.id] = duplicated_scene
+
+        if scene.asset_override is not None:
+            duplicated_scene.asset_override = SceneAssetOverride(
+                scene_id=duplicated_scene.id,
+                manual_image_path=scene.asset_override.manual_image_path,
+                manual_audio_path=scene.asset_override.manual_audio_path,
+                manual_video_path=scene.asset_override.manual_video_path,
+                custom_transition=scene.asset_override.custom_transition,
+                custom_duration=scene.asset_override.custom_duration,
+                image_status=scene.asset_override.image_status,
+                audio_status=scene.asset_override.audio_status,
+                video_status=scene.asset_override.video_status,
+            )
+
+        for asset in scene.assets:
+            duplicated_asset = Asset(
+                scene_id=duplicated_scene.id,
+                type=asset.type,
+                file_path=asset.file_path,
+                provider=asset.provider,
+                metadata_=copy.deepcopy(asset.metadata_),
+                source=asset.source,
+                parent_asset_id=None,
+                is_active=asset.is_active,
+            )
+            db.add(duplicated_asset)
+            await db.flush()
+            asset_id_map[asset.id] = duplicated_asset.id
+
+    for scene in ordered_scenes:
+        duplicate_scene = duplicate_scene_map.get(scene.id)
+        if duplicate_scene is None:
+            continue
+        source_assets = sorted(scene.assets, key=lambda asset: asset.created_at)
+        duplicate_assets = sorted(duplicate_scene.assets, key=lambda asset: asset.created_at)
+        if len(source_assets) != len(duplicate_assets):
+            continue
+        for source_asset, duplicate_asset in zip(source_assets, duplicate_assets):
+            if source_asset.parent_asset_id:
+                duplicate_asset.parent_asset_id = asset_id_map.get(source_asset.parent_asset_id)
+
+    for asset in source.project_assets:
+        db.add(
+            ProjectAsset(
+                project_id=duplicate.id,
+                type=asset.type,
+                file_path=asset.file_path,
+                provider=asset.provider,
+                metadata_=copy.deepcopy(asset.metadata_),
+                source=asset.source,
+            )
+        )
+
+    await db.commit()
+    duplicated = await _load_project_with_related(db, duplicate.id)
+    assert duplicated is not None
+    await _attach_project_asset_urls(duplicated)
+    return duplicated
 
 
 @router.get("/{project_id}/video-settings", response_model=ProjectVideoSettingsOut)
@@ -465,6 +634,7 @@ async def add_scene(
         scene_type=data.scene_type,
         scene_settings=data.scene_settings,
         is_locked=data.is_locked,
+        is_manually_edited=data.is_manually_edited or bool(narration or subtitle or data.image_prompt),
         user_notes=data.user_notes,
         trim_start_sec=data.trim_start_sec,
         trim_end_sec=data.trim_end_sec,
@@ -487,7 +657,9 @@ async def update_scene(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Scene).where(Scene.id == scene_id, Scene.project_id == project_id)
+        select(Scene)
+        .where(Scene.id == scene_id, Scene.project_id == project_id)
+        .options(selectinload(Scene.assets), selectinload(Scene.asset_override))
     )
     scene = result.scalar_one_or_none()
     if not scene:
@@ -507,6 +679,7 @@ async def update_scene(
                 "current_version": cur_v,
             },
         )
+    before_spoken_text = _scene_spoken_text(scene)
     for field, value in payload.items():
         setattr(scene, field, value)
     # Keep narration/subtitle consistent so TTS always has recoverable spoken text.
@@ -517,6 +690,11 @@ async def update_scene(
             scene.narration = subtitle
         elif narration and not subtitle:
             scene.subtitle = narration
+    after_spoken_text = _scene_spoken_text(scene)
+    if "narration" in payload or "subtitle" in payload:
+        scene.is_manually_edited = True
+        if before_spoken_text != after_spoken_text:
+            _invalidate_scene_audio(scene)
     project.version = cur_v + 1
     await db.commit()
     result = await db.execute(
@@ -754,12 +932,18 @@ async def regenerate_scene_image(
     if not scene:
         raise HTTPException(404, "Scene not found")
 
-    proj_result = await db.execute(select(Project).where(Project.id == project_id))
-    project = proj_result.scalar_one_or_none()
-    if not project or not project.settings:
-        raise HTTPException(400, "Project or settings not found")
+    from backend.config import get_settings
 
-    settings = project.settings
+    proj_result = await db.execute(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(selectinload(Project.video_settings))
+    )
+    project = proj_result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(400, "Project not found")
+
+    settings = build_runtime_settings(project, get_settings())
     resolution = settings.get("resolution", "1080x1920")
     width, height = map(int, resolution.split("x"))
     ov = scene.scene_settings if isinstance(scene.scene_settings, dict) else {}

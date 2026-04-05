@@ -19,6 +19,7 @@ from backend.engine.planning import ResolvedGenerationSettings
 from backend.models import Project, Job
 from backend.schemas import GenerateVideoRequest, BatchGenerateRequest, JobOut
 from backend.core.task_manager import task_manager
+from backend.services.project_video_settings_service import apply_project_settings_snapshot
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -153,10 +154,11 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
         script=req.custom_script or (("\n\n".join(s.narration for s in req.scenes)) if req.scenes else None),
         status="generating",
         control_mode=req.control_mode,
-        settings=_settings_dump,
+        settings=None,
     )
     db.add(project)
     await db.flush()
+    apply_project_settings_snapshot(project, _settings_dump, get_settings())
 
     job = Job(
         project_id=project.id,

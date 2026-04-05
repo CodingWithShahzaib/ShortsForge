@@ -15,6 +15,7 @@ from backend.models import Asset, Scene
 from backend.services.audio_service import synthesize_speech
 from backend.services.image_service import DEFAULT_TEXT_NEGATIVE_PROMPT, generate_image
 from backend.services.overlay_service import resolve_overlay_file
+from backend.services.project_video_settings_service import ensure_scene_asset_override
 from backend.services.subtitle_service import (
     generate_ass_from_scene_texts,
     generate_subtitles_from_scene_audios,
@@ -133,6 +134,27 @@ async def _commit_scene_asset(
         await session.commit()
 
 
+async def _deactivate_scene_audio_assets(scene_model: Scene | None) -> str | None:
+    if not scene_model:
+        return None
+    active_audio_assets = [
+        asset for asset in scene_model.assets
+        if asset.type == "audio" and getattr(asset, "is_active", True)
+    ]
+    active_audio_assets.sort(
+        key=lambda asset: asset.created_at.timestamp() if asset.created_at else 0.0,
+        reverse=True,
+    )
+    previous_id = active_audio_assets[0].id if active_audio_assets else None
+    for asset in scene_model.assets:
+        if asset.type == "audio":
+            asset.is_active = False
+    override_row = ensure_scene_asset_override(scene_model)
+    override_row.manual_audio_path = None
+    override_row.audio_status = "ai_generated"
+    return previous_id
+
+
 async def _create_scene_clip_from_image(
     *,
     image_path_or_key: str,
@@ -157,6 +179,9 @@ async def _create_scene_clip_from_image(
         motion_effect=motion_effect,
         ken_burns_enabled=resolved_settings.ken_burns_enabled,
         ken_burns_zoom_percent=resolved_settings.ken_burns_zoom_percent,
+        breathing_enabled=resolved_settings.breathing_enabled,
+        breathing_amplitude=resolved_settings.breathing_amplitude,
+        breathing_speed=resolved_settings.breathing_speed,
     )
 
 
@@ -210,13 +235,29 @@ async def _prepare_scene_assets(
         await progress(f"Reusing audio for scene {idx + 1}")
     else:
         async with audio_sem:
-            audio_key = await synthesize_speech(sc.narration, tts_provider, tts_voice, save=True)
+            prev_id = await _deactivate_scene_audio_assets(scene_model)
+            audio_key = await synthesize_speech(
+                sc.narration,
+                tts_provider,
+                tts_voice,
+                resolved_settings.tts_speed,
+                save=True,
+                response_format=resolved_settings.tts_response_format,
+                normalization_options={"normalize": resolved_settings.tts_normalize},
+            )
         await progress(f"Audio for scene {idx + 1}")
         await _commit_scene_asset(
             session=session,
             db_lock=db_lock,
             scene_model=scene_model,
-            asset=Asset(scene_id=scene_model.id if scene_model else None, type="audio", file_path=audio_key),
+            asset=Asset(
+                scene_id=scene_model.id if scene_model else None,
+                type="audio",
+                file_path=audio_key,
+                source="ai_generated",
+                parent_asset_id=prev_id,
+                is_active=True,
+            ),
         )
         audio_path = await _ensure_local_file(audio_key, work_dir / "audio")
 
@@ -281,7 +322,16 @@ async def _render_scene_audio(
             audio_path = await _ensure_local_file(audio_asset.file_path, work_dir / "audio")
             await progress(f"Reusing audio for scene {idx + 1}")
         else:
-            audio_key = await synthesize_speech(sc.narration, tts_provider, tts_voice, save=True)
+            prev_id = await _deactivate_scene_audio_assets(scene_model)
+            audio_key = await synthesize_speech(
+                sc.narration,
+                tts_provider,
+                tts_voice,
+                resolved_settings.tts_speed,
+                save=True,
+                response_format=resolved_settings.tts_response_format,
+                normalization_options={"normalize": resolved_settings.tts_normalize},
+            )
             await progress(f"Audio for scene {idx + 1}")
             await _commit_scene_asset(
                 session=session,
@@ -292,6 +342,8 @@ async def _render_scene_audio(
                     type="audio",
                     file_path=audio_key,
                     source="ai_generated",
+                    parent_asset_id=prev_id,
+                    is_active=True,
                 ),
             )
             audio_path = await _ensure_local_file(audio_key, work_dir / "audio")
@@ -322,7 +374,10 @@ async def _render_scene_visual(
 ) -> str:
     async with visual_sem:
         existing_assets = list(scene_model.assets) if scene_model else []
-        transition = sc.transition or sc.transition_type or "fade"
+        transition = ffmpeg.resolve_scene_transition(
+            sc.transition or sc.transition_type or "fade",
+            scene_index=idx,
+        )
         motion_effect = None
         if resolved_settings.ken_burns_enabled:
             motion_effect = resolved_settings.ken_burns_motion
