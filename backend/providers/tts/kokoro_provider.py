@@ -39,6 +39,16 @@ def _voice_metadata_from_id(voice_id: str) -> tuple[str, str]:
     return VOICE_PREFIX_METADATA.get(prefix, ("", ""))
 
 
+def normalize_kokoro_voice_id(voice_id: str | None, fallback: str = "af_bella") -> str:
+    candidate = str(voice_id or "").strip()
+    if not candidate:
+        return fallback
+    prefix, sep, _ = candidate.partition("_")
+    if sep and prefix.lower() in VOICE_PREFIX_METADATA:
+        return candidate
+    return fallback
+
+
 class KokoroTTSProvider(TTSProvider):
     def __init__(self, base_url: str):
         self._base_url = base_url.rstrip("/")
@@ -54,10 +64,11 @@ class KokoroTTSProvider(TTSProvider):
         speed: float = 1.0,
         **kwargs: Any,
     ) -> bytes:
+        normalized_voice = normalize_kokoro_voice_id(voice)
         payload = {
             "model": kwargs.get("model", "kokoro"),
             "input": text,
-            "voice": voice,
+            "voice": normalized_voice,
             "response_format": kwargs.get("response_format", "mp3"),
             "speed": speed,
         }
@@ -70,7 +81,14 @@ class KokoroTTSProvider(TTSProvider):
                 f"{self._base_url}/v1/audio/speech",
                 json=payload,
             )
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = (resp.text or "").strip()
+                if detail:
+                    message = f"{exc}. Kokoro response: {detail[:300]}"
+                    raise httpx.HTTPStatusError(message, request=exc.request, response=exc.response) from exc
+                raise
             return resp.content
 
     async def list_voices(self) -> list[dict[str, str]]:

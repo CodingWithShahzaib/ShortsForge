@@ -39,9 +39,15 @@ export const ConceptFields = memo(function ConceptFields({
       role="tabpanel"
       id="content-panel-concept"
       aria-labelledby="content-tab-concept"
-      className="space-y-2"
+      className="space-y-3"
     >
-      <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 sm:p-3 space-y-2.5">
+      <div className="rounded-2xl border border-border/70 bg-background/45 p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Premise</p>
+            <p className="text-sm text-muted-foreground">Use one high-signal concept line. You can shape structure, pacing, visuals, and dialogue below.</p>
+          </div>
+        </div>
         <Field
           id="gen-title"
           applyIdToChild={false}
@@ -65,7 +71,7 @@ export const ConceptFields = memo(function ConceptFields({
               <Input
                 id="gen-title"
                 placeholder="e.g., 5 Mysterious Places on Earth..."
-                className={`h-10 text-sm ${showTitleError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+                className={`h-12 text-sm ${showTitleError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
                 {...titleField}
                 onBlur={(e) => {
                   void titleField.onBlur(e);

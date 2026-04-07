@@ -29,7 +29,7 @@ export function CreationActionBar({
   return (
     <div
       className={cn(
-        "sticky bottom-0 z-20 rounded-xl border border-border/70 bg-card/90 p-3 shadow-lg backdrop-blur supports-backdrop-filter:bg-card/75",
+        "sticky top-3 z-20 rounded-xl border border-border/70 bg-card/90 p-3 shadow-lg backdrop-blur supports-backdrop-filter:bg-card/75",
         className,
       )}
     >

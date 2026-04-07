@@ -682,11 +682,17 @@ function EditingView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* Actions — top toolbar */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/40 pb-3">
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-3 px-1 pb-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-foreground/90">Script & Storyboard</h2>
+          <p className="text-xs text-muted-foreground">Refine your story scenes before generating assets.</p>
+        </div>
+        
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
+            size="sm"
+            className="h-8"
             onClick={handleSave}
             loading={saving}
             loadingLabel="Saving…"
@@ -695,13 +701,14 @@ function EditingView({
             <Save className="h-4 w-4" />
             Save Changes
             {dirtySceneIds.length > 0 && (
-              <span className="ml-1 text-xs text-muted-foreground">
-                ({dirtySceneIds.length})
-              </span>
+              <span className="ml-1 text-xs text-muted-foreground">({dirtySceneIds.length})</span>
             )}
           </Button>
+          
           <Button
             variant="outline"
+            size="sm"
+            className="h-8"
             onClick={handleRecoverMissingNarration}
             loading={repairingNarration}
             loadingLabel="Recovering…"
@@ -709,55 +716,18 @@ function EditingView({
             title="Fill empty narration using subtitle fallback and script re-split"
           >
             <RefreshCw className="h-4 w-4" />
-            Recover Missing Narration
-            {missingNarrationCount > 0 && (
-              <span className="ml-1 text-xs text-muted-foreground">
-                ({missingNarrationCount})
-              </span>
-            )}
+            Recover Narration
+          </Button>
+
+          <Button variant="animated" size="sm" className="h-8" onClick={onNext}>
+            Continue to Visuals
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
-        <Button variant="animated" onClick={onNext}>
-          Continue to Visuals
-          <ArrowRight className="h-4 w-4" />
-        </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pt-4 pr-2">
-        <div className="flex flex-col gap-6 pb-4">
-          <div className="relative overflow-hidden rounded-2xl border border-border/50 bg-card/80 px-4 py-4 shadow-sm">
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-linear-to-b from-primary/10 via-transparent to-transparent" />
-            <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex rounded-full bg-primary/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                    Storyboard
-                  </span>
-                  <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-primary/15 px-2 text-xs font-bold text-primary">
-                    {scenes.length}
-                  </span>
-                </div>
-                <h2 className="mt-2 text-xl font-semibold tracking-tight">Shape the story before asset prep</h2>
-                <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                  Tighten narration, patch missing scene copy, and reorder beats so the engine gets a cleaner storyboard to work from.
-                </p>
-              </div>
-              <div className="grid grid-cols-3 gap-2 lg:min-w-[300px]">
-                <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Scenes</p>
-                  <p className="mt-1 text-sm font-semibold text-foreground">{scenes.length}</p>
-                </div>
-                <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Missing</p>
-                  <p className="mt-1 text-sm font-semibold text-foreground">{missingNarrationCount}</p>
-                </div>
-                <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Unsaved</p>
-                  <p className="mt-1 text-sm font-semibold text-foreground">{dirtySceneIds.length}</p>
-                </div>
-              </div>
-            </div>
-          </div>
+      <div className="min-h-0 flex-1 overflow-y-auto pt-2 pr-2">
+        <div className="flex flex-col gap-4 pb-4">
 
           {/* Scene list */}
           <div>

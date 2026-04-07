@@ -15,6 +15,11 @@ class SceneSpec:
     scene_type: str = "image"
     duration: float = 5.0
     scene_settings: dict[str, Any] = field(default_factory=dict)
+    speaker_id: str | None = None
+    shot_type: str = "medium"
+    is_reaction_shot: bool = False
+    character_references: dict[str, Any] = field(default_factory=dict)
+    voice_profile: str | None = None
     trim_start_sec: float = 0.0
     trim_end_sec: float = 0.0
 
@@ -33,6 +38,17 @@ class SceneSpec:
             scene_type=str(data.get("scene_type") or "image"),
             duration=float(data.get("duration") or 5.0),
             scene_settings=dict(scene_settings),
+            speaker_id=str(data.get("speaker_id") or scene_settings.get("speaker_id") or "") or None,
+            shot_type=str(data.get("shot_type") or scene_settings.get("shot_type") or "medium"),
+            is_reaction_shot=bool(
+                data.get("is_reaction_shot", scene_settings.get("is_reaction_shot", False))
+            ),
+            character_references=(
+                dict(data.get("character_references"))
+                if isinstance(data.get("character_references"), Mapping)
+                else dict(scene_settings.get("character_references") or {})
+            ),
+            voice_profile=str(data.get("voice_profile") or scene_settings.get("voice_profile") or "") or None,
             trim_start_sec=max(0.0, float(data.get("trim_start_sec") or 0.0)),
             trim_end_sec=max(0.0, float(data.get("trim_end_sec") or 0.0)),
         )

@@ -536,16 +536,17 @@ export default function AssetsStep({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <style>{`@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}`}</style>
 
-      {/* Studio actions — fixed at top */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/40 pb-3">
-        <Button variant="ghost" size="sm" className="gap-1.5" onClick={onBack}>
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Script
-        </Button>
+      {/* Minimal Header */}
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-3 px-1 pb-3 text-foreground/90 border-b border-border/20">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Asset Prep</h2>
+          <p className="text-xs text-muted-foreground">Generate, upload, or review image and audio assets.</p>
+        </div>
+
         <div className="flex flex-wrap items-center justify-end gap-2">
           {mode === "pre" && (
-            <Button variant="animated" size="lg" className="gap-2 px-6" onClick={onStartGeneration}>
-              <Sparkles className="h-4 w-4" />
+            <Button variant="animated" size="sm" className="h-8 gap-2 px-4" onClick={onStartGeneration}>
+              <Sparkles className="h-3.5 w-3.5" />
               Prepare All Assets
             </Button>
           )}
@@ -554,21 +555,21 @@ export default function AssetsStep({
           )}
           {mode === "partial" && (
             <Button
-              variant="animated"
-              size="lg"
-              className="gap-2 px-6"
-              loading={pipelineBusy}
-              loadingLabel="Resuming…"
-              onClick={onStartGeneration}
+               variant="animated"
+               size="sm"
+               className="h-8 gap-2 px-4"
+               loading={pipelineBusy}
+               loadingLabel="Resuming…"
+               onClick={onStartGeneration}
             >
-              <RefreshCw className="h-4 w-4" />
-              Resume asset prep
+              <RefreshCw className="h-3.5 w-3.5" />
+               Resume asset prep
             </Button>
           )}
           {mode === "review" && (
-            <Button variant="animated" className="gap-1.5" onClick={onNext}>
-              Continue to Arrange
-              <ArrowRight className="h-3.5 w-3.5" />
+            <Button variant="animated" size="sm" className="h-8 gap-1.5 px-4" onClick={onNext}>
+               Continue to Arrange
+               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
           )}
         </div>
@@ -576,34 +577,6 @@ export default function AssetsStep({
 
       {/* Scrollable content: only this region scrolls */}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-3 pr-1">
-        <div className="mb-3 rounded-xl border border-border/50 bg-card/80 px-3.5 py-3 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="inline-flex rounded-full bg-primary/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                Assets
-              </div>
-              <h2 className="mt-2 text-lg font-semibold tracking-tight">Prepare visuals and voice for every scene</h2>
-              <p className="mt-1 max-w-2xl text-xs text-muted-foreground sm:text-sm">
-                Generate, upload, or review image and audio assets here before moving into timing and final compile.
-              </p>
-            </div>
-            <div className="grid grid-cols-3 gap-2 lg:min-w-[320px]">
-              <div className="rounded-lg border border-border/50 bg-background/70 px-2.5 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Scenes</p>
-                <p className="mt-1 text-sm font-semibold text-foreground">{scenes.length}</p>
-              </div>
-              <div className="rounded-lg border border-border/50 bg-background/70 px-2.5 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Images ready</p>
-                <p className="mt-1 text-sm font-semibold text-foreground">{withImage}</p>
-              </div>
-              <div className="rounded-lg border border-border/50 bg-background/70 px-2.5 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Audio ready</p>
-                <p className="mt-1 text-sm font-semibold text-foreground">{withAudio}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {mode === "pre" && <PreGenerationView scenes={scenes} />}
 
         {mode === "generating" && (

@@ -81,7 +81,7 @@ function ClientLayoutInner({ children }: { children: React.ReactNode }) {
         scene_count: s.default_scene_count ?? 5,
         scene_narration_style: s.default_scene_narration_style ?? "balanced",
         subtitle_enabled: s.default_subtitle_enabled ?? true,
-        subtitle_source: s.default_subtitle_source ?? "llm",
+        subtitle_source: s.default_subtitle_source ?? "transcription",
         generate_subtitles: s.default_generate_subtitles ?? true,
         transcription_provider: s.default_transcription_provider ?? "openai",
         transcription_language: s.default_transcription_language ?? "en",

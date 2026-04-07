@@ -35,6 +35,8 @@ import ScriptStep from "@/components/studio/ScriptStep";
 import AssetsStep from "@/components/studio/AssetsStep";
 import ArrangeStep from "@/components/studio/ArrangeStep";
 import CompileStep from "@/components/studio/CompileStep";
+import { CharactersTab } from "@/components/studio/CharactersTab";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const STEPS = [
   { label: "Script", description: "Create and edit your story", icon: <FileText className="h-4 w-4" /> },
@@ -163,6 +165,7 @@ export default function StudioPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState(0);
+  const [studioView, setStudioView] = useState<"studio" | "characters">("studio");
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [direction, setDirection] = useState(0);
 
@@ -923,29 +926,38 @@ export default function StudioPage() {
   );
 
   return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
+    <Tabs
+      value={studioView}
+      onValueChange={(value) => setStudioView(value === "characters" ? "characters" : "studio")}
+      className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm"
+    >
       <StudioHeader
         projectTitle={project.title || "Untitled"}
-        currentStep={currentStep + 1}
-        totalSteps={STEPS.length}
-        stepLabel={STEPS[currentStep]?.label}
+        currentStep={studioView === "characters" ? 1 : currentStep + 1}
+        totalSteps={studioView === "characters" ? 1 : STEPS.length}
+        stepLabel={studioView === "characters" ? "Characters" : STEPS[currentStep]?.label}
         stepStatus={stepperStatus}
         projectStatus={project.status}
         onSaveDraft={handleSaveDraft}
         onResumeDraft={draftInfo ? handleResumeDraft : undefined}
         draftSavedAt={draftInfo?.savedAt ?? null}
         onClose={() => router.push(`/projects/${projectId}`)}
+        centerNav={
+          <TabsList className="h-8">
+            <TabsTrigger value="studio" className="px-3 text-xs">Studio</TabsTrigger>
+            <TabsTrigger value="characters" className="px-3 text-xs">Characters</TabsTrigger>
+          </TabsList>
+        }
       />
 
-      <div className="relative z-10 grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-rows-1 md:grid-cols-[240px_minmax(0,1fr)]">
-        {/* ── Unified stepper rail (responsive) ── */}
-        <aside className="flex w-full shrink-0 flex-col border-b border-border/15 md:w-auto md:border-b-0 md:border-r md:border-border/10">
-          <div className="flex-1 px-3 py-2 md:px-2.5 md:py-5">
+      <TabsContent value="studio" className="relative z-10 mt-0 h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=active]:flex">
+        <div className="shrink-0 border-b border-border/15 bg-card/40 px-4 py-2 sm:px-6 md:py-2.5 flex justify-center">
+          <div className="w-full max-w-3xl">
             <StudioStepper
               currentStep={currentStep}
               steps={STEPS}
               completedSteps={completedSteps}
-              variant="adaptive"
+              variant="horizontal"
               activeStatus={stepperStatus}
               stepErrors={stepErrors}
               stepHints={stepHints}
@@ -957,16 +969,8 @@ export default function StudioPage() {
               }}
             />
           </div>
-          <div className="hidden px-4 pb-3 md:block">
-            <div className="flex items-center gap-2 text-[8px] font-mono text-muted-foreground/20 uppercase tracking-[0.2em]">
-              <span className="h-px flex-1 bg-border/15" />
-              ShortsForge
-              <span className="h-px flex-1 bg-border/15" />
-            </div>
-          </div>
-        </aside>
+        </div>
 
-        {/* Step content fills main; individual steps own scroll regions (e.g. Assets grid). */}
         <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 pb-6 sm:px-5 md:px-6 lg:px-8 md:pt-5">
             {showRecoveryBanner && (
@@ -981,7 +985,17 @@ export default function StudioPage() {
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{stepContent}</div>
           </div>
         </main>
-      </div>
-    </div>
+      </TabsContent>
+
+      <TabsContent value="characters" className="relative z-10 mt-0 h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=active]:flex">
+        <CharactersTab
+          project={project}
+          scenes={scenes}
+          onRefresh={() => {
+            refreshProject();
+          }}
+        />
+      </TabsContent>
+    </Tabs>
   );
 }

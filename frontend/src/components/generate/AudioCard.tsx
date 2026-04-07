@@ -56,6 +56,8 @@ type Props = {
   uploadingMusic: boolean;
   onVoicePreview: () => void;
   onMusicUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  /** When true the voice selector is relabelled as narrator/fallback and a context banner is shown. */
+  isDialogueMode?: boolean;
 };
 
 export const AudioCard = memo(function AudioCard({
@@ -66,6 +68,7 @@ export const AudioCard = memo(function AudioCard({
   uploadingMusic,
   onVoicePreview,
   onMusicUpload,
+  isDialogueMode = false,
 }: Props) {
   const {
     control,
@@ -211,134 +214,150 @@ export const AudioCard = memo(function AudioCard({
   };
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-sm font-medium mb-1 block">Voice engine</label>
-          <div className="flex h-10 items-center rounded-md border border-input bg-muted/30 px-3 text-sm">
-            Kokoro TTS (Docker)
-          </div>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Provider is fixed to `{activeTtsProvider}` for now.
-          </p>
-          <Controller
-            control={control}
-            name="tts_provider"
-            render={({ field }) => <input type="hidden" value={field.value} onChange={field.onChange} />}
-          />
-        </div>
-        <div>
-          <label className="text-sm font-medium mb-1 flex items-center gap-2">
-            Kokoro voice expression
-            {ttsVoice && !prefersReducedMotion() ? (
-              <span className="inline-flex h-3.5 items-end gap-0.5" aria-hidden title="Voice selected">
-                {[0, 1, 2, 3].map((i) => (
-                  <span
-                    key={i}
-                    className="w-0.5 rounded-sm bg-primary/80 animate-pulse"
-                    style={{ animationDelay: `${i * 0.15}s`, height: `${40 + i * 15}%` }}
-                  />
-                ))}
-              </span>
-            ) : null}
-          </label>
-          <div className="flex min-w-0 gap-2">
-            <div className="min-w-0 flex-1">
-              <Controller
-                control={control}
-                name="tts_voice"
-                render={({ field }) => (
-                  <Select value={selectedPresetVoice} onValueChange={field.onChange}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Browse Kokoro voices" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {voices.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>
-                          <div className="flex min-w-0 items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate">{v.name}</div>
-                              <div className="truncate text-xs text-muted-foreground">{v.id}</div>
-                            </div>
-                            {voiceMetaLabel(v) ? (
-                              <div className="shrink-0 text-xs text-muted-foreground">{voiceMetaLabel(v)}</div>
-                            ) : null}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="icon"
-              className="shrink-0"
-              type="button"
-              onClick={onVoicePreview}
-              disabled={previewingVoice}
-              title="Preview voice"
-            >
-              {previewingVoice ? (
-                <div className="h-4 w-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Headphones className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
-          {showError("tts_voice") ? (
-            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.tts_voice?.message}</p>
-          ) : (
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Browse all Kokoro voices in the dropdown with readable names, IDs, and inferred locale/gender.
+    <div className="space-y-4">
+      {!isDialogueMode ? (
+        <>
+          <div className="rounded-2xl bg-background/35 p-4 ring-1 ring-border/30">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Voice stack
             </p>
-          )}
-        </div>
-      </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+              <div className="rounded-xl bg-background/55 p-3 ring-1 ring-border/20">
+                <label className="text-sm font-medium mb-1 block">Voice engine</label>
+                <div className="flex h-10 items-center rounded-md border border-input bg-muted/30 px-3 text-sm">
+                  Kokoro TTS (Docker)
+                </div>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Provider is fixed to `{activeTtsProvider}` for now.
+                </p>
+                <Controller
+                  control={control}
+                  name="tts_provider"
+                  render={({ field }) => <input type="hidden" value={field.value} onChange={field.onChange} />}
+                />
+              </div>
+              <div className="rounded-xl bg-background/55 p-3 ring-1 ring-border/20">
+                <label className="text-sm font-medium mb-1 flex items-center gap-2">
+                  Kokoro voice expression
+                  {ttsVoice && !prefersReducedMotion() ? (
+                    <span className="inline-flex h-3.5 items-end gap-0.5" aria-hidden title="Voice selected">
+                      {[0, 1, 2, 3].map((i) => (
+                        <span
+                          key={i}
+                          className="w-0.5 rounded-sm bg-primary/80 animate-pulse"
+                          style={{ animationDelay: `${i * 0.15}s`, height: `${40 + i * 15}%` }}
+                        />
+                      ))}
+                    </span>
+                  ) : null}
+                </label>
+                <div className="flex min-w-0 gap-2">
+                  <div className="min-w-0 flex-1">
+                    <Controller
+                      control={control}
+                      name="tts_voice"
+                      render={({ field }) => (
+                        <Select value={selectedPresetVoice} onValueChange={field.onChange}>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Browse Kokoro voices" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {voices.map((v) => (
+                              <SelectItem key={v.id} value={v.id}>
+                                <div className="flex min-w-0 items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="truncate">{v.name}</div>
+                                    <div className="truncate text-xs text-muted-foreground">{v.id}</div>
+                                  </div>
+                                  {voiceMetaLabel(v) ? (
+                                    <div className="shrink-0 text-xs text-muted-foreground">{voiceMetaLabel(v)}</div>
+                                  ) : null}
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    type="button"
+                    onClick={onVoicePreview}
+                    disabled={previewingVoice}
+                    title="Preview voice"
+                  >
+                    {previewingVoice ? (
+                      <div className="h-4 w-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Headphones className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+                {showError("tts_voice") ? (
+                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.tts_voice?.message}</p>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Browse all Kokoro voices in the dropdown with readable names, IDs, and inferred locale/gender.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <div>
-          <label className="text-sm font-medium mb-1 block">Speech speed</label>
-          <Input type="number" min={0.5} max={2} step={0.05} {...register("tts_speed", { valueAsNumber: true })} />
-        </div>
-        <div>
-          <label className="text-sm font-medium mb-1 block">Audio format</label>
-          <Controller
-            control={control}
-            name="tts_response_format"
-            render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Format" />
-                </SelectTrigger>
-                <SelectContent>
-                  {["mp3", "wav", "opus", "flac", "m4a"].map((format) => (
-                    <SelectItem key={format} value={format}>
-                      {format.toUpperCase()}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
-        </div>
-        <label className="flex items-start gap-2 text-sm font-medium pt-7">
-          <input type="checkbox" className="rounded" {...register("tts_normalize")} />
-          <span>
-            Normalize text
-            <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
-              Turn this off if Kokoro is over-normalizing unusual names or formatting.
-            </span>
-          </span>
-        </label>
-      </div>
+          <div className="rounded-2xl bg-background/35 p-4 ring-1 ring-border/30">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Voice shaping
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded-xl bg-background/55 p-3 ring-1 ring-border/20">
+                <label className="text-sm font-medium mb-1 block">Speech speed</label>
+                <Input type="number" min={0.5} max={2} step={0.05} {...register("tts_speed", { valueAsNumber: true })} />
+              </div>
+              <div className="rounded-xl bg-background/55 p-3 ring-1 ring-border/20">
+                <label className="text-sm font-medium mb-1 block">Audio format</label>
+                <Controller
+                  control={control}
+                  name="tts_response_format"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Format" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["mp3", "wav", "opus", "flac", "m4a"].map((format) => (
+                          <SelectItem key={format} value={format}>
+                            {format.toUpperCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <label className="rounded-xl bg-background/55 p-3 text-sm font-medium ring-1 ring-border/20">
+                <span className="flex items-start gap-2">
+                  <input type="checkbox" className="mt-1 rounded" {...register("tts_normalize")} />
+                  <span>
+                    Normalize text
+                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                      Turn this off if Kokoro is over-normalizing unusual names or formatting.
+                    </span>
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </>
+      ) : null}
 
-      <div>
+      <div className="rounded-2xl bg-background/35 p-4 ring-1 ring-border/30">
         <label className="text-sm font-medium mb-1 flex items-center gap-1">
           <Music className="h-4 w-4" /> Background Music
         </label>
-        <div className="flex gap-2">
+        <div className="mt-3 flex gap-2">
           <Controller
             control={control}
             name="background_music"
@@ -425,7 +444,7 @@ export const AudioCard = memo(function AudioCard({
           </label>
         </div>
         {backgroundMusic ? (
-          <div className="mt-2">
+          <div className="mt-3 rounded-xl bg-background/55 p-3 ring-1 ring-border/20">
             <Controller
               control={control}
               name="background_music_volume"

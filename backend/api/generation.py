@@ -13,13 +13,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
+from backend.core.prompts.dialogue_prompts import build_dialogue_scene_prompt
 from backend.core.storage import build_key, get_storage, guess_content_type, local_path_for
 from backend.database import get_db
 from backend.engine.planning import ResolvedGenerationSettings
-from backend.models import Project, Job
-from backend.schemas import GenerateVideoRequest, BatchGenerateRequest, JobOut
+from backend.models import Job, Project, Scene
+from backend.schemas import (
+    BatchGenerateRequest,
+    CharacterConfig,
+    DialogueSceneInput,
+    DialogueVideoRequest,
+    GenerateVideoRequest,
+    JobOut,
+)
 from backend.core.task_manager import task_manager
 from backend.services.project_video_settings_service import apply_project_settings_snapshot
+from backend.services.script_service import sanitize_speaker_tagged_dialogue
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -65,6 +74,203 @@ def _job_to_out(job: Job) -> JobOut:
         completed_at=job.completed_at,
         created_at=job.created_at,
     )
+
+
+STYLE_PRESET_SETTINGS: dict[str, dict[str, Any]] = {
+    "comic_book": {
+        "image_style": "comic_book",
+        "negative_prompt": (
+            "photorealistic, 3d render, blurry, soft edges, watercolor, "
+            "washed colors, weak outlines, text, letters, signature, watermark"
+        ),
+        "transition": "crossfade",
+    },
+    "political_cartoon": {
+        "image_style": "comic_book",
+        "negative_prompt": (
+            "photorealistic, 3d render, blurry, soft edges, painterly wash, "
+            "watermark, text, typography, logo"
+        ),
+        "transition": "crossfade",
+    },
+    "graphic_novel": {
+        "image_style": "comic_book",
+        "negative_prompt": (
+            "photorealistic, 3d render, blurry, low contrast, watercolor, "
+            "logo, text, letters, signature"
+        ),
+        "transition": "crossfade",
+    },
+    "anime": {
+        "image_style": "anime",
+        "negative_prompt": (
+            "photorealistic, 3d render, muddy shading, distorted anatomy, "
+            "grainy realism, text, watermark"
+        ),
+        "transition": "crossfade",
+    },
+    "photorealistic": {
+        "image_style": "realistic",
+        "negative_prompt": (
+            "cartoon stylization, comic-book outlines, cel shading, exaggerated anatomy, "
+            "watermark, text, logo"
+        ),
+        "transition": "crossfade",
+    },
+    "documentary": {
+        "image_style": "realistic",
+        "negative_prompt": (
+            "fantasy stylization, comic-book outlines, glossy studio glam lighting, "
+            "watermark, text, logo"
+        ),
+        "transition": "crossfade",
+    },
+    "cinematic": {
+        "image_style": "cinematic",
+        "negative_prompt": (
+            "flat lighting, cartoon simplification, blurry details, oversaturated colors, "
+            "text, watermark, logo"
+        ),
+        "transition": "crossfade",
+    },
+    "cinematic_noir": {
+        "image_style": "cinematic",
+        "negative_prompt": (
+            "flat daylight lighting, cheerful pastel palette, washed blacks, soft low-contrast image, "
+            "text, watermark, logo"
+        ),
+        "transition": "crossfade",
+    },
+    "epic_blockbuster": {
+        "image_style": "cinematic",
+        "negative_prompt": (
+            "small-scale staging, dull lighting, low contrast, casual snapshot framing, "
+            "text, watermark, logo"
+        ),
+        "transition": "crossfade",
+    },
+    "watercolor": {
+        "image_style": "watercolor",
+        "negative_prompt": (
+            "photorealistic, hard 3d render, heavy comic outlines, muddy pigment, "
+            "text, watermark, signature"
+        ),
+        "transition": "crossfade",
+    },
+}
+
+
+def build_character_prompt(
+    scene_text: str,
+    character: CharacterConfig,
+    shot_type: str,
+    base_style: str,
+) -> str:
+    prompt = build_dialogue_scene_prompt(
+        character=character,
+        dialogue_line=scene_text,
+        shot_type=shot_type,
+        preset=base_style,
+    )
+    return (
+        f"{prompt}, {base_style.replace('_', ' ')}, "
+        "consistent character design, same face, same outfit, same silhouette"
+    )
+
+
+def _dialogue_style_settings(preset: str) -> dict[str, Any]:
+    return STYLE_PRESET_SETTINGS.get(preset, STYLE_PRESET_SETTINGS["comic_book"])
+
+
+def _parse_dialogue_script(
+    script: str,
+    characters: list[CharacterConfig],
+) -> list[DialogueSceneInput]:
+    cleaned_script = sanitize_speaker_tagged_dialogue(script or "")
+    lines = [line.strip() for line in cleaned_script.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(400, "Dialogue script is empty.")
+
+    character_by_name = {character.name.strip().lower(): character for character in characters}
+    ordered_ids = [character.id for character in characters]
+    dialogue_scenes: list[DialogueSceneInput] = []
+
+    for index, raw_line in enumerate(lines):
+        speaker_id: str | None = None
+        narration = raw_line
+        if ":" in raw_line:
+            maybe_speaker, maybe_text = raw_line.split(":", 1)
+            speaker = character_by_name.get(maybe_speaker.strip().lower())
+            if speaker is not None:
+                speaker_id = speaker.id
+                narration = maybe_text.strip()
+        if speaker_id is None:
+            speaker_id = ordered_ids[index % len(ordered_ids)]
+        dialogue_scenes.append(
+            DialogueSceneInput(
+                speaker_id=speaker_id,
+                narration=narration.strip(),
+                shot_type="medium",
+                transition="crossfade",
+            )
+        )
+    return dialogue_scenes
+
+
+def _build_dialogue_scene_payloads(payload: DialogueVideoRequest) -> list[dict[str, Any]]:
+    if not payload.characters:
+        raise HTTPException(400, "At least two characters are required for dialogue videos.")
+
+    style_settings = _dialogue_style_settings(payload.dialogue_style_preset)
+    resolved_transition = payload.transition or style_settings["transition"]
+    characters_by_id = {character.id: character for character in payload.characters}
+    raw_scenes = payload.dialogue_scenes or _parse_dialogue_script(payload.custom_script or "", payload.characters)
+    built_scenes: list[dict[str, Any]] = []
+
+    for scene_index, scene in enumerate(raw_scenes):
+        speaker = (
+            characters_by_id.get(scene.speaker_id or "")
+            or payload.characters[scene_index % len(payload.characters)]
+        )
+        shot_type = "reaction" if scene.is_reaction_shot else scene.shot_type or payload.default_shot_type
+        subtitle = scene.subtitle or scene.narration
+        speaker_prefix = f"{speaker.name}:"
+        if payload.speaker_labels_in_subtitles and not subtitle.strip().lower().startswith(speaker_prefix.lower()):
+            subtitle = f"{speaker.name}: {subtitle}"
+        image_prompt = build_character_prompt(
+            scene_text=scene.narration,
+            character=speaker,
+            shot_type=shot_type,
+            base_style=payload.dialogue_style_preset,
+        )
+        built_scenes.append(
+            {
+                "narration": scene.narration,
+                "subtitle": subtitle,
+                "image_prompt": image_prompt,
+                "transition": resolved_transition if not payload.dialogue_scenes else (scene.transition or resolved_transition),
+                "duration": scene.duration or (
+                    payload.reaction_shot_duration if scene.is_reaction_shot else payload.scene_duration
+                ),
+                "scene_type": "dialogue",
+                "speaker_id": speaker.id,
+                "shot_type": shot_type,
+                "is_reaction_shot": scene.is_reaction_shot,
+                "scene_settings": {
+                    "speaker_id": speaker.id,
+                    "speaker_name": speaker.name,
+                    "shot_type": shot_type,
+                    "is_reaction_shot": scene.is_reaction_shot,
+                    "voice_profile": speaker.voice_profile,
+                    "character_references": {
+                        "reference_image_url": speaker.reference_image_url,
+                        "color_palette": speaker.color_palette,
+                    },
+                    "negative_prompt": style_settings["negative_prompt"],
+                },
+            }
+        )
+    return built_scenes
 
 
 async def _delete_final_videos_for_recompile(project_id: str, db: AsyncSession) -> None:
@@ -175,7 +381,7 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
         scenes_payload = [
             {
                 "narration": s.narration,
-                "subtitle": s.narration or s.subtitle,
+                "subtitle": s.subtitle or s.narration,
                 "image_prompt": s.image_prompt,
                 "transition": s.transition,
                 "duration": s.duration,
@@ -186,6 +392,94 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
         "project_id": project.id,
         "job_id": job.id,
         "scenes": scenes_payload,
+        "settings": _settings_dump,
+        "prepare_only": target_stage == "assets",
+        "storyboard_only": target_stage == "storyboard",
+        "pipeline_mode": pipeline_mode,
+        "target_stage": target_stage,
+    }
+
+    async def _do_render():
+        from backend.core.job_registry import handle_video_render
+        return await handle_video_render(redis_params)
+
+    await task_manager.submit_to_redis(
+        job.id, "video_render", redis_params, fallback_coro=_do_render,
+    )
+    return job
+
+
+@router.post("/video-with-characters", response_model=JobOut)
+async def generate_dialogue_video(
+    req: DialogueVideoRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    pipeline_mode, target_stage = _resolve_pipeline_intent(req)
+    scenes_payload = _build_dialogue_scene_payloads(req)
+    style_settings = _dialogue_style_settings(req.dialogue_style_preset)
+    resolved_image_style = req.image_style or style_settings["image_style"]
+    resolved_transition = req.transition or style_settings["transition"]
+    _settings_dump = _resolve_generation_settings(req)
+    _settings_dump.update(
+        {
+            "generation_mode": "dialogue",
+            "characters": [character.model_dump() for character in req.characters],
+            "character_consistency_enabled": req.character_consistency_enabled,
+            "dialogue_style_preset": req.dialogue_style_preset,
+            "default_shot_type": req.default_shot_type,
+            "pause_between_speakers_ms": req.pause_between_speakers_ms,
+            "reaction_shot_duration": req.reaction_shot_duration,
+            "speaker_labels_in_subtitles": req.speaker_labels_in_subtitles,
+            "image_style": resolved_image_style,
+            "transition": resolved_transition,
+            "inter_scene_pause_ms": req.pause_between_speakers_ms,
+            # Dialogue reads cleaner when speaker turns never overlap caption timing.
+            "transition_overlap_ms": 0,
+        }
+    )
+
+    project = Project(
+        title=req.title or "Dialogue Video",
+        story_type=req.story_type,
+        script=req.custom_script,
+        status="generating",
+        control_mode=req.control_mode,
+        settings=None,
+    )
+    db.add(project)
+    await db.flush()
+    apply_project_settings_snapshot(project, _settings_dump, get_settings())
+
+    for order_index, scene in enumerate(scenes_payload):
+        db.add(
+            Scene(
+                project_id=project.id,
+                order_index=order_index,
+                narration=scene["narration"],
+                subtitle=scene["subtitle"],
+                image_prompt=scene["image_prompt"],
+                transition_type=scene["transition"],
+                duration=float(scene["duration"] or req.scene_duration),
+                scene_type=scene["scene_type"],
+                scene_settings=scene["scene_settings"],
+                is_manually_edited=False,
+            )
+        )
+
+    job = Job(
+        project_id=project.id,
+        type="video_render",
+        status="queued",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    redis_params = {
+        "project_id": project.id,
+        "job_id": job.id,
+        "scenes": None,
         "settings": _settings_dump,
         "prepare_only": target_stage == "assets",
         "storyboard_only": target_stage == "storyboard",

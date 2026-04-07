@@ -15,9 +15,9 @@ type Props = {
 
 function Stat({ k, v }: { k: string; v: string | number }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-background/40 px-2.5 py-1.5">
-      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{k}</span>
-      <span className="text-xs font-medium tabular-nums text-foreground">{v}</span>
+    <div className="flex flex-col gap-1 rounded-xl bg-background/45 px-3 py-2 ring-1 ring-border/35">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{k}</span>
+      <span className="text-sm font-semibold tabular-nums text-foreground">{v}</span>
     </div>
   );
 }
@@ -46,6 +46,7 @@ function Chip({
 
 export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control, variant = "default" }: Props) {
   const resolution = useWatch({ control, name: "resolution" });
+  const generation_mode = useWatch({ control, name: "generation_mode" });
   const scene_count = useWatch({ control, name: "scene_count" });
   const dynamic_scenes = useWatch({ control, name: "dynamic_scenes" });
   const scene_duration = useWatch({ control, name: "scene_duration" });
@@ -55,30 +56,43 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
   const subtitle_enabled = useWatch({ control, name: "subtitle_enabled" });
   const match_scenes_to_audio = useWatch({ control, name: "match_scenes_to_audio" });
   const use_production_storyboard = useWatch({ control, name: "use_production_storyboard" });
+  const dialogue_style_preset = useWatch({ control, name: "dialogue_style_preset" });
+  const dialogue_characters = useWatch({ control, name: "dialogue_characters" });
+  const pause_between_speakers_ms = useWatch({ control, name: "pause_between_speakers_ms" });
+  const generationModeLabel = generation_mode === "dialogue" ? "Dialogue" : "Standard";
+  const dialogueStyleLabel =
+    typeof dialogue_style_preset === "string" && dialogue_style_preset.trim()
+      ? dialogue_style_preset.replace(/_/g, " ")
+      : "comic book";
 
   const totalDuration = Math.max(1, Math.round(scene_count * scene_duration));
   const estRuntimeMin = Math.max(1, Math.round(totalDuration / 20));
   const riskyCombo = !dynamic_scenes && scene_count >= 10 && scene_duration >= 6;
+  const characterCount = Array.isArray(dialogue_characters) ? dialogue_characters.length : 0;
   const sceneDisplay = dynamic_scenes ? "AI decides" : scene_count;
   const sceneDurationDisplay = dynamic_scenes ? "Adaptive" : `${scene_duration}s`;
   const totalDurationDisplay = dynamic_scenes ? "Variable" : `~${totalDuration}s`;
   const estRuntimeDisplay = dynamic_scenes ? "Variable" : `~${estRuntimeMin} min`;
+  const subtitleSourceLabel = "Audio transcription";
+  const dialogueSceneDisplay = `${scene_duration}s base scenes`;
+  const dialogueRenderDisplay = match_scenes_to_audio ? "Audio-synced pacing" : "Fixed pacing";
+  const dialoguePauseDisplay = `${pause_between_speakers_ms}ms speaker pause`;
 
   if (variant === "strip") {
     return (
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <Chip>{resolution}</Chip>
-          <Chip>
-            {dynamic_scenes ? `AI scenes × ${scene_duration}s target` : `${scene_count} scenes × ${scene_duration}s`}
-          </Chip>
-          <Chip>{scene_narration_style} scene copy</Chip>
-          <Chip>{totalDurationDisplay} video</Chip>
-          <Chip>{estRuntimeDisplay} render</Chip>
+          <Chip>{generationModeLabel} mode</Chip>
+          <Chip>{generation_mode === "dialogue" ? dialogueSceneDisplay : (dynamic_scenes ? `AI scenes × ${scene_duration}s target` : `${scene_count} scenes × ${scene_duration}s`)}</Chip>
+          <Chip>{generation_mode === "dialogue" ? dialogueRenderDisplay : `${scene_narration_style} scene copy`}</Chip>
+          <Chip>{generation_mode === "dialogue" ? dialoguePauseDisplay : totalDurationDisplay}</Chip>
+          <Chip>{generation_mode === "dialogue" ? subtitleSourceLabel : estRuntimeDisplay}</Chip>
           <Chip className="max-w-44 truncate sm:max-w-none" title={String(image_provider)}>
             {toFriendlyProvider(image_provider)}
           </Chip>
           <Chip>{toFriendlyProvider(tts_provider)}</Chip>
+          {generation_mode === "dialogue" ? <Chip>{characterCount} characters</Chip> : null}
         </div>
         <div className="flex flex-wrap gap-1 border-t border-border/50 pt-2">
           {riskyCombo ? <Badge variant="destructive">May take longer</Badge> : null}
@@ -86,6 +100,7 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
           {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
           {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
           {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
+          {generation_mode === "dialogue" ? <Badge variant="outline">{dialogueStyleLabel}</Badge> : null}
         </div>
       </div>
     );
@@ -97,13 +112,15 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Current settings</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           <Stat k="Resolution" v={resolution} />
-          <Stat k="Scenes" v={sceneDisplay} />
+          <Stat k="Mode" v={generationModeLabel} />
+          <Stat k="Scenes" v={generation_mode === "dialogue" ? `${characterCount} speakers` : sceneDisplay} />
           <Stat k="Scene duration" v={sceneDurationDisplay} />
-          <Stat k="Scene copy" v={scene_narration_style} />
-          <Stat k="~Video length" v={totalDurationDisplay} />
-          <Stat k="~Gen time" v={estRuntimeDisplay} />
+          <Stat k={generation_mode === "dialogue" ? "Scene pacing" : "Scene copy"} v={generation_mode === "dialogue" ? dialoguePauseDisplay : scene_narration_style} />
+          <Stat k={generation_mode === "dialogue" ? "Caption source" : "~Video length"} v={generation_mode === "dialogue" ? subtitleSourceLabel : totalDurationDisplay} />
+          <Stat k={generation_mode === "dialogue" ? "Render rhythm" : "~Gen time"} v={generation_mode === "dialogue" ? dialogueRenderDisplay : estRuntimeDisplay} />
           <Stat k="Image" v={toFriendlyProvider(image_provider)} />
           <Stat k="Voice" v={toFriendlyProvider(tts_provider)} />
+          {generation_mode === "dialogue" ? <Stat k="Characters" v={characterCount} /> : null}
         </div>
         <div className="flex flex-wrap gap-1.5">
           {riskyCombo ? <Badge variant="destructive">May take longer</Badge> : null}
@@ -111,52 +128,34 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
           {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
           {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
           {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
+          {generation_mode === "dialogue" ? <Badge variant="outline">{dialogueStyleLabel}</Badge> : null}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="text-sm space-y-2 text-slate-500 dark:text-slate-400">
-      <div className="flex justify-between">
-        <span>Resolution</span>
-        <span className="text-slate-900 dark:text-slate-100">{resolution}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Scenes</span>
-        <span className="text-slate-900 dark:text-slate-100">{sceneDisplay}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Scene Duration</span>
-        <span className="text-slate-900 dark:text-slate-100">{sceneDurationDisplay}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Scene Copy</span>
-        <span className="capitalize text-slate-900 dark:text-slate-100">{scene_narration_style}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Image engine</span>
-        <span className="text-slate-900 dark:text-slate-100">{toFriendlyProvider(image_provider)}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Voice engine</span>
-        <span className="text-slate-900 dark:text-slate-100">{toFriendlyProvider(tts_provider)}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Estimated video length</span>
-        <span className="text-slate-900 dark:text-slate-100">{totalDurationDisplay}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Estimated generation time</span>
-        <span className="text-slate-900 dark:text-slate-100">{estRuntimeDisplay}</span>
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        <Stat k="Resolution" v={resolution} />
+        <Stat k="Mode" v={generationModeLabel} />
+        <Stat k="Scenes" v={generation_mode === "dialogue" ? `${characterCount} speakers` : sceneDisplay} />
+        <Stat k="Duration" v={sceneDurationDisplay} />
+        <Stat k={generation_mode === "dialogue" ? "Scene pacing" : "Scene copy"} v={generation_mode === "dialogue" ? dialoguePauseDisplay : scene_narration_style} />
+        <Stat k="Image" v={toFriendlyProvider(image_provider)} />
+        <Stat k="Voice" v={toFriendlyProvider(tts_provider)} />
+        <Stat k={generation_mode === "dialogue" ? "Caption source" : "~Video"} v={generation_mode === "dialogue" ? subtitleSourceLabel : totalDurationDisplay} />
+        <Stat k={generation_mode === "dialogue" ? "Render rhythm" : "~Render"} v={generation_mode === "dialogue" ? dialogueRenderDisplay : estRuntimeDisplay} />
+        {generation_mode === "dialogue" ? <Stat k="Characters" v={characterCount} /> : null}
       </div>
 
-      <div className="pt-1 flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5 border-t border-border/40 pt-3">
         {riskyCombo ? <Badge variant="destructive">May take longer</Badge> : null}
         {!subtitle_enabled ? <Badge variant="outline">Subtitles disabled</Badge> : null}
         {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
         {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
         {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
+        {generation_mode === "dialogue" ? <Badge variant="outline">{dialogueStyleLabel}</Badge> : null}
       </div>
     </div>
   );

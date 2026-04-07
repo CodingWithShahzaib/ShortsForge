@@ -13,9 +13,10 @@ const TABS: { id: ContentSource; label: string }[] = [
 type Props = {
   value: ContentSource;
   onChange: (next: ContentSource) => void;
+  disabledTabs?: Partial<Record<ContentSource, string>>;
 };
 
-export const ContentSourceTabs = memo(function ContentSourceTabs({ value, onChange }: Props) {
+export const ContentSourceTabs = memo(function ContentSourceTabs({ value, onChange, disabledTabs }: Props) {
   const [pending, startTransition] = useTransition();
 
   return (
@@ -26,6 +27,8 @@ export const ContentSourceTabs = memo(function ContentSourceTabs({ value, onChan
     >
       {TABS.map(({ id, label }) => {
         const selected = value === id;
+        const disabledReason = disabledTabs?.[id];
+        const disabled = pending || Boolean(disabledReason);
         return (
           <button
             key={id}
@@ -35,14 +38,18 @@ export const ContentSourceTabs = memo(function ContentSourceTabs({ value, onChan
             aria-selected={selected}
             aria-controls={`content-panel-${id}`}
             tabIndex={selected ? 0 : -1}
-            disabled={pending}
+            disabled={disabled}
+            title={disabledReason}
             onClick={() => {
+              if (disabled) return;
               startTransition(() => onChange(id));
             }}
             className={`flex-1 inline-flex items-center justify-center gap-1 rounded-sm px-2.5 py-1.5 text-xs font-medium transition-colors ${
               selected
                 ? "bg-white dark:bg-zinc-900/95 shadow-sm text-slate-900 dark:text-slate-100"
-                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                : disabled
+                  ? "cursor-not-allowed text-slate-400 dark:text-slate-600"
+                  : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
             }`}
           >
             {id === "concept" ? (

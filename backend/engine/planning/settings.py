@@ -31,7 +31,7 @@ class ResolvedGenerationSettings:
     resolution: str = "1080x1920"
     transition: str = "fade"
     subtitle_enabled: bool = True
-    subtitle_source: str = "llm"
+    subtitle_source: str = "transcription"
     generate_subtitles: bool = True
     transcription_provider: str = "openai"
     transcription_language: str = "en"
@@ -76,6 +76,14 @@ class ResolvedGenerationSettings:
     lut_enabled: bool = False
     lut_path: str | None = None
     transition_duration_sec: float = 0.3
+    generation_mode: str = "standard"
+    characters: list[dict[str, Any]] | None = None
+    character_consistency_enabled: bool = True
+    dialogue_style_preset: str = "comic_book"
+    default_shot_type: str = "medium"
+    pause_between_speakers_ms: int = 300
+    reaction_shot_duration: float = 2.5
+    speaker_labels_in_subtitles: bool = True
     extra_settings: dict[str, Any] | None = None
 
     @classmethod
@@ -113,7 +121,7 @@ class ResolvedGenerationSettings:
             resolution=str(data.get("resolution") or app_settings.default_resolution or "1080x1920"),
             transition=str(data.get("transition") or app_settings.default_transition or "fade"),
             subtitle_enabled=bool(data.get("subtitle_enabled", True)),
-            subtitle_source=str(data.get("subtitle_source") or "llm"),
+            subtitle_source="transcription",
             generate_subtitles=bool(data.get("generate_subtitles", True)),
             transcription_provider=str(data.get("transcription_provider") or "openai"),
             transcription_language=str(data.get("transcription_language") or "en"),
@@ -271,6 +279,18 @@ class ResolvedGenerationSettings:
                 0.0,
                 min(2.0, float(data.get("transition_duration_sec") or app_get("default_transition_duration_sec", 0.3) or 0.3)),
             ),
+            generation_mode=str(data.get("generation_mode") or "standard"),
+            characters=(
+                [dict(item) for item in data.get("characters", []) if isinstance(item, Mapping)]
+                if isinstance(data.get("characters"), list)
+                else None
+            ),
+            character_consistency_enabled=bool(data.get("character_consistency_enabled", True)),
+            dialogue_style_preset=str(data.get("dialogue_style_preset") or "comic_book"),
+            default_shot_type=str(data.get("default_shot_type") or "medium"),
+            pause_between_speakers_ms=max(0, min(1500, int(data.get("pause_between_speakers_ms") or 300))),
+            reaction_shot_duration=max(1.0, min(8.0, float(data.get("reaction_shot_duration") or 2.5))),
+            speaker_labels_in_subtitles=bool(data.get("speaker_labels_in_subtitles", True)),
             extra_settings=data.get("extra_settings") if isinstance(data.get("extra_settings"), dict) else None,
         )
 

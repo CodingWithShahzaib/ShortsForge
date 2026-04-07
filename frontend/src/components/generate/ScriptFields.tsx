@@ -1,7 +1,6 @@
 "use client";
 
-import { memo, useMemo } from "react";
-import Link from "next/link";
+import { memo, type ReactNode, useMemo } from "react";
 import { useFormContext } from "react-hook-form";
 import { FileText, Play } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,6 +14,7 @@ type Props = {
   onGenerate: () => void;
   generateLabel?: string;
   showInlineAction?: boolean;
+  footerAction?: ReactNode;
 };
 
 export const ScriptFields = memo(function ScriptFields({
@@ -23,6 +23,7 @@ export const ScriptFields = memo(function ScriptFields({
   onGenerate,
   generateLabel = "Create scenes",
   showInlineAction = true,
+  footerAction,
 }: Props) {
   const {
     register,
@@ -44,8 +45,25 @@ export const ScriptFields = memo(function ScriptFields({
       role="tabpanel"
       id="content-panel-script"
       aria-labelledby="content-tab-script"
-      className="space-y-2"
+      className="space-y-3"
     >
+      <div className="rounded-2xl border border-border/70 bg-background/45 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Script source</p>
+            <p className="text-sm text-muted-foreground">Paste the exact story beats and speaker lines you want the pipeline to respect.</p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="rounded-full border border-border/60 bg-background/70 px-2.5 py-1">
+              ~{stats.words} words
+            </span>
+            <span className="rounded-full border border-border/60 bg-background/70 px-2.5 py-1">
+              ~{stats.readMin} min read
+            </span>
+          </div>
+        </div>
+      </div>
+
       <Field
         id="custom-script"
         applyIdToChild={false}
@@ -62,7 +80,7 @@ export const ScriptFields = memo(function ScriptFields({
           <Textarea
             placeholder="Paste your script here..."
             rows={6}
-            className={`min-h-[140px] flex-1 lg:min-h-[180px] ${showScriptError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+            className={`min-h-[180px] flex-1 rounded-2xl bg-background/45 lg:min-h-[240px] ${showScriptError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
             {...register("custom_script")}
             id="custom-script"
             aria-describedby="script-stats-hint"
@@ -93,15 +111,14 @@ export const ScriptFields = memo(function ScriptFields({
         <span>
           ~{stats.words} words · ~{stats.readMin} min read (voice pacing varies)
         </span>
-        {script.trim().length > 0 && (
-          <Link
-            href="/scripts"
-            className="inline-flex items-center gap-1 text-cyan-600 dark:text-cyan-400 hover:underline"
-          >
-            <FileText className="h-3.5 w-3.5" />
-            Refine in Script studio
-          </Link>
-        )}
+        {script.trim().length > 0
+          ? footerAction || (
+            <span className="inline-flex items-center gap-1 text-cyan-600 dark:text-cyan-400">
+              <FileText className="h-3.5 w-3.5" />
+              Script ready
+            </span>
+          )
+          : null}
       </div>
     </div>
   );

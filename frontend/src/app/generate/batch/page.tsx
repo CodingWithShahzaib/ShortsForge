@@ -17,13 +17,11 @@ import type { Job } from "@/lib/types";
 import {
   SCENE_NARRATION_STYLE_IDS,
   STORY_TEMPLATE_IDS,
-  SUBTITLE_SOURCES,
   TRANSCRIPTION_PROVIDERS,
 } from "@/app/generate/schema";
 
 type SceneNarrationStyle = (typeof SCENE_NARRATION_STYLE_IDS)[number];
 type StoryTemplateId = (typeof STORY_TEMPLATE_IDS)[number];
-type SubtitleSource = (typeof SUBTITLE_SOURCES)[number];
 type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 
 function isSceneNarrationStyle(value: string): value is SceneNarrationStyle {
@@ -32,10 +30,6 @@ function isSceneNarrationStyle(value: string): value is SceneNarrationStyle {
 
 function isStoryTemplateId(value: string): value is StoryTemplateId {
   return (STORY_TEMPLATE_IDS as readonly string[]).includes(value);
-}
-
-function isSubtitleSource(value: string): value is SubtitleSource {
-  return (SUBTITLE_SOURCES as readonly string[]).includes(value);
 }
 
 function isTranscriptionProvider(value: string): value is TranscriptionProvider {
@@ -356,52 +350,33 @@ export default function BatchGeneratePage() {
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
                   <label className="text-sm font-medium mb-1.5 block">Caption source</label>
-                  <Select
-                    value={baseSettings.subtitle_source}
-                    onValueChange={(v) => {
-                      if (isSubtitleSource(v)) {
-                        update("subtitle_source", v);
-                      }
-                    }}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Source" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="llm">AI-generated</SelectItem>
-                      <SelectItem value="transcription">Speech-to-text from audio</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="mt-1 flex h-10 items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-muted-foreground">
+                    Speech-to-text from audio
+                  </div>
                 </div>
-                {baseSettings.subtitle_source === "llm" && (
-                  <div className="flex items-center gap-2 pt-2">
-                    <input type="checkbox" id="batch-gen-sub" checked={baseSettings.generate_subtitles} onChange={(e) => update("generate_subtitles", e.target.checked)} className="rounded" />
-                    <label htmlFor="batch-gen-sub" className="text-sm cursor-pointer">Generate captions with AI</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Speech-to-text engine</label>
+                    <Select
+                      value={baseSettings.transcription_provider}
+                      onValueChange={(v) => {
+                        if (isTranscriptionProvider(v)) {
+                          update("transcription_provider", v);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="openai">OpenAI (Whisper)</SelectItem>
+                        <SelectItem value="groq">Groq</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                )}
-                {baseSettings.subtitle_source === "transcription" && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Speech-to-text engine</label>
-                      <Select
-                        value={baseSettings.transcription_provider}
-                        onValueChange={(v) => {
-                          if (isTranscriptionProvider(v)) {
-                            update("transcription_provider", v);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="openai">OpenAI (Whisper)</SelectItem>
-                          <SelectItem value="groq">Groq</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Language</label>
-                      <Input placeholder="en" value={baseSettings.transcription_language} onChange={(e) => update("transcription_language", e.target.value)} className="mt-1" />
-                    </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Language</label>
+                    <Input placeholder="en" value={baseSettings.transcription_language} onChange={(e) => update("transcription_language", e.target.value)} className="mt-1" />
                   </div>
-                )}
+                </div>
               </div>
               </>
             )}

@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
+from backend.schemas.characters import CharacterConfig
 from backend.services.script_service import validate_story_template_field
 
 StoryTemplateField = Annotated[str, AfterValidator(validate_story_template_field)]
@@ -16,6 +17,13 @@ class GenerateVideoSceneInput(BaseModel):
     image_prompt: str
     transition: str = "fade"
     duration: float | None = None
+    scene_type: str = "image"
+    scene_settings: dict[str, Any] | None = None
+    speaker_id: str | None = None
+    shot_type: Literal["medium", "closeup", "two-shot", "reaction"] = "medium"
+    is_reaction_shot: bool = False
+    character_references: dict[str, Any] | None = None
+    voice_profile: str | None = None
 
 
 class GenerateVideoRequest(BaseModel):
@@ -37,7 +45,7 @@ class GenerateVideoRequest(BaseModel):
     resolution: str = Field(default="1080x1920", min_length=3)
     transition: str = Field(default="fade", min_length=1)
     subtitle_enabled: bool = True
-    subtitle_source: Literal["llm", "transcription"] = "llm"
+    subtitle_source: Literal["llm", "transcription"] = "transcription"
     generate_subtitles: bool = True  # When true, LLM generates subtitle text per scene
     transcription_provider: Literal["openai", "groq"] = "openai"
     transcription_language: str = Field(default="en", pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
@@ -91,7 +99,51 @@ class GenerateVideoRequest(BaseModel):
         default="co_pilot",
         description="Internal workflow mode. Keep value names unchanged: autopilot | co_pilot | manual",
     )
+    generation_mode: Literal["standard", "dialogue"] = "standard"
+    characters: list[CharacterConfig] | None = None
+    character_consistency_enabled: bool = True
+    dialogue_style_preset: Literal[
+        "comic_book",
+        "political_cartoon",
+        "graphic_novel",
+        "anime",
+        "photorealistic",
+        "documentary",
+        "cinematic",
+        "cinematic_noir",
+        "epic_blockbuster",
+        "watercolor",
+    ] = "comic_book"
+    default_shot_type: Literal["medium", "closeup", "two-shot", "reaction"] = "medium"
+    pause_between_speakers_ms: int = Field(default=300, ge=0, le=1500)
+    reaction_shot_duration: float = Field(default=2.5, ge=1.0, le=8.0)
+    speaker_labels_in_subtitles: bool = True
     extra_settings: dict[str, Any] | None = None
+
+
+class DialogueSceneInput(BaseModel):
+    speaker_id: str | None = None
+    narration: str
+    subtitle: str | None = None
+    shot_type: Literal["medium", "closeup", "two-shot", "reaction"] = "medium"
+    is_reaction_shot: bool = False
+    transition: str = "crossfade"
+    duration: float | None = None
+
+
+class DialogueVideoRequest(GenerateVideoRequest):
+    generation_mode: Literal["standard", "dialogue"] = "dialogue"
+    characters: list[CharacterConfig] = Field(min_length=2)
+    custom_script: str | None = None
+    dialogue_scenes: list[DialogueSceneInput] | None = None
+
+    @model_validator(mode="after")
+    def validate_dialogue_input(self) -> "DialogueVideoRequest":
+        has_dialogue_scenes = bool(self.dialogue_scenes)
+        has_script = bool((self.custom_script or "").strip())
+        if not has_dialogue_scenes and not has_script:
+            raise ValueError("Provide either dialogue_scenes or a custom_script for dialogue generation.")
+        return self
 
 
 class GenerateScriptRequest(BaseModel):
@@ -128,6 +180,20 @@ class RewriteScriptRequest(BaseModel):
     llm_provider: str = "openai"
     llm_model: str | None = None
     temperature: float = 0.7
+
+
+class RefineScriptCharactersRequest(BaseModel):
+    text: str
+    instruction: str
+    story_type: str = "general"
+    llm_provider: str = "openai"
+    llm_model: str | None = None
+    temperature: float = 0.7
+
+
+class RefineScriptCharactersResponse(BaseModel):
+    text: str
+    characters: list[CharacterConfig] = Field(default_factory=list)
 
 
 class VideoProductionScene(BaseModel):
@@ -192,7 +258,15 @@ class BatchGenerateRequest(BaseModel):
 class ViralIdeasRequest(BaseModel):
     """Ask the LLM for timely short-form video angles plus suggested Create-form settings."""
 
-    niche: str | None = Field(default=None, max_length=240)
+    niche: str | None = Field(default=None, max_length=1500)
     count: int = Field(default=8, ge=3, le=12)
     llm_provider: str = "openai"
     llm_model: str | None = None
+    idea_type: Literal["any", "faceless", "dialogue"] = "any"
+    tone: Literal["any", "serious", "funny", "dark", "inspirational", "educational", "dramatic"] = "any"
+    hook_style: Literal["any", "question", "bold_claim", "shocking_fact", "story_setup", "countdown", "debate"] = "any"
+    virality_angle: Literal["any", "curiosity_gap", "controversy", "relatability", "fear", "awe", "humor"] = "any"
+    duration_target_seconds: int | None = Field(default=None, ge=15, le=60)
+    character_mode: Literal["off", "optional", "required"] = "optional"
+    cast_size: int | None = Field(default=None, ge=2, le=4)
+    avoid_topics: str | None = Field(default=None, max_length=300)

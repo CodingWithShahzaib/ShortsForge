@@ -38,6 +38,20 @@ async def synthesize_speech(
         logger.info("Applied TTS text cleanup before synthesis")
     audio_bytes = await tts.synthesize(prepared_text or text, voice, speed, **kwargs)
 
+    # If the provider returned empty bytes (e.g., text was empty), generate a 0.5s silent WAV.
+    # This prevents FFmpeg 'Invalid data found' crashes on 0-byte files.
+    if not audio_bytes or len(audio_bytes) < 10:
+        import io
+        import wave
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(44100)
+            wav.writeframes(b'\x00\x00' * 22050)
+        audio_bytes = buf.getvalue()
+        kwargs['response_format'] = 'wav'
+
     if save:
         storage = get_storage()
         response_format = str(kwargs.get("response_format") or "mp3").strip().lower() or "mp3"

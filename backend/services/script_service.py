@@ -11,6 +11,11 @@ from backend.services.ai_client import chat_completion
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_REFINED_CHARACTER_STYLE_PROMPT = (
+    "comic book illustration, bold black outlines, dramatic shading, "
+    "graphic novel style, political cartoon aesthetic"
+)
+
 
 def _extract_json_substring(raw: str) -> tuple[str | None, int, int]:
     """
@@ -127,6 +132,94 @@ DYNAMIC_SCENE_MIN = 3
 DYNAMIC_SCENE_MAX = 12
 NARRATION_DUPLICATE_LOOKBACK = 3
 NARRATION_DUPLICATE_SIMILARITY = 0.9
+NARRATION_AUTO_IMPROVE_THRESHOLD = 70  # scenes scoring below this get an LLM improvement pass
+
+# Q5: Style-conditional image prompt padding — prevents photorealistic texture
+# copy from conflicting with comic_book / anime / watercolor style signals.
+STYLE_PADDING_MAP: dict[str, list[str]] = {
+    "comic_book": [
+        (
+            "Use bold, clean ink outlines with confident line weight variation. Apply cel-shaded flat color fills "
+            "with hard shadows and stylized highlights typical of American comic art. "
+            "Incorporate halftone dot patterns in shadow areas or backgrounds where appropriate. "
+            "Composition should feel dynamic and panel-ready: strong silhouettes, expressive poses, clear action lines."
+        ),
+        (
+            "Color palette should be saturated and vibrant with black for outlines and shadow fills. "
+            "Avoid photorealistic gradients; use two-to-three tonal fills per element instead. "
+            "Include Ben-Day dot textures or crosshatching for depth. "
+            "Foreground elements should have the heaviest linework; backgrounds use thinner strokes."
+        ),
+    ],
+    "political_cartoon": [
+        (
+            "Caricature proportions with exaggerated facial features and expressive body language conveying satire. "
+            "Bold editorial ink lines, simple flat fills, minimal background detail to keep focus on the subject. "
+            "Include symbolic props or contextual objects that reinforce the editorial message without text labels."
+        ),
+    ],
+    "anime": [
+        (
+            "Clean, precise linework with smooth clean contours and subtle line taper at tips. "
+            "Apply soft gradient shading with 2-3 tonal layers — a base, a shadow, and a highlight. "
+            "Eyes should be large and expressive with specular catch-lights. "
+            "Backgrounds can be more painterly and loose to contrast the crisp character design."
+        ),
+        (
+            "Use manga-style speed lines or motion blur to imply action. "
+            "Color should be vibrant with a tendency toward cooler hues for shadows and warmer highlights. "
+            "Hair follows anime stylization (grouped chunky highlights, flowing dynamics). "
+            "Avoid photorealistic skin textures; use smooth flat areas with stylized planes."
+        ),
+    ],
+    "watercolor": [
+        (
+            "Soft wet-on-wet color blooms with visible paper grain and pigment granulation in wash areas. "
+            "Edges should vary between hard-edged details and soft lost edges to create airiness. "
+            "Colors should bleed into adjacent areas slightly, creating natural mixing effects in shadow zones. "
+            "Reserve whites by leaving the paper untouched rather than using white paint."
+        ),
+    ],
+    "oil_painting": [
+        (
+            "Visible, directional brushstroke texture with impasto thickness in highlights and focal areas. "
+            "Rich color mixing with layered glazes creating luminous depth in shadow regions. "
+            "Warm-cool color contrast in light and shadow transitions, following traditional chiaroscuro principles. "
+            "Environment and background painted with broader, looser strokes than the primary subject."
+        ),
+    ],
+    "photorealistic": [
+        (
+            "Surface wear, fabric texture, dust particles suspended in shafts of light, subtle reflections in surfaces, "
+            "material response to light sources (specular on metal, subsurface scatter on skin), believable micro-imperfections "
+            "on every prop and surface. Every element should look intentionally placed to reinforce the spoken beat."
+        ),
+        (
+            "Design spatial storytelling with three readable depth planes: detailed foreground cues, primary midground action, "
+            "and a contextual background with atmospheric perspective. "
+            "Use overlap and perspective lines so the viewer instantly understands where to look first."
+        ),
+    ],
+    "realistic": [
+        (
+            "Surface wear, fabric texture, dust particles suspended in shafts of light, subtle reflections in surfaces, "
+            "material response to light sources (specular on metal, subsurface scatter on skin), believable micro-imperfections. "
+            "Every prop should look intentionally placed to reinforce the spoken beat."
+        ),
+        (
+            "Design spatial storytelling with three readable depth planes: detailed foreground cues, primary midground action, "
+            "and a contextual background with atmospheric perspective. "
+            "Use overlap and perspective lines so the viewer instantly understands where to look first."
+        ),
+    ],
+}
+# Fallback blocks used when the style has no specific STYLE_PADDING_MAP entry
+DEFAULT_STYLE_PADDING: list[str] = [
+    (
+        "Include a concrete subject, specific environment, believable textures, and a strong foreground/background relationship. "
+        "Keep composition clean and the focal point instantly readable on mobile."
+    ),
+]
 
 COMMON_TTS_TEXT_FIXES: tuple[tuple[str, str], ...] = (
     ("M hoves", "moves"),
@@ -135,6 +228,7 @@ COMMON_TTS_TEXT_FIXES: tuple[tuple[str, str], ...] = (
     ("Oui ja", "Ouija"),
     ("spine s", "spines"),
 )
+INLINE_STAGE_DIRECTION_PATTERN = re.compile(r"\s*[\(\[][^()\[\]\n]{1,80}[\)\]](?=\s|$|[,.!?])")
 
 SPOKEN_WORD_CUES = ("spelling out", "saying", "whispering", "shouting")
 SENTENCE_BREAK_PREFIXES = (
@@ -540,6 +634,33 @@ def _derive_narration_chunks(script: str, scene_count: int) -> list[str]:
 def _normalize_similarity_text(text: str) -> str:
     collapsed = re.sub(r"\s+", " ", (text or "").strip().lower())
     return re.sub(r"[^\w\s]", "", collapsed)
+
+
+def _sanitize_dialogue_line(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = INLINE_STAGE_DIRECTION_PATTERN.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+([,.;!?])", r"\1", cleaned)
+    return cleaned
+
+
+def sanitize_speaker_tagged_dialogue(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if ":" in line:
+            speaker, spoken = line.split(":", 1)
+            cleaned_spoken = _sanitize_dialogue_line(spoken)
+            cleaned_line = f"{speaker.strip()}: {cleaned_spoken}".strip()
+        else:
+            cleaned_line = _sanitize_dialogue_line(line)
+        if cleaned_line and not cleaned_line.endswith(":"):
+            lines.append(cleaned_line)
+    return "\n".join(lines)
 
 
 def _narration_similarity(left: str, right: str) -> float:
@@ -1087,41 +1208,8 @@ def _build_prompt_padding_blocks(
     visual_continuity: str | None,
     transition: str | None,
 ) -> list[str]:
-    continuity = (visual_continuity or "").strip() or "repeatable motifs, unified grading, and stable character/environment identity"
-    move = (transition or "").strip() or "fade"
-    nar = (narration or "").strip() or "the core spoken line"
-    return [
-        (
-            f"Layer in micro-details that support realism: surface wear, fabric texture, dust in the air, subtle reflections, "
-            f"material response to light, and believable imperfections. Keep these details story-relevant and non-random. "
-            f"Every prop should look intentionally placed to reinforce the spoken beat: {nar}."
-        ),
-        (
-            f"Design spatial storytelling with three readable depth planes: foreground cues, primary midground action, and a contextual background. "
-            f"Use overlap and perspective lines so the viewer instantly understands where to look first. Preserve {continuity} so scenes feel connected "
-            f"in the same visual world, not as unrelated stock images."
-        ),
-        (
-            f"Use lighting direction intentionally: define key, fill, and edge light behavior with physically plausible falloff. "
-            f"Maintain a {scene_emotion} emotional signature through tonal contrast, highlight control, and shadow density. "
-            f"Color should be expressive but not over-processed, with controlled saturation and realistic skin/environment rendering."
-        ),
-        (
-            f"Apply composition discipline suitable for short-form viewing: readable center of interest, safe negative space for mobile crop tolerance, "
-            f"and a clear silhouette around the main subject. Keep narrative momentum by visually implying a transition of type '{move}' into the next scene "
-            f"through directional flow, gaze direction, or geometry."
-        ),
-        (
-            f"Keep style consistency explicit: this scene is rendered in {image_style} style with coherent lens language, texture treatment, and grading logic. "
-            f"Avoid random style drift between painterly, anime, or photoreal cues unless intentionally requested. Emphasize one dominant storytelling idea "
-            f"and remove distracting secondary actions."
-        ),
-        (
-            "Refine final polish with production-grade clarity: crisp focal detail where the eye should land, controlled blur elsewhere, "
-            "balanced noise profile, realistic dynamic range, and cinematic yet truthful contrast. The frame should look publish-ready for a professional short, "
-            "with no accidental text overlays, watermark artifacts, or malformed anatomy."
-        ),
-    ]
+    """Legacy shim — delegates to the style-aware _style_padding_blocks."""
+    return _style_padding_blocks(image_style, narration, visual_continuity, transition)
 
 
 def _ensure_min_words(text: str, minimum_words: int, padding_blocks: list[str]) -> str:
@@ -1175,9 +1263,18 @@ def enhance_image_prompt(
         "Include a concrete subject, specific environment, believable textures, and a strong foreground/background relationship. "
         "Keep the focal point instantly readable on mobile and avoid clutter that competes with the story beat. "
         f"Imply a '{transition}' handoff into the next scene through directional composition and emotional flow. "
-        "No on-screen text unless a story-critical sign is unavoidable. "
-        "Do not depict real politicians, celebrities, or public figures; use anonymous or fictional stand-ins."
+        "No on-screen text unless a story-critical sign is unavoidable."
     )
+    # Q6: Vertical 9:16 subject-positioning guard — avoids subject overlapping subtitle zone
+    import re as _re
+    _res = (resolution or "").strip()
+    _m = _re.match(r"^(\d+)x(\d+)$", _res)
+    if _m and int(_m.group(2)) > int(_m.group(1)):
+        prompt += (
+            " Subject positioned in the center-to-lower two-thirds of the vertical frame"
+            " to leave clear headroom above and avoid overlap with subtitle text at the bottom."
+            " Avoid placing critical narrative detail in the top 20% or bottom 12% of frame."
+        )
     if continuity:
         prompt = (
             f"{prompt} Maintain visual continuity across scenes with this anchor: {continuity}. "
@@ -1196,12 +1293,55 @@ def enhance_image_prompt(
     )
 
 
+def _style_padding_blocks(
+    image_style: str,
+    narration: str,
+    visual_continuity: str | None,
+    transition: str | None,
+) -> list[str]:
+    """Q5: Return style-appropriate padding blocks instead of always using photorealistic copy."""
+    style_key = (image_style or "realistic").strip().lower().replace(" ", "_")
+    # Try exact match, then prefix match (e.g. "comic_book_noir" → "comic_book")
+    blocks = STYLE_PADDING_MAP.get(style_key)
+    if not blocks:
+        for key in STYLE_PADDING_MAP:
+            if style_key.startswith(key) or key.startswith(style_key):
+                blocks = STYLE_PADDING_MAP[key]
+                break
+    if not blocks:
+        blocks = DEFAULT_STYLE_PADDING
+    # Append universal depth/continuity blocks that apply to all styles
+    continuity = (visual_continuity or "").strip() or "repeatable motifs and a unified color palette"
+    move = (transition or "").strip() or "fade"
+    nar = (narration or "").strip() or "the core spoken line"
+    blocks = list(blocks) + [
+        (
+            f"Apply composition discipline: readable center of interest, safe negative space for mobile crop tolerance, "
+            f"and a clear silhouette around the main subject. "
+            f"Keep narrative momentum by visually implying a transition of type '{move}' into the next scene "
+            f"through directional flow, gaze direction, or geometry."
+        ),
+        (
+            f"Maintain visual continuity across scenes with this anchor: {continuity}. "
+            f"Carry that continuity through color palette, motifs, and recurring environmental cues. "
+            f"Every visual choice should reinforce this spoken beat: {nar}."
+        ),
+    ]
+    return blocks
+
+
+
 def validate_storyboard_quality(storyboard: dict) -> list[str]:
     """Check for common quality issues."""
     issues = []
     scenes = storyboard.get("scenes", []) if isinstance(storyboard, dict) else []
     continuity = (storyboard.get("visual_continuity") or "").strip().lower()
+
     all_narration = " ".join((s.get("narration") or "") for s in scenes).lower()
+    # Q2: Extended shot variation synonyms
+    WIDE_SYNOMYNS = {"wide", "establishing", "full body", "full-body", "long shot", "master"}
+    CLOSE_SYNONYMS = {"close", "closeup", "close-up", "extreme close", "ecu", "face"}
+    MEDIUM_SYNONYMS = {"medium", "mid shot", "mid-shot", "waist", "cowboy"}
     shot_markers: list[str] = []
     for i, scene in enumerate(scenes):
         prompt = (scene.get("image_prompt") or "").strip()
@@ -1214,11 +1354,11 @@ def validate_storyboard_quality(storyboard: dict) -> list[str]:
         if len(narration) > 100 and float(duration) < 5:
             issues.append(f"Scene {i + 1}: narration too long for duration")
         prompt_l = prompt.lower()
-        if any(x in prompt_l for x in ["wide", "establishing"]):
+        if any(x in prompt_l for x in WIDE_SYNOMYNS):
             shot_markers.append("wide")
-        elif "close" in prompt_l:
+        elif any(x in prompt_l for x in CLOSE_SYNONYMS):
             shot_markers.append("close")
-        elif "medium" in prompt_l:
+        elif any(x in prompt_l for x in MEDIUM_SYNONYMS):
             shot_markers.append("medium")
 
     if continuity and continuity not in all_narration:
@@ -1246,6 +1386,46 @@ def validate_storyboard_quality(storyboard: dict) -> list[str]:
     return issues
 
 
+async def expand_concept_to_brief(
+    concept: str,
+    story_type: str = "general",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+) -> str:
+    """
+    Q1: Research pass — expand a thin concept into 5–8 concrete facts/angles/examples.
+
+    This prevents the script generator from padding word count with vague filler.
+    The returned brief is injected into generate_script() as extra context.
+    Only called when the concept is short (< 120 chars), suggesting it is a thin seed.
+    Returns empty string on failure so callers can skip gracefully.
+    """
+    concept = (concept or "").strip()
+    if len(concept) < 5:
+        return ""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a research assistant for short-form video scriptwriters. "
+                "Given a topic or concept, produce a tight research brief of 5-8 bullet points. "
+                "Each bullet must be concrete: include a specific name, date, statistic, mechanism, or example. "
+                "No vague generalities. No fluff. Output plain bullet points only (each starting with - )."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Topic: {concept}\nStory type: {story_type}\n\nWrite the research brief.",
+        },
+    ]
+    try:
+        raw = await chat_completion(messages, llm_provider, llm_model, 0.45, max_tokens=400)
+        return raw.strip()
+    except Exception:
+        logger.debug("expand_concept_to_brief failed silently for concept=%s", concept[:60])
+        return ""
+
+
 async def generate_script(
     concept: str,
     story_type: str = "general",
@@ -1254,12 +1434,31 @@ async def generate_script(
     llm_model: str | None = None,
     temperature: float = 0.8,
     story_template: str = "default",
+    research_brief: str = "",
 ) -> str:
+    """Generate a narration script. Pass research_brief for richer, specific outputs."""
     if story_template not in STORY_TEMPLATE_IDS:
         story_template = "default"
 
+    # Q1: Inject concept brief if provided
+    brief_block = ""
+    if research_brief and research_brief.strip():
+        brief_block = (
+            f"\nRESEARCH BRIEF (use these specifics — weave them naturally into the narration):\n"
+            f"{research_brief.strip()}\n"
+        )
+
     hook_template = STORY_HOOK_TEMPLATES.get(
         story_type, "Open with a curiosity gap that feels immediately relevant to the viewer."
+    )
+    # Inform the model of approximate spoken duration to prevent under/over-writing
+    spoken_seconds = round(word_count / 2.6)
+    spoken_mins = spoken_seconds // 60
+    spoken_secs = spoken_seconds % 60
+    duration_hint = (
+        f"≈ {spoken_mins}m {spoken_secs}s"
+        if spoken_mins > 0
+        else f"≈ {spoken_secs}s"
     )
     critical_requirements = (
         "CRITICAL REQUIREMENTS:\n"
@@ -1271,6 +1470,7 @@ async def generate_script(
         "- CONCRETE IMAGERY: Use sensory details that can be visualized\n"
         "- DEPTH: Add concrete context, causes, consequences, and at least one specific example\n"
         f"- HOOK TEMPLATE: {hook_template}\n"
+        f"- The script will be spoken at ~2.6 words/second; {word_count} words = {duration_hint} of narration.\n"
     )
 
     if story_template == "default":
@@ -1278,6 +1478,7 @@ async def generate_script(
             f"You are a professional short-form video scriptwriter. "
             f"Write a compelling, SUBSTANTIAL {story_type} script for a faceless video narration. "
             f"{critical_requirements}"
+            f"{brief_block}"
             f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
             f"Expand on the concept with detail, examples, and engaging content. "
             f"Write ONLY the narration text - no scene directions, no brackets, no stage directions. "
@@ -1295,6 +1496,7 @@ async def generate_script(
             f"You are a professional short-form video scriptwriter. "
             f"Genre/tone category: {story_type}. "
             f"{critical_requirements}"
+            f"{brief_block}"
             f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
             f"Write ONLY speakable narration: no beat labels (no HOOK:, PATTERN:, etc.), no markdown headings, "
             f"no scene numbers, no stage directions, no brackets. "
@@ -1336,6 +1538,138 @@ async def rewrite_script(
     return await chat_completion(messages, llm_provider, llm_model, temperature)
 
 
+def _build_character_id(seed: str, fallback_index: int, used_ids: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "_", seed.strip().lower()).strip("_")
+    if not base:
+        base = f"character_{fallback_index}"
+    candidate = base
+    suffix = 2
+    while candidate in used_ids:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used_ids.add(candidate)
+    return candidate
+
+
+def _normalize_refined_character_payload(
+    raw_character: Any,
+    fallback_index: int,
+    used_ids: set[str],
+) -> dict[str, Any] | None:
+    if not isinstance(raw_character, dict):
+        return None
+    name = str(raw_character.get("name") or "").strip()
+    if not name:
+        return None
+    description_parts = [
+        str(raw_character.get("description") or "").strip(),
+        str(raw_character.get("appearance") or "").strip(),
+        str(raw_character.get("role") or "").strip(),
+    ]
+    description = ". ".join(part for part in description_parts if part)
+    if not description:
+        return None
+    style_prompt = (
+        str(raw_character.get("style_prompt") or "").strip()
+        or DEFAULT_REFINED_CHARACTER_STYLE_PROMPT
+    )
+    voice_profile_raw = raw_character.get("voice_profile")
+    voice_profile = str(voice_profile_raw).strip() if isinstance(voice_profile_raw, str) else None
+    palette_raw = raw_character.get("color_palette")
+    color_palette = None
+    if isinstance(palette_raw, list):
+        palette = [str(item).strip() for item in palette_raw if str(item).strip()]
+        color_palette = palette or None
+    character_id = _build_character_id(
+        str(raw_character.get("id") or name),
+        fallback_index,
+        used_ids,
+    )
+    return {
+        "id": character_id,
+        "name": name,
+        "description": description,
+        "voice_profile": voice_profile or None,
+        "reference_image_url": None,
+        "style_prompt": style_prompt,
+        "color_palette": color_palette,
+    }
+
+
+def _parse_refined_script_characters_response(raw: str) -> tuple[str, list[dict[str, Any]]]:
+    json_blob, _, _ = _extract_json_substring(raw)
+    if not json_blob:
+        raise ValueError("Model did not return JSON.")
+    payload = json.loads(json_blob)
+    if not isinstance(payload, dict):
+        raise ValueError("Model response JSON must be an object.")
+    text = sanitize_speaker_tagged_dialogue(
+        str(payload.get("text") or payload.get("script") or payload.get("refined_script") or "").strip()
+    )
+    if not text:
+        raise ValueError("Model response did not include a refined script.")
+    used_ids: set[str] = set()
+    characters: list[dict[str, Any]] = []
+    raw_characters = payload.get("characters")
+    if not isinstance(raw_characters, list):
+        raw_characters = []
+    for index, raw_character in enumerate(raw_characters, start=1):
+        character = _normalize_refined_character_payload(raw_character, index, used_ids)
+        if character is not None:
+            characters.append(character)
+    if len(characters) < 2:
+        raise ValueError("Model response did not include at least two characters.")
+    return text, characters
+
+
+async def refine_script_with_characters(
+    text: str,
+    instruction: str,
+    story_type: str = "general",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    temperature: float = 0.7,
+) -> tuple[str, list[dict[str, Any]]]:
+    system_prompt = (
+        "You are an expert short-form video script doctor and dialogue casting assistant. "
+        "Rewrite the supplied script according to the user's instruction, using web research when current facts, public figures, "
+        "or real-world context would improve accuracy. "
+        "Return ONLY valid JSON. The `text` field must be a ready-to-use dialogue script where every spoken line starts with "
+        "`Character Name:`. If the source is narration instead of dialogue, adapt it into a natural conversation while preserving "
+        "the core facts and tone. The `characters` array must contain 2 to 4 relevant characters who actually belong in the script. "
+        "Each character needs a concise but visual description focused on appearance, clothing, silhouette, and iconic props so they "
+        "can stay visually consistent across scenes. Every spoken line must be plain speakable dialogue only after the speaker label. "
+        "Do not include parenthetical acting cues or bracketed stage directions such as `(smirking)`, `(whispers)`, or `[pause]` anywhere in the script. "
+        "Do not include citations, markdown, or commentary outside the JSON object."
+    )
+    user_content = (
+        "Rewrite this script and create relevant characters.\n\n"
+        f"Story type: {story_type}\n"
+        f"Instruction: {instruction}\n\n"
+        "Return JSON in this shape:\n"
+        "{\n"
+        '  "text": "speaker-tagged dialogue script with plain spoken lines only and no parenthetical stage directions",\n'
+        '  "characters": [\n'
+        '    {"id": "optional_slug", "name": "Character name", "description": "visual description", "style_prompt": "optional style prompt", "voice_profile": null, "color_palette": ["optional", "palette"]}\n'
+        "  ]\n"
+        "}\n\n"
+        f"Source script:\n{text}"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    raw_response = await chat_completion(
+        messages,
+        provider=llm_provider,
+        model=llm_model,
+        temperature=temperature,
+        web_search=True,
+        max_tokens=5000,
+    )
+    return _parse_refined_script_characters_response(raw_response)
+
+
 async def generate_story_and_storyboard(
     concept: str | None = None,
     script: str | None = None,
@@ -1366,7 +1700,13 @@ async def generate_story_and_storyboard(
         max_duration=scene_duration_max,
     )
 
+    # Q1: Run concept expansion brief for thin concepts (short seed phrases)
     if not script and concept:
+        research_brief = ""
+        if len((concept or "").strip()) < 120:
+            research_brief = await expand_concept_to_brief(
+                concept, story_type or "general", llm_provider, llm_model
+            )
         script = await generate_script(
             concept,
             story_type,
@@ -1375,6 +1715,7 @@ async def generate_story_and_storyboard(
             llm_model,
             temperature,
             story_template,
+            research_brief=research_brief,
         )
     elif not script:
         raise ValueError("Either concept or script must be provided")
@@ -1427,7 +1768,6 @@ async def generate_story_and_storyboard(
         f"- Respect requested framing from frontend settings: {resolution}\n"
         f"- Respect default transition pacing from frontend settings: {transition}\n"
         f"- NO text in images unless signage is story-critical\n"
-        f"- Avoid real politicians, celebrities, or public figures; use anonymous or fictional stand-ins instead\n"
         f"- Each image_prompt must be at least {MIN_IMAGE_PROMPT_WORDS} words\n"
         f"For each scene, provide:\n"
         f"- narration: The exact narration text for that scene (this is what is spoken and shown as captions)\n"

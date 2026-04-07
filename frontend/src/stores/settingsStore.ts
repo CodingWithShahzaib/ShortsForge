@@ -55,7 +55,7 @@ const DEFAULT_APP_DEFAULTS: AppDefaults = {
   scene_count: 5,
   scene_narration_style: "balanced",
   subtitle_enabled: true,
-  subtitle_source: "llm",
+  subtitle_source: "transcription",
   generate_subtitles: true,
   transcription_provider: "openai",
   transcription_language: "en",

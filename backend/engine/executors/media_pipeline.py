@@ -229,6 +229,11 @@ async def _prepare_scene_assets(
     progress: Callable[[str], Coroutine[Any, Any, None]],
 ) -> tuple[str, float]:
     existing_assets = list(scene_model.assets) if scene_model else []
+    scene_voice = sc.voice_profile or (
+        sc.scene_settings.get("voice_profile")
+        if isinstance(sc.scene_settings, dict)
+        else None
+    ) or tts_voice
     audio_asset = await _get_asset_by_type(existing_assets, "audio")
     if audio_asset:
         audio_path = await _ensure_local_file(audio_asset.file_path, work_dir / "audio")
@@ -239,7 +244,7 @@ async def _prepare_scene_assets(
             audio_key = await synthesize_speech(
                 sc.narration,
                 tts_provider,
-                tts_voice,
+                scene_voice,
                 resolved_settings.tts_speed,
                 save=True,
                 response_format=resolved_settings.tts_response_format,
@@ -306,6 +311,11 @@ async def _render_scene_audio(
     progress: Callable[[str], Coroutine[Any, Any, None]],
 ) -> tuple[str, float]:
     existing_assets = list(scene_model.assets) if scene_model else []
+    scene_voice = sc.voice_profile or (
+        sc.scene_settings.get("voice_profile")
+        if isinstance(sc.scene_settings, dict)
+        else None
+    ) or tts_voice
     sid = sc.id
     reg = regenerate_scene_ids
     force_reuse = reg is not None and bool(sid) and sid not in reg
@@ -326,7 +336,7 @@ async def _render_scene_audio(
             audio_key = await synthesize_speech(
                 sc.narration,
                 tts_provider,
-                tts_voice,
+                scene_voice,
                 resolved_settings.tts_speed,
                 save=True,
                 response_format=resolved_settings.tts_response_format,
@@ -545,7 +555,7 @@ async def _apply_render_subtitles(
         scene_subtitle_data = [
             {
                 "narration": sc.narration,
-                "subtitle": sc.narration or sc.subtitle,
+                "subtitle": sc.subtitle or sc.narration,
                 "duration": render_plan.timeline.paced_durations[i] if i < len(render_plan.timeline.paced_durations) else 5.0,
             }
             for i, sc in enumerate(render_plan.scenes)

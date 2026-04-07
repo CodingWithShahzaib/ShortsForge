@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     default_scene_count: int = 5
     default_scene_narration_style: str = "balanced"
     default_subtitle_enabled: bool = True
-    default_subtitle_source: str = "llm"
+    default_subtitle_source: str = "transcription"
     default_generate_subtitles: bool = True
     default_transcription_provider: str = "openai"
     default_transcription_language: str = "en"

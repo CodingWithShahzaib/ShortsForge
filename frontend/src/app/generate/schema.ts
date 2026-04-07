@@ -22,10 +22,35 @@ export const TRANSCRIPTION_PROVIDERS = ["openai", "groq"] as const;
 export const SCENE_NARRATION_STYLE_IDS = ["short", "balanced", "long"] as const;
 export const PIPELINE_MODES = ["manual", "auto"] as const;
 export const TARGET_STAGES = ["storyboard", "assets", "compile"] as const;
+export const GENERATION_MODE_IDS = ["standard", "dialogue"] as const;
+export const DIALOGUE_STYLE_PRESET_IDS = [
+  "comic_book",
+  "political_cartoon",
+  "graphic_novel",
+  "anime",
+  "photorealistic",
+  "documentary",
+  "cinematic",
+  "cinematic_noir",
+  "epic_blockbuster",
+  "watercolor",
+] as const;
+export const DIALOGUE_SHOT_TYPE_IDS = ["medium", "closeup", "two-shot", "reaction"] as const;
+
+const characterSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  voice_profile: z.string().nullable().optional(),
+  reference_image_url: z.string().nullable().optional(),
+  style_prompt: z.string().min(1),
+  color_palette: z.array(z.string()).nullable().optional(),
+});
 
 export const generateVideoFormSchema = z.object({
   title: z.string(),
   custom_script: z.string(),
+  generation_mode: z.enum(GENERATION_MODE_IDS).default("standard"),
   story_type: z.string(),
   story_template: z.enum(STORY_TEMPLATE_IDS).default("default"),
   llm_provider: z.string(),
@@ -40,7 +65,7 @@ export const generateVideoFormSchema = z.object({
   resolution: z.string(),
   transition: z.string(),
   subtitle_enabled: z.boolean(),
-  subtitle_source: z.enum(SUBTITLE_SOURCES).default("llm"),
+  subtitle_source: z.enum(SUBTITLE_SOURCES).default("transcription"),
   generate_subtitles: z.boolean(),
   transcription_provider: z.enum(TRANSCRIPTION_PROVIDERS).default("openai"),
   transcription_language: z
@@ -59,6 +84,13 @@ export const generateVideoFormSchema = z.object({
   use_production_storyboard: z.boolean(),
   match_scenes_to_audio: z.boolean(),
   visual_continuity: z.string(),
+  dialogue_style_preset: z.enum(DIALOGUE_STYLE_PRESET_IDS).default("comic_book"),
+  character_consistency_enabled: z.boolean().default(true),
+  speaker_labels_in_subtitles: z.boolean().default(true),
+  default_shot_type: z.enum(DIALOGUE_SHOT_TYPE_IDS).default("medium"),
+  pause_between_speakers_ms: z.coerce.number().int().min(0).max(1500),
+  reaction_shot_duration: z.coerce.number().min(1).max(8),
+  dialogue_characters: z.array(characterSchema).default([]),
 });
 
 export type GenerateFormValues = z.infer<typeof generateVideoFormSchema>;
@@ -103,6 +135,7 @@ export function buildGenerateDefaultValues(defaults: SettingsDefaultsSlice): Gen
   return {
     title: "",
     custom_script: "",
+    generation_mode: "standard",
     story_type: "general",
     story_template: "default",
     llm_provider: defaults.llm_provider,
@@ -117,7 +150,7 @@ export function buildGenerateDefaultValues(defaults: SettingsDefaultsSlice): Gen
     resolution: defaults.resolution,
     transition: defaults.transition,
     subtitle_enabled: defaults.subtitle_enabled ?? true,
-    subtitle_source: defaults.subtitle_source ?? "llm",
+    subtitle_source: defaults.subtitle_source ?? "transcription",
     generate_subtitles: defaults.generate_subtitles ?? true,
     transcription_provider: defaults.transcription_provider ?? "openai",
     transcription_language: defaults.transcription_language ?? "en",
@@ -133,5 +166,12 @@ export function buildGenerateDefaultValues(defaults: SettingsDefaultsSlice): Gen
     use_production_storyboard: defaults.use_production_storyboard ?? true,
     match_scenes_to_audio: defaults.match_scenes_to_audio ?? true,
     visual_continuity: defaults.visual_continuity ?? "",
+    dialogue_style_preset: "comic_book",
+    character_consistency_enabled: true,
+    speaker_labels_in_subtitles: true,
+    default_shot_type: "medium",
+    pause_between_speakers_ms: 300,
+    reaction_shot_duration: 2.5,
+    dialogue_characters: [],
   };
 }

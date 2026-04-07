@@ -17,6 +17,7 @@ export interface StudioHeaderProps {
   onSaveDraft?: () => void;
   onResumeDraft?: () => void;
   draftSavedAt?: string | null;
+  centerNav?: React.ReactNode;
 }
 
 export function StudioHeader({
@@ -30,6 +31,7 @@ export function StudioHeader({
   onSaveDraft,
   onResumeDraft,
   draftSavedAt,
+  centerNav,
 }: StudioHeaderProps) {
   const projectStatusVariant =
     projectStatus === "completed"
@@ -81,6 +83,12 @@ export function StudioHeader({
             </p>
           </div>
         </div>
+
+        {centerNav ? (
+          <div className="flex shrink-0 items-center justify-center">
+            {centerNav}
+          </div>
+        ) : null}
 
         <div className="flex shrink-0 items-center gap-1.5">
           {onSaveDraft ? (

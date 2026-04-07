@@ -12,15 +12,24 @@ from backend.schemas.project import (
 from backend.schemas.job import JobOut
 from backend.schemas.generation import (
     GenerateVideoRequest,
+    DialogueVideoRequest,
+    DialogueSceneInput,
     GenerateScriptRequest,
     GenerateStoryboardRequest,
     RewriteScriptRequest,
+    RefineScriptCharactersRequest,
+    RefineScriptCharactersResponse,
     StoryTemplateField,
     GenerateVideoProductionScriptRequest,
     VideoProductionScene,
     GenerateImageRequest,
     GenerateAudioRequest,
     BatchGenerateRequest,
+)
+from backend.schemas.characters import (
+    CharacterConfig,
+    CharacterReferenceGenerateRequest,
+    ProjectCharacters,
 )
 from backend.schemas.settings import AppSettings, ProviderStatus
 from backend.schemas.video_settings import (
@@ -49,9 +58,10 @@ __all__ = [
     "ProjectCreate", "ProjectUpdate", "ProjectOut", "ProjectListOut",
     "SceneCreate", "SceneUpdate", "SceneOut", "AssetOut", "ProjectAssetOut",
     "JobOut",
-    "GenerateVideoRequest", "GenerateScriptRequest", "GenerateStoryboardRequest", "StoryTemplateField", "GenerateVideoProductionScriptRequest",
-    "RewriteScriptRequest", "VideoProductionScene", "GenerateImageRequest",
+    "GenerateVideoRequest", "DialogueVideoRequest", "DialogueSceneInput", "GenerateScriptRequest", "GenerateStoryboardRequest", "StoryTemplateField", "GenerateVideoProductionScriptRequest",
+    "RewriteScriptRequest", "RefineScriptCharactersRequest", "RefineScriptCharactersResponse", "VideoProductionScene", "GenerateImageRequest",
     "GenerateAudioRequest", "BatchGenerateRequest",
+    "CharacterConfig", "CharacterReferenceGenerateRequest", "ProjectCharacters",
     "AppSettings", "ProviderStatus",
     "AudioSettings", "ProjectVideoSettingsCreate", "ProjectVideoSettingsOut",
     "ProjectVideoSettingsUpdate", "SafeZoneConfig", "SafeZoneResponse",

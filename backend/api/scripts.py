@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.schemas import (
     GenerateScriptRequest,
     GenerateStoryboardRequest,
     GenerateVideoProductionScriptRequest,
+    RefineScriptCharactersRequest,
+    RefineScriptCharactersResponse,
     RewriteScriptRequest,
     ScriptAnalysisRequest,
     ScriptImproveRequest,
@@ -26,12 +30,13 @@ from backend.services.script_service import (
     generate_video_production_script,
     improve_narration_text,
     list_story_templates,
+    refine_script_with_characters,
     rewrite_script,
     STORY_TYPES,
     validate_story_template_field,
 )
 from backend.services.transition_service import list_transitions
-from backend.services.viral_ideas_service import fetch_viral_ideas
+from backend.services.viral_ideas_service import fetch_viral_ideas, stream_viral_ideas
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -83,6 +88,26 @@ async def rewrite_script_endpoint(req: RewriteScriptRequest):
         temperature=req.temperature,
     )
     return {"text": edited}
+
+
+@router.post("/refine-characters", response_model=RefineScriptCharactersResponse)
+async def refine_script_characters_endpoint(req: RefineScriptCharactersRequest):
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Please add text to refine.")
+    if not req.instruction.strip():
+        raise HTTPException(status_code=400, detail="Please describe what should change.")
+    try:
+        refined_text, characters = await refine_script_with_characters(
+            text=req.text,
+            instruction=req.instruction,
+            story_type=req.story_type,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+            temperature=req.temperature,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Refine response was invalid: {exc}") from exc
+    return RefineScriptCharactersResponse(text=refined_text, characters=characters)
 
 
 @router.post("/analyze", response_model=ScriptQualityMetrics)
@@ -349,6 +374,14 @@ async def viral_ideas(req: ViralIdeasRequest):
             count=req.count,
             llm_provider=req.llm_provider,
             llm_model=req.llm_model,
+            idea_type=req.idea_type,
+            tone=req.tone,
+            hook_style=req.hook_style,
+            virality_angle=req.virality_angle,
+            duration_target_seconds=req.duration_target_seconds,
+            character_mode=req.character_mode,
+            cast_size=req.cast_size,
+            avoid_topics=req.avoid_topics,
             resolution_ids=_RESOLUTION_IDS,
             transition_ids=transition_ids,
         )
@@ -359,6 +392,40 @@ async def viral_ideas(req: ViralIdeasRequest):
         logger.exception("viral ideas LLM failure")
         raise HTTPException(502, detail=f"AI request failed: {str(exc)[:200]}") from exc
     return {"ideas": ideas}
+
+
+@router.post("/viral-ideas-stream")
+async def viral_ideas_stream(req: ViralIdeasRequest):
+    """Stream viral ideas progressively as NDJSON events."""
+    transition_ids = [t["id"] for t in list_transitions()]
+
+    async def event_stream():
+        try:
+            async for event in stream_viral_ideas(
+                niche=req.niche,
+                count=req.count,
+                llm_provider=req.llm_provider,
+                llm_model=req.llm_model,
+                idea_type=req.idea_type,
+                tone=req.tone,
+                hook_style=req.hook_style,
+                virality_angle=req.virality_angle,
+                duration_target_seconds=req.duration_target_seconds,
+                character_mode=req.character_mode,
+                cast_size=req.cast_size,
+                avoid_topics=req.avoid_topics,
+                resolution_ids=_RESOLUTION_IDS,
+                transition_ids=transition_ids,
+            ):
+                yield json.dumps(event) + "\n"
+        except ValueError as exc:
+            logger.warning("viral ideas stream parse error: %s", exc)
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+        except Exception as exc:
+            logger.exception("viral ideas stream failure")
+            yield json.dumps({"type": "error", "message": f"AI request failed: {str(exc)[:200]}"}) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 class AnalyzeConceptRequest(BaseModel):

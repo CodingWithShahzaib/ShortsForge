@@ -169,6 +169,7 @@ from backend.api.audio import router as audio_router
 from backend.api.scripts import router as scripts_router
 from backend.api.settings import router as settings_router
 from backend.api.templates import router as templates_router
+from backend.api.characters import router as characters_router
 from backend.api.websocket import router as ws_router
 from backend.api.media import router as media_router
 from backend.api.youtube import router as youtube_router
@@ -180,6 +181,7 @@ app.include_router(audio_router, prefix="/api/audio", tags=["audio"])
 app.include_router(scripts_router, prefix="/api/scripts", tags=["scripts"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(templates_router, prefix="/api/templates", tags=["templates"])
+app.include_router(characters_router, prefix="/api/characters", tags=["characters"])
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])
 app.include_router(media_router, prefix="/api/media", tags=["media"])
 app.include_router(youtube_router, prefix="/api/youtube", tags=["youtube"])

@@ -224,25 +224,6 @@ function HorizontalStepper({
         })}
       </div>
 
-      {activeStep ? (
-        <div className="mt-3 rounded-xl border border-border/60 bg-card/70 p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-medium">{activeStep.label}</p>
-            {activeBadge ? (
-              <Badge variant={activeError ? "error" : "secondary"} className="h-5 px-2 text-[10px] uppercase tracking-wide">
-                {activeBadge}
-              </Badge>
-            ) : null}
-          </div>
-          <p className="text-xs text-muted-foreground">{activeStep.description}</p>
-          {activeStatus ? <p className="mt-1 text-xs font-medium text-primary">{activeStatus}</p> : null}
-          {activeError ? (
-            <p className="mt-1 text-xs font-medium text-destructive">{activeError}</p>
-          ) : activeHint ? (
-            <p className="mt-1 text-xs text-muted-foreground">{activeHint}</p>
-          ) : null}
-        </div>
-      ) : null}
     </nav>
   );
 }

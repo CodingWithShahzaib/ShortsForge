@@ -21,7 +21,7 @@ class GenerateVideoRequestValidationTests(unittest.TestCase):
         self.assertTrue(req.tts_normalize)
         self.assertEqual(req.scene_duration, 5.0)
         self.assertEqual(req.scene_narration_style, "balanced")
-        self.assertEqual(req.subtitle_source, "llm")
+        self.assertEqual(req.subtitle_source, "transcription")
         self.assertEqual(req.subtitle_words_per_group, 4)
         self.assertEqual(req.transcription_provider, "openai")
         self.assertTrue(req.use_production_storyboard)

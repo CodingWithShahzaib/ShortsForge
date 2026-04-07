@@ -52,7 +52,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LinearProgress } from "@/components/ui/progress-linear";
-import { Separator } from "@/components/ui/separator";
 import { BodyPortal } from "@/components/ui/drag-overlay-portal";
 import {
   Card,
@@ -464,6 +463,9 @@ function SceneQuickTools({
   draft,
   onDraftChange,
   onSaveScene,
+  onMatchAllToAudio,
+  matchingAllToAudio,
+  hasAnyAudio,
   onRefresh,
 }: {
   project: Project;
@@ -471,6 +473,9 @@ function SceneQuickTools({
   draft?: SceneDraft;
   onDraftChange: (sceneId: string, patch: SceneDraft) => void;
   onSaveScene: (sceneId: string) => Promise<boolean>;
+  onMatchAllToAudio: () => Promise<void>;
+  matchingAllToAudio: boolean;
+  hasAnyAudio: boolean;
   onRefresh: () => void;
 }) {
   const [duration, setDuration] = useState(
@@ -482,7 +487,6 @@ function SceneQuickTools({
   const [saving, setSaving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [generatingTts, setGeneratingTts] = useState(false);
-  const [matchingAudio, setMatchingAudio] = useState(false);
   const [regenerateMode, setRegenerateMode] = useState<"image" | "audio" | "both">("image");
   const [ttsText, setTtsText] = useState(
     (scene.narration || scene.subtitle || "").trim(),
@@ -568,25 +572,6 @@ function SceneQuickTools({
       audioRef.current.src = audioSrc;
     }
     audioRef.current.play().catch(() => {});
-  };
-
-  const matchDurationToAudio = async () => {
-    if (!audioSrc) return;
-    setMatchingAudio(true);
-    try {
-      const dur = await getAudioDurationFromUrl(audioSrc, {
-        min: SCENE_DUR_MIN,
-        max: SCENE_DUR_MAX,
-      });
-      setDuration(dur);
-      await api.updateScene(project.id, scene.id, { duration: dur });
-      notify.success(`Duration set to ${dur.toFixed(1)}s to match voiceover`);
-      onRefresh();
-    } catch {
-      notify.error("Could not read audio length.");
-    } finally {
-      setMatchingAudio(false);
-    }
   };
 
   const queueSceneTts = async () => {
@@ -751,15 +736,20 @@ function SceneQuickTools({
         variant="secondary"
         size="sm"
         className="h-9 w-full gap-1.5 justify-center"
-        onClick={() => void matchDurationToAudio()}
-        disabled={matchingAudio || !audioSrc}
+        onClick={() => void onMatchAllToAudio()}
+        disabled={matchingAllToAudio || !hasAnyAudio}
+        title={
+          hasAnyAudio
+            ? "Set each scene duration to match its voiceover"
+            : "Add voiceover in Assets first"
+        }
       >
-        {matchingAudio ? (
+        {matchingAllToAudio ? (
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />
         ) : (
           <Link2 className="h-3.5 w-3.5" />
         )}
-        Match to audio
+        Match all to audio
       </Button>
 
       <div className="h-px w-full bg-border/40" />
@@ -1334,57 +1324,21 @@ export default function ArrangeStep({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-border/30 bg-card/70 px-3 py-2.5">
-        <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-          Back to Assets
-        </Button>
-        <div className="text-sm font-semibold text-foreground">
-          Arrange & Edit
-          <span className="ml-2 text-xs font-normal text-muted-foreground">
-            {orderedScenes.length} scenes
-          </span>
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-3 px-1 pb-1">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-foreground/90">Arrange & Edit</h2>
+          <p className="text-xs text-muted-foreground">Tune pacing, transitions, and verify final assets before export.</p>
         </div>
-        <Button onClick={onNext} variant="animated">
-          Export Video
-          <ArrowRight className="h-4 w-4" />
-        </Button>
-      </div>
-
-      <div className="shrink-0 rounded-2xl border border-border/50 bg-card/80 px-4 py-4 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="inline-flex rounded-full bg-primary/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-              Arrange
-            </div>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight">Tune pacing, transitions, and scene order</h2>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              This is the review pass before compile. Reorder beats, fine-tune durations, and make sure each scene feels ready for the final cut.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 lg:min-w-[340px] lg:grid-cols-4">
-            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Scenes</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{orderedScenes.length}</p>
-            </div>
-            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Audio</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{hasAnyAudio ? "Ready" : "Missing"}</p>
-            </div>
-            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Selected image</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{selectedHasImage ? "Ready" : "Missing"}</p>
-            </div>
-            <div className="rounded-xl border border-border/50 bg-background/70 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Selected audio</p>
-              <p className="mt-1 text-sm font-semibold text-foreground">{selectedHasAudio ? "Ready" : "Missing"}</p>
-            </div>
-          </div>
+        <div className="flex items-center gap-2">
+          <Button onClick={onNext} variant="animated" size="sm" className="h-8">
+            Continue to Export
+            <ArrowRight className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden lg:grid-cols-12 lg:items-stretch lg:gap-4">
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/30 bg-card/70 lg:col-span-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row lg:items-stretch lg:gap-4">
+        <section className="flex min-h-0 flex-1 shrink-0 flex-col overflow-hidden rounded-xl border border-border/30 bg-card/70 lg:w-[260px] lg:flex-none">
           <div className="shrink-0 border-b border-border/20 bg-background/60 px-3 py-2">
             <div className="flex items-center justify-between gap-2">
               <h3 className="flex items-center gap-2 text-xs font-semibold text-foreground/90 uppercase tracking-wide">
@@ -1441,7 +1395,7 @@ export default function ArrangeStep({
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/30 bg-card/80 p-3 lg:col-span-6">
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/30 bg-card/80 p-3 lg:min-w-0">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-foreground/90">
               Scene Editor
@@ -1479,15 +1433,15 @@ export default function ArrangeStep({
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 lg:col-span-3">
-          <Card className="shrink-0 rounded-xl border-border/30 bg-card/80">
-            <CardHeader className="pb-3">
+        <section className="flex min-h-0 flex-1 shrink-0 flex-col overflow-y-auto pr-1 lg:w-[320px] lg:flex-none lg:overflow-hidden">
+          <Card className="flex min-h-0 flex-1 flex-col shrink-0 rounded-xl border-border/30 bg-card/80">
+            <CardHeader className="pb-3 shrink-0">
               <CardTitle className="text-sm">Tools & pacing</CardTitle>
               <CardDescription className="text-[11px]">
                 Scene controls, batch actions, and compile pacing in one panel.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4 pt-0">
+            <CardContent className="min-h-0 flex-1 overflow-y-auto space-y-4 pt-0">
               <details open className="rounded-lg border border-border/40 bg-background/40 p-3">
                 <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground/90">
                   Scene
@@ -1500,6 +1454,9 @@ export default function ArrangeStep({
                       draft={sceneDrafts[selectedScene.id]}
                       onDraftChange={updateSceneDraft}
                       onSaveScene={saveSceneDraft}
+                      onMatchAllToAudio={matchAllScenesToAudio}
+                      matchingAllToAudio={matchingAll}
+                      hasAnyAudio={hasAnyAudio}
                       onRefresh={onRefresh}
                     />
                   ) : (
@@ -1534,29 +1491,6 @@ export default function ArrangeStep({
                   Timing
                 </summary>
                 <div className="mt-3 space-y-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full gap-1.5"
-                    disabled={matchingAll || !hasAnyAudio}
-                    onClick={() => void matchAllScenesToAudio()}
-                    title={
-                      hasAnyAudio
-                        ? "Set each scene duration to match its voiceover"
-                        : "Add voiceover in Assets first"
-                    }
-                  >
-                    {matchingAll ? (
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Link2 className="h-3.5 w-3.5" />
-                    )}
-                    Match all to audio
-                  </Button>
-
-                  <Separator />
-
                   <div>
                     <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       Inter-scene pause (ms)
