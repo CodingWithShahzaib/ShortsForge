@@ -10,6 +10,7 @@ import {
   type GenerateFormValues,
 } from "@/app/generate/schema";
 import { useStoryTemplatesQuery } from "@/lib/queries/generateCatalog";
+import { resolveStoryProfileLabel } from "@/lib/story-quality";
 
 type Provider = { name: string; configured: boolean };
 
@@ -54,10 +55,15 @@ export const StorySettingsCard = memo(function StorySettingsCard({
     [storyTemplatesRemote]
   );
   const storyTemplateId = useWatch({ control, name: "story_template" });
+  const storyType = useWatch({ control, name: "story_type" });
   const templateHint = useMemo(() => {
     const t = storyTemplates.find((x) => x.id === storyTemplateId);
     return t?.description ?? "";
   }, [storyTemplates, storyTemplateId]);
+  const resolvedProfile = useMemo(
+    () => resolveStoryProfileLabel(storyType, storyTemplateId),
+    [storyTemplateId, storyType]
+  );
   const showError = (name: keyof GenerateFormValues) => !!(submitCount > 0 || touchedFields[name]) && !!errors[name];
 
   return (
@@ -118,6 +124,13 @@ export const StorySettingsCard = memo(function StorySettingsCard({
               <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.story_template?.message}</p>
             ) : null}
           </div>
+        </div>
+        <div className="mt-3 rounded-xl bg-background/55 p-3 ring-1 ring-border/20">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Resolved story profile</p>
+          <p className="mt-1 text-sm font-semibold text-foreground">{resolvedProfile}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Templates shape the arc, while the Story Brief card below tunes hook, payoff, pacing, and show-vs-tell inside that shared profile.
+          </p>
         </div>
       </div>
 

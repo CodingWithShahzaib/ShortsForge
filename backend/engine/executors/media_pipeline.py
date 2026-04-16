@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -13,13 +15,20 @@ from backend.core.storage import build_key, get_storage, guess_content_type, loc
 from backend.engine.planning import RenderPlan, ResolvedGenerationSettings, SceneSpec
 from backend.models import Asset, Scene
 from backend.services.audio_service import synthesize_speech
+from backend.services.character_consistency import CharacterConsistencyManager
 from backend.services.image_service import DEFAULT_TEXT_NEGATIVE_PROMPT, generate_image
+from backend.services.image_prompt_runtime import (
+    build_image_prompt_audit_metadata,
+    compose_image_generation_prompt,
+)
 from backend.services.overlay_service import resolve_overlay_file
 from backend.services.project_video_settings_service import ensure_scene_asset_override
 from backend.services.subtitle_service import (
     generate_ass_from_scene_texts,
     generate_subtitles_from_scene_audios,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _hex_to_ass_color(hex_color: str) -> str:
@@ -227,6 +236,7 @@ async def _prepare_scene_assets(
     width: int,
     height: int,
     progress: Callable[[str], Coroutine[Any, Any, None]],
+    consistency_manager: CharacterConsistencyManager | None,
 ) -> tuple[str, float]:
     existing_assets = list(scene_model.assets) if scene_model else []
     scene_voice = sc.voice_profile or (
@@ -272,9 +282,48 @@ async def _prepare_scene_assets(
     image_asset = await _get_asset_by_type(existing_assets, "image")
     if not image_asset and sc.image_prompt:
         ip, ist, iextra = _scene_image_generate_kwargs(sc, resolved_settings)
+        final_prompt = compose_image_generation_prompt(sc, resolved_settings)
+
+        character_id = None
+        scene_settings = sc.scene_settings if isinstance(sc.scene_settings, dict) else {}
+        if scene_settings.get("speaker_id"):
+            character_id = str(scene_settings.get("speaker_id") or "").strip() or None
+        if not character_id and sc.character_references:
+            ref_id = sc.character_references.get("character_id")
+            if ref_id:
+                character_id = str(ref_id).strip() or None
+        if not character_id and sc.narration:
+            match = re.search(r"\b([A-Z][a-z]{2,})\b", sc.narration)
+            if match:
+                character_id = match.group(1).lower()
+                if isinstance(sc.scene_settings, dict):
+                    sc.scene_settings.setdefault("character_id", character_id)
+
+        if character_id and resolved_settings.character_consistency_enabled and consistency_manager:
+            iextra.setdefault("seed", consistency_manager.get_or_create_seed(character_id))
+
+        prompt_audit = build_image_prompt_audit_metadata(
+            scene=sc,
+            settings=resolved_settings,
+            provider=ip,
+            style=ist,
+            final_prompt=final_prompt,
+            generation_kwargs=iextra,
+        )
+        logger.info(
+            "Scene %s image prompt audit provider=%s style=%s beat_role=%s profile=%s preview=%s",
+            idx + 1,
+            ip,
+            ist,
+            prompt_audit.get("beat_role"),
+            prompt_audit.get("story_profile"),
+            final_prompt[:200],
+        )
         async with image_sem:
-            img_path = await generate_image(sc.image_prompt, ip, width, height, ist, **iextra)
+            img_path = await generate_image(final_prompt, ip, width, height, ist, **iextra)
         await progress(f"Image for scene {idx + 1}")
+        if character_id and consistency_manager:
+            consistency_manager.store_reference_image(character_id, img_path)
         await _commit_scene_asset(
             session=session,
             db_lock=db_lock,
@@ -288,6 +337,7 @@ async def _prepare_scene_assets(
                     "width": width,
                     "height": height,
                     "style": ist,
+                    "prompt_audit": prompt_audit,
                     **{k: iextra[k] for k in ("negative_prompt", "seed") if k in iextra},
                 },
             ),
@@ -381,6 +431,7 @@ async def _render_scene_visual(
     regenerate_scene_ids: set[str] | None,
     force_regenerate_scene_clips: bool,
     progress: Callable[[str], Coroutine[Any, Any, None]],
+    consistency_manager: CharacterConsistencyManager | None,
 ) -> str:
     async with visual_sem:
         existing_assets = list(scene_model.assets) if scene_model else []
@@ -455,8 +506,47 @@ async def _render_scene_visual(
             return visual_path
 
         ip, ist, iextra = _scene_image_generate_kwargs(sc, resolved_settings)
-        img_path = await generate_image(sc.image_prompt, ip, width, height, ist, **iextra)
+        final_prompt = compose_image_generation_prompt(sc, resolved_settings)
+
+        character_id = None
+        scene_settings = sc.scene_settings if isinstance(sc.scene_settings, dict) else {}
+        if scene_settings.get("speaker_id"):
+            character_id = str(scene_settings.get("speaker_id") or "").strip() or None
+        if not character_id and sc.character_references:
+            ref_id = sc.character_references.get("character_id")
+            if ref_id:
+                character_id = str(ref_id).strip() or None
+        if not character_id and sc.narration:
+            match = re.search(r"\b([A-Z][a-z]{2,})\b", sc.narration)
+            if match:
+                character_id = match.group(1).lower()
+                if isinstance(sc.scene_settings, dict):
+                    sc.scene_settings.setdefault("character_id", character_id)
+
+        if character_id and resolved_settings.character_consistency_enabled and consistency_manager:
+            iextra.setdefault("seed", consistency_manager.get_or_create_seed(character_id))
+
+        prompt_audit = build_image_prompt_audit_metadata(
+            scene=sc,
+            settings=resolved_settings,
+            provider=ip,
+            style=ist,
+            final_prompt=final_prompt,
+            generation_kwargs=iextra,
+        )
+        logger.info(
+            "Scene %s image prompt audit provider=%s style=%s beat_role=%s profile=%s preview=%s",
+            idx + 1,
+            ip,
+            ist,
+            prompt_audit.get("beat_role"),
+            prompt_audit.get("story_profile"),
+            final_prompt[:200],
+        )
+        img_path = await generate_image(final_prompt, ip, width, height, ist, **iextra)
         await progress(f"Image for scene {idx + 1}")
+        if character_id and consistency_manager:
+            consistency_manager.store_reference_image(character_id, img_path)
         await _commit_scene_asset(
             session=session,
             db_lock=db_lock,
@@ -471,6 +561,7 @@ async def _render_scene_visual(
                     "width": width,
                     "height": height,
                     "style": ist,
+                    "prompt_audit": prompt_audit,
                     **{k: iextra[k] for k in ("negative_prompt", "seed") if k in iextra},
                 },
             ),

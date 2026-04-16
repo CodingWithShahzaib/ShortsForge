@@ -10,6 +10,38 @@ from backend.services.script_service import validate_story_template_field
 StoryTemplateField = Annotated[str, AfterValidator(validate_story_template_field)]
 
 
+class HorrorStoryBrief(BaseModel):
+    scare_frequency: Literal["low", "medium", "high"] = "medium"
+    tension_curve: Literal["steady", "peaked", "escalating"] = "escalating"
+
+
+class NewsStoryBrief(BaseModel):
+    fact_density: Literal["light", "balanced", "dense"] = "balanced"
+    source_prominence: Literal["minimal", "standard", "high"] = "standard"
+
+
+class MotivationalStoryBrief(BaseModel):
+    emotional_tone: Literal["gentle", "energetic", "intense"] = "energetic"
+    takeaway_clarity: Literal["subtle", "balanced", "explicit"] = "explicit"
+
+
+class MysteryStoryBrief(BaseModel):
+    clue_density: Literal["light", "balanced", "dense"] = "balanced"
+    twist_style: Literal["subtle", "sharp", "late"] = "sharp"
+
+
+class StoryBrief(BaseModel):
+    hook_type: Literal["question", "statement", "visual", "shocking_fact"] = "question"
+    ending_type: Literal["cliffhanger", "resolution", "call_to_action", "twist"] = "resolution"
+    pacing_profile: Literal["fast", "balanced", "slow_build"] = "balanced"
+    visual_variety: Literal["high", "medium", "low"] = "medium"
+    show_vs_tell_priority: Literal["show", "balanced", "tell"] = "balanced"
+    horror: HorrorStoryBrief | None = None
+    news: NewsStoryBrief | None = None
+    motivational: MotivationalStoryBrief | None = None
+    mystery: MysteryStoryBrief | None = None
+
+
 class GenerateVideoSceneInput(BaseModel):
     """Pre-defined scene for video generation (from script editor)."""
     narration: str
@@ -31,6 +63,7 @@ class GenerateVideoRequest(BaseModel):
     title: str = "AI Video"
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
+    story_brief: StoryBrief | None = None
     custom_script: str | None = None
     scenes: list[GenerateVideoSceneInput] | None = None
     llm_provider: str = Field(default="openai", min_length=1)
@@ -150,6 +183,7 @@ class GenerateScriptRequest(BaseModel):
     concept: str
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
+    story_brief: StoryBrief | None = None
     word_count: int = 400
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
@@ -161,6 +195,7 @@ class GenerateStoryboardRequest(BaseModel):
     script: str = ""
     story_type: str = "general"
     story_template: StoryTemplateField = "default"
+    story_brief: StoryBrief | None = None
     scene_count: int = Field(default=5, ge=2, le=100)
     dynamic_scenes: bool = False
     image_style: str = "realistic"
@@ -221,6 +256,8 @@ class VideoProductionScene(BaseModel):
 class GenerateVideoProductionScriptRequest(BaseModel):
     concept: str
     story_type: str = "general"
+    story_template: StoryTemplateField = "default"
+    story_brief: StoryBrief | None = None
     scene_count: int = Field(default=5, ge=2, le=100)
     dynamic_scenes: bool = False
     image_style: str = "realistic"

@@ -59,6 +59,21 @@ class ViralIdeasServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(normalized["dialogue_style_preset"], "photorealistic")
 
+    def test_normalize_viral_idea_settings_maps_alias_story_types_and_preserves_story_brief(self) -> None:
+        normalized = normalize_viral_idea_settings(
+            {
+                "story_type": "horror",
+                "story_brief": {
+                    "hook_type": "visual",
+                    "ending_type": "cliffhanger",
+                },
+            },
+            resolution_ids=["1080x1920"],
+            transition_ids=["fade"],
+        )
+        self.assertEqual(normalized["story_type"], "scary")
+        self.assertEqual(normalized["story_brief"]["ending_type"], "cliffhanger")
+
     def test_normalize_viral_idea_settings_strips_stage_directions_from_starter_script(self) -> None:
         normalized = normalize_viral_idea_settings(
             {

@@ -14,6 +14,12 @@ from typing import Any, Callable, Coroutine
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from backend.engine.planning import ResolvedGenerationSettings, SceneSpec
+from backend.services.image_prompt_runtime import (
+    build_image_prompt_audit_metadata,
+    compose_image_generation_prompt,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +89,6 @@ async def handle_video_render(params: dict[str, Any]) -> dict[str, Any]:
     """Render a full project video pipeline (storyboard → render)."""
     from backend.database import async_session
     from backend.engine import EngineRequest, ShortsForgeEngine
-    from backend.engine.planning import ResolvedGenerationSettings, SceneSpec
     from backend.models import Job, Project
     from backend.services.project_video_settings_service import build_runtime_settings
 
@@ -273,6 +278,7 @@ async def _run_asset_generate(
         )
         project = r_proj.scalar_one()
         settings = build_runtime_settings(project, app_settings)
+        resolved_settings = ResolvedGenerationSettings.from_mapping(settings, app_settings)
 
         if asset_type == "image":
             for a in list(scene.assets):
@@ -302,6 +308,39 @@ async def _run_asset_generate(
                 except (TypeError, ValueError):
                     gen_kwargs["seed"] = seed
 
+            scene_spec = SceneSpec.from_mapping(
+                {
+                    "id": scene.id,
+                    "narration": scene.narration,
+                    "subtitle": scene.subtitle,
+                    "image_prompt": img_prompt,
+                    "transition_type": scene.transition_type,
+                    "scene_type": scene.scene_type,
+                    "duration": scene.duration,
+                    "scene_settings": ov,
+                    "trim_start_sec": scene.trim_start_sec,
+                    "trim_end_sec": scene.trim_end_sec,
+                }
+            )
+            final_prompt = compose_image_generation_prompt(scene_spec, resolved_settings)
+            prompt_audit = build_image_prompt_audit_metadata(
+                scene=scene_spec,
+                settings=resolved_settings,
+                provider=image_provider,
+                style=image_style,
+                final_prompt=final_prompt,
+                generation_kwargs=gen_kwargs,
+            )
+            logger.info(
+                "Manual image prompt audit scene_id=%s provider=%s style=%s beat_role=%s profile=%s preview=%s",
+                scene_id,
+                image_provider,
+                image_style,
+                prompt_audit.get("beat_role"),
+                prompt_audit.get("story_profile"),
+                final_prompt[:200],
+            )
+
             prev_id: str | None = None
             imgs = [a for a in scene.assets if a.type == "image" and a.is_active]
             if imgs:
@@ -316,7 +355,7 @@ async def _run_asset_generate(
             await session.flush()
 
             img_path = await generate_image(
-                img_prompt, image_provider, width, height, image_style, **gen_kwargs
+                final_prompt, image_provider, width, height, image_style, **gen_kwargs
             )
             await ws_manager.send_progress(job_id, "asset_generate", 80, "in_progress", "Saving image")
             new_asset = Asset(
@@ -331,6 +370,7 @@ async def _run_asset_generate(
                     "width": width,
                     "height": height,
                     "style": image_style,
+                    "prompt_audit": prompt_audit,
                     **{k: gen_kwargs[k] for k in ("negative_prompt", "seed") if k in gen_kwargs},
                 },
             )

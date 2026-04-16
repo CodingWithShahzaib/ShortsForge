@@ -37,6 +37,34 @@ def _scene_model_to_spec(scene: Scene, default_transition: str) -> SceneSpec:
     )
 
 
+def _build_generated_scene_settings(raw_scene: dict[str, Any]) -> dict[str, Any] | None:
+    base = dict(raw_scene.get("scene_settings") or {})
+    raw_scene_role = raw_scene.get("beat_role") or raw_scene.get("scene_role")
+    if raw_scene_role not in (None, "", [], {}):
+        base["scene_role"] = raw_scene_role
+        base["beat_role"] = raw_scene_role
+    for key in (
+        "story_profile",
+        "scene_emotion",
+        "camera_angle",
+        "camera_movement",
+        "lighting",
+        "quality",
+        "speaker_id",
+        "shot_type",
+        "is_reaction_shot",
+        "character_references",
+        "voice_profile",
+        "audio_tension_curve",
+        "visual_insert_types",
+        "recommended_transition_style",
+    ):
+        value = raw_scene.get(key)
+        if value not in (None, "", [], {}):
+            base[key] = value
+    return base or None
+
+
 class StoryboardStage:
     async def run(self, context: EngineContext) -> EngineContext:
         session = context.session
@@ -75,6 +103,7 @@ class StoryboardStage:
                 storyboard = await generate_video_production_script(
                     concept=project.title or "AI Video",
                     story_type=context.settings.story_type or project.story_type,
+                    story_template=context.settings.story_template,
                     scene_count=context.settings.scene_count,
                     dynamic_scenes=context.settings.dynamic_scenes,
                     image_style=context.settings.image_style,
@@ -84,6 +113,7 @@ class StoryboardStage:
                     llm_model=context.settings.llm_model,
                     temperature=0.7,
                     visual_continuity=context.settings.visual_continuity,
+                    story_brief=context.settings.story_brief,
                     scene_narration_style=context.settings.scene_narration_style,
                     scene_duration_min=context.settings.scene_duration_min,
                     scene_duration_max=context.settings.scene_duration_max,
@@ -104,6 +134,7 @@ class StoryboardStage:
                     llm_provider=context.settings.llm_provider,
                     llm_model=context.settings.llm_model,
                     story_template=context.settings.story_template,
+                    story_brief=context.settings.story_brief,
                     visual_continuity=context.settings.visual_continuity,
                     scene_duration_min=context.settings.scene_duration_min,
                     scene_duration_max=context.settings.scene_duration_max,
@@ -116,6 +147,15 @@ class StoryboardStage:
             settings_dict["use_production_storyboard"] = bool(use_prod)
             if storyboard.get("visual_continuity"):
                 settings_dict["visual_continuity"] = storyboard.get("visual_continuity")
+            if storyboard.get("story_profile"):
+                settings_dict["story_profile"] = storyboard.get("story_profile")
+            if storyboard.get("visual_audio_profile"):
+                settings_dict["visual_audio_profile"] = storyboard.get("visual_audio_profile")
+            if storyboard.get("story_quality_report"):
+                settings_dict["story_quality_report"] = storyboard.get("story_quality_report")
+                settings_dict["quality_report"] = storyboard.get("story_quality_report")
+            if storyboard.get("script_fix_report"):
+                settings_dict["script_fix_report"] = storyboard.get("script_fix_report")
             app = context.app_settings or get_settings()
             apply_project_settings_snapshot(project, settings_dict, app)
             raw_scenes = storyboard.get("scenes", [])
@@ -138,6 +178,8 @@ class StoryboardStage:
         raw_scenes, stage_issues = repair_storyboard_scene_narration(
             raw_scenes,
             script=project.script or "",
+            story_type=context.settings.story_type or project.story_type,
+            story_template=context.settings.story_template,
             skip_indexes=protected_scene_indexes,
         )
         if stage_issues:
@@ -178,7 +220,8 @@ class StoryboardStage:
                     image_prompt=image_prompt,
                     transition_type=transition or context.settings.transition,
                     duration=scene_duration,
-                    scene_type="image",
+                    scene_type=sc.get("scene_type") or "image",
+                    scene_settings=_build_generated_scene_settings(dict(sc)),
                 )
             )
             normalized_scenes.append(

@@ -11,6 +11,7 @@ from backend.engine.context import EngineContext
 from backend.engine.results import EngineResult
 from backend.engine.executors.media_pipeline import _prepare_scene_assets
 from backend.models import Scene
+from backend.services.character_consistency import CharacterConsistencyManager
 
 
 class AssetsStage:
@@ -50,6 +51,7 @@ class AssetsStage:
         resolution = context.settings.resolution
         width, height = map(int, resolution.split("x"))
 
+        consistency_manager = CharacterConsistencyManager(context.project_id)
         packed = await asyncio.gather(*[
             _prepare_scene_assets(
                 idx=i,
@@ -66,6 +68,7 @@ class AssetsStage:
                 width=width,
                 height=height,
                 progress=_progress,
+                consistency_manager=consistency_manager,
             )
             for i in range(len(context.scenes))
         ])

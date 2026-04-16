@@ -60,6 +60,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { QualityPanel } from "@/components/studio/QualityPanel";
 import {
   pickLatestAsset,
   assetMediaSrc,
@@ -1462,6 +1463,19 @@ export default function ArrangeStep({
                   ) : (
                     <p className="text-xs text-muted-foreground">Select a scene to edit.</p>
                   )}
+                </div>
+              </details>
+
+              <details open className="rounded-lg border border-border/40 bg-background/40 p-3">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-foreground/90">
+                  Story Quality
+                </summary>
+                <div className="mt-3">
+                  <QualityPanel
+                    project={project}
+                    scenes={orderedScenes}
+                    onSelectScene={(sceneId) => setSelectedId(sceneId)}
+                  />
                 </div>
               </details>
 

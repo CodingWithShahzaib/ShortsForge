@@ -2,13 +2,14 @@
 
 import { memo, useState } from "react";
 import { motion } from "framer-motion";
-import { useFormContext } from "react-hook-form";
+import { useFormContext, useWatch } from "react-hook-form";
 import { Play } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import type { GenerateFormValues } from "@/app/generate/schema";
 import { fieldFocusVariants, prefersReducedMotion } from "@/lib/micro-interactions";
+import { describeStoryBrief, resolveStoryProfileLabel } from "@/lib/story-quality";
 
 type Props = {
   generating: boolean;
@@ -27,12 +28,18 @@ export const ConceptFields = memo(function ConceptFields({
 }: Props) {
   const {
     register,
+    control,
     formState: { errors, touchedFields, submitCount },
   } = useFormContext<GenerateFormValues>();
   const showTitleError = (touchedFields.title || submitCount > 0) && !!errors.title;
   const [titleFocused, setTitleFocused] = useState(false);
   const reduceMotion = prefersReducedMotion();
   const titleField = register("title");
+  const storyType = useWatch({ control, name: "story_type" });
+  const storyTemplate = useWatch({ control, name: "story_template" });
+  const storyBrief = useWatch({ control, name: "story_brief" });
+  const profileLabel = resolveStoryProfileLabel(storyType, storyTemplate);
+  const briefSummary = describeStoryBrief(storyBrief);
 
   return (
     <div
@@ -46,6 +53,14 @@ export const ConceptFields = memo(function ConceptFields({
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Premise</p>
             <p className="text-sm text-muted-foreground">Use one high-signal concept line. You can shape structure, pacing, visuals, and dialogue below.</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5 text-[11px]">
+            <span className="rounded-full border border-border/60 bg-muted/35 px-2 py-1 text-foreground/90">
+              {profileLabel} profile
+            </span>
+            <span className="rounded-full border border-border/60 bg-muted/35 px-2 py-1 text-muted-foreground">
+              {briefSummary}
+            </span>
           </div>
         </div>
         <Field

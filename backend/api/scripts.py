@@ -12,6 +12,8 @@ from backend.schemas import (
     GenerateScriptRequest,
     GenerateStoryboardRequest,
     GenerateVideoProductionScriptRequest,
+    NormalizeScriptRequest,
+    NormalizeScriptResponse,
     RefineScriptCharactersRequest,
     RefineScriptCharactersResponse,
     RewriteScriptRequest,
@@ -19,10 +21,13 @@ from backend.schemas import (
     ScriptImproveRequest,
     ScriptImproveResponse,
     ScriptQualityMetrics,
+    StoryQualityReport,
+    StoryStructureAnalysisRequest,
     StoryTemplateField,
 )
 from backend.schemas.generation import ViralIdeasRequest
 from backend.services.script_service import (
+    analyze_story_structure_report,
     analyze_narration_quality,
     analyze_hook_quality,
     generate_script,
@@ -30,11 +35,12 @@ from backend.services.script_service import (
     generate_video_production_script,
     improve_narration_text,
     list_story_templates,
+    normalize_script_text_with_report,
     refine_script_with_characters,
     rewrite_script,
-    STORY_TYPES,
     validate_story_template_field,
 )
+from backend.services.story_structure import list_story_type_options
 from backend.services.transition_service import list_transitions
 from backend.services.viral_ideas_service import fetch_viral_ideas, stream_viral_ideas
 
@@ -69,6 +75,7 @@ async def generate_script_endpoint(req: GenerateScriptRequest):
         llm_model=req.llm_model,
         temperature=req.temperature,
         story_template=req.story_template,
+        story_brief=req.story_brief.model_dump(exclude_none=True) if req.story_brief else None,
     )
     return {"script": script, "word_count": len(script.split())}
 
@@ -177,6 +184,25 @@ async def improve_script_quality_endpoint(req: ScriptImproveRequest):
     )
 
 
+@router.post("/normalize", response_model=NormalizeScriptResponse)
+async def normalize_script_endpoint(req: NormalizeScriptRequest):
+    normalized_text, report = normalize_script_text_with_report(req.text)
+    return NormalizeScriptResponse(text=normalized_text, report=report)
+
+
+@router.post("/analyze-story-structure", response_model=StoryQualityReport)
+async def analyze_story_structure_endpoint(req: StoryStructureAnalysisRequest):
+    scene_payloads = [scene.model_dump(exclude_none=True) for scene in req.scenes]
+    report = analyze_story_structure_report(
+        story_type=req.story_type,
+        story_template=req.story_template,
+        scenes=scene_payloads,
+        script=req.script,
+        story_brief=req.story_brief.model_dump(exclude_none=True) if req.story_brief else None,
+    )
+    return StoryQualityReport.model_validate(report)
+
+
 @router.post("/storyboard")
 async def generate_storyboard_endpoint(req: GenerateStoryboardRequest):
     _check_story_template(req.story_template)
@@ -196,6 +222,7 @@ async def generate_storyboard_endpoint(req: GenerateStoryboardRequest):
             llm_provider=req.llm_provider,
             llm_model=req.llm_model,
             story_template=req.story_template,
+            story_brief=req.story_brief.model_dump(exclude_none=True) if req.story_brief else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -208,6 +235,7 @@ async def generate_video_production_script_endpoint(req: GenerateVideoProduction
     result = await generate_video_production_script(
         concept=req.concept,
         story_type=req.story_type,
+        story_template=req.story_template,
         scene_count=req.scene_count,
         dynamic_scenes=req.dynamic_scenes,
         image_style=req.image_style,
@@ -218,13 +246,14 @@ async def generate_video_production_script_endpoint(req: GenerateVideoProduction
         llm_model=req.llm_model,
         temperature=req.temperature,
         visual_continuity=req.visual_continuity,
+        story_brief=req.story_brief.model_dump(exclude_none=True) if req.story_brief else None,
     )
     return result
 
 
 @router.get("/story-types")
 async def list_story_types():
-    return [{"id": t, "name": t.replace("_", " ").title()} for t in STORY_TYPES]
+    return list_story_type_options()
 
 
 @router.get("/story-templates")

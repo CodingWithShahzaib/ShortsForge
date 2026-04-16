@@ -5,6 +5,7 @@ import { useWatch } from "react-hook-form";
 import type { Control } from "react-hook-form";
 import type { GenerateFormValues } from "@/app/generate/schema";
 import { Badge } from "@/components/ui/badge";
+import { describeProfileSpecificTuning, describeStoryBrief, qualityPostureTone, resolveStoryProfileLabel } from "@/lib/story-quality";
 import { cn } from "@/lib/utils";
 import { toFriendlyProvider } from "@/lib/user-facing-text";
 
@@ -47,6 +48,9 @@ function Chip({
 export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control, variant = "default" }: Props) {
   const resolution = useWatch({ control, name: "resolution" });
   const generation_mode = useWatch({ control, name: "generation_mode" });
+  const story_type = useWatch({ control, name: "story_type" });
+  const story_template = useWatch({ control, name: "story_template" });
+  const story_brief = useWatch({ control, name: "story_brief" });
   const scene_count = useWatch({ control, name: "scene_count" });
   const dynamic_scenes = useWatch({ control, name: "dynamic_scenes" });
   const scene_duration = useWatch({ control, name: "scene_duration" });
@@ -77,6 +81,10 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
   const dialogueSceneDisplay = `${scene_duration}s base scenes`;
   const dialogueRenderDisplay = match_scenes_to_audio ? "Audio-synced pacing" : "Fixed pacing";
   const dialoguePauseDisplay = `${pause_between_speakers_ms}ms speaker pause`;
+  const resolvedProfile = resolveStoryProfileLabel(story_type, story_template);
+  const briefSummary = describeStoryBrief(story_brief);
+  const postureSummary = qualityPostureTone(story_brief);
+  const profileTuning = describeProfileSpecificTuning(story_type, story_brief);
 
   if (variant === "strip") {
     return (
@@ -84,7 +92,9 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         <div className="flex flex-wrap items-center gap-1.5">
           <Chip>{resolution}</Chip>
           <Chip>{generationModeLabel} mode</Chip>
+          <Chip>{resolvedProfile}</Chip>
           <Chip>{generation_mode === "dialogue" ? dialogueSceneDisplay : (dynamic_scenes ? `AI scenes × ${scene_duration}s target` : `${scene_count} scenes × ${scene_duration}s`)}</Chip>
+          <Chip>{briefSummary}</Chip>
           <Chip>{generation_mode === "dialogue" ? dialogueRenderDisplay : `${scene_narration_style} scene copy`}</Chip>
           <Chip>{generation_mode === "dialogue" ? dialoguePauseDisplay : totalDurationDisplay}</Chip>
           <Chip>{generation_mode === "dialogue" ? subtitleSourceLabel : estRuntimeDisplay}</Chip>
@@ -100,6 +110,8 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
           {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
           {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
           {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
+          <Badge variant="outline">{postureSummary}</Badge>
+          {profileTuning ? <Badge variant="outline">{profileTuning}</Badge> : null}
           {generation_mode === "dialogue" ? <Badge variant="outline">{dialogueStyleLabel}</Badge> : null}
         </div>
       </div>
@@ -113,6 +125,8 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           <Stat k="Resolution" v={resolution} />
           <Stat k="Mode" v={generationModeLabel} />
+          <Stat k="Profile" v={resolvedProfile} />
+          <Stat k="Story brief" v={briefSummary} />
           <Stat k="Scenes" v={generation_mode === "dialogue" ? `${characterCount} speakers` : sceneDisplay} />
           <Stat k="Scene duration" v={sceneDurationDisplay} />
           <Stat k={generation_mode === "dialogue" ? "Scene pacing" : "Scene copy"} v={generation_mode === "dialogue" ? dialoguePauseDisplay : scene_narration_style} />
@@ -128,6 +142,8 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
           {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
           {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
           {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
+          <Badge variant="outline">{postureSummary}</Badge>
+          {profileTuning ? <Badge variant="outline">{profileTuning}</Badge> : null}
           {generation_mode === "dialogue" ? <Badge variant="outline">{dialogueStyleLabel}</Badge> : null}
         </div>
       </div>
@@ -139,6 +155,8 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
       <div className="grid grid-cols-2 gap-2">
         <Stat k="Resolution" v={resolution} />
         <Stat k="Mode" v={generationModeLabel} />
+        <Stat k="Profile" v={resolvedProfile} />
+        <Stat k="Story brief" v={briefSummary} />
         <Stat k="Scenes" v={generation_mode === "dialogue" ? `${characterCount} speakers` : sceneDisplay} />
         <Stat k="Duration" v={sceneDurationDisplay} />
         <Stat k={generation_mode === "dialogue" ? "Scene pacing" : "Scene copy"} v={generation_mode === "dialogue" ? dialoguePauseDisplay : scene_narration_style} />
@@ -155,6 +173,8 @@ export const GenerateSummaryPanel = memo(function GenerateSummaryPanel({ control
         {dynamic_scenes ? <Badge variant="outline">AI scene count</Badge> : null}
         {use_production_storyboard ? <Badge variant="outline">Director-style scenes</Badge> : null}
         {match_scenes_to_audio ? <Badge variant="outline">Sync to voice</Badge> : null}
+        <Badge variant="outline">{postureSummary}</Badge>
+        {profileTuning ? <Badge variant="outline">{profileTuning}</Badge> : null}
         {generation_mode === "dialogue" ? <Badge variant="outline">{dialogueStyleLabel}</Badge> : null}
       </div>
     </div>

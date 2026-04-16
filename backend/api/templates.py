@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -7,8 +9,67 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.models import Template
+from backend.services.story_structure import normalize_story_type_value
 
 router = APIRouter()
+
+
+def _default_story_brief_for_story_type(story_type: str) -> dict[str, Any]:
+    normalized = normalize_story_type_value(story_type)
+    base = {
+        "hook_type": "question",
+        "ending_type": "resolution",
+        "pacing_profile": "balanced",
+        "visual_variety": "medium",
+        "show_vs_tell_priority": "balanced",
+    }
+    if normalized == "scary":
+        base.update(
+            {
+                "ending_type": "cliffhanger",
+                "visual_variety": "high",
+                "horror": {"scare_frequency": "medium", "tension_curve": "escalating"},
+            }
+        )
+    elif normalized == "news":
+        base.update(
+            {
+                "hook_type": "statement",
+                "ending_type": "call_to_action",
+                "news": {"fact_density": "dense", "source_prominence": "high"},
+            }
+        )
+    elif normalized == "motivational":
+        base.update(
+            {
+                "ending_type": "call_to_action",
+                "motivational": {
+                    "emotional_tone": "energetic",
+                    "takeaway_clarity": "explicit",
+                },
+            }
+        )
+    elif normalized == "top_list":
+        base.update(
+            {
+                "hook_type": "shocking_fact",
+                "pacing_profile": "fast",
+                "visual_variety": "high",
+            }
+        )
+    return base
+
+
+def _normalize_template_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    story_type = normalize_story_type_value(payload.get("story_type"))
+    settings = dict(payload.get("settings") or {})
+    settings.setdefault("story_type", story_type)
+    settings.setdefault("story_brief", _default_story_brief_for_story_type(story_type))
+    return {
+        **payload,
+        "story_type": story_type,
+        "settings": settings,
+    }
 
 BUILTIN_TEMPLATES = [
     {
@@ -69,7 +130,7 @@ BUILTIN_TEMPLATES = [
         "name": "Scary Story",
         "description": "Horror-themed narration with dark, atmospheric visuals",
         "category": "entertainment",
-        "story_type": "horror",
+        "story_type": "scary",
         "scene_count": 5,
         "settings": {
             "image_style": "cinematic",
@@ -173,16 +234,16 @@ async def list_templates(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Template).order_by(Template.created_at.desc()))
     custom = result.scalars().all()
     custom_list = [
-        {
+        _normalize_template_payload({
             "id": t.id, "name": t.name, "description": t.description,
             "category": t.category, "story_type": t.story_type,
             "scene_count": t.scene_count, "settings": t.settings,
             "scenes": t.scenes, "builtin": False,
-        }
+        })
         for t in custom
     ]
     builtin = [
-        {**t, "id": f"builtin_{i}", "builtin": True}
+        _normalize_template_payload({**t, "id": f"builtin_{i}", "builtin": True})
         for i, t in enumerate(BUILTIN_TEMPLATES)
     ]
     return builtin + custom_list
@@ -193,40 +254,44 @@ async def get_template(template_id: str, db: AsyncSession = Depends(get_db)):
     if template_id.startswith("builtin_"):
         idx = int(template_id.replace("builtin_", ""))
         if 0 <= idx < len(BUILTIN_TEMPLATES):
-            return {**BUILTIN_TEMPLATES[idx], "id": template_id, "builtin": True}
+            return _normalize_template_payload({**BUILTIN_TEMPLATES[idx], "id": template_id, "builtin": True})
         raise HTTPException(404, "Template not found")
     result = await db.execute(select(Template).where(Template.id == template_id))
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Template not found")
-    return {
+    return _normalize_template_payload({
         "id": t.id, "name": t.name, "description": t.description,
         "category": t.category, "story_type": t.story_type,
         "scene_count": t.scene_count, "settings": t.settings,
         "scenes": t.scenes, "builtin": False,
-    }
+    })
 
 
 @router.post("/", status_code=201)
 async def create_template(data: TemplateCreate, db: AsyncSession = Depends(get_db)):
+    normalized_story_type = normalize_story_type_value(data.story_type)
+    settings = dict(data.settings or {})
+    settings.setdefault("story_type", normalized_story_type)
+    settings.setdefault("story_brief", _default_story_brief_for_story_type(normalized_story_type))
     template = Template(
         name=data.name,
         description=data.description,
         category=data.category,
-        story_type=data.story_type,
+        story_type=normalized_story_type,
         scene_count=data.scene_count,
-        settings=data.settings,
+        settings=settings,
         scenes=data.scenes,
     )
     db.add(template)
     await db.commit()
     await db.refresh(template)
-    return {
+    return _normalize_template_payload({
         "id": template.id, "name": template.name, "description": template.description,
         "category": template.category, "story_type": template.story_type,
         "scene_count": template.scene_count, "settings": template.settings,
         "scenes": template.scenes, "builtin": False,
-    }
+    })
 
 
 @router.delete("/{template_id}", status_code=204)

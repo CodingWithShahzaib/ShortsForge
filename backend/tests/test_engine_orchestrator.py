@@ -46,6 +46,10 @@ class EngineOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.prepared)
         self.assertEqual(result.project_id, "project-1")
         self.assertEqual(result.scenes, 1)
+        self.assertIn("storyboard", result.stage_durations_ms or {})
+        self.assertIn("assets", result.stage_durations_ms or {})
+        self.assertIsNotNone(result.total_duration_ms)
+        self.assertIsNotNone(result.average_scene_runtime_ms)
         assets_stage.run.assert_awaited_once()
         compile_stage.run.assert_not_awaited()
 
@@ -82,6 +86,9 @@ class EngineOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.storyboard_only)
         self.assertEqual(result.scenes, 1)
         self.assertEqual(result.project_version, 3)
+        self.assertIn("storyboard", result.stage_durations_ms or {})
+        self.assertIsNotNone(result.total_duration_ms)
+        self.assertIsNotNone(result.average_scene_runtime_ms)
         assets_stage.run.assert_not_awaited()
         compile_stage.run.assert_not_awaited()
 
@@ -120,6 +127,10 @@ class EngineOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         result = await engine.run(request, session=object())
 
         self.assertEqual(result.video_path, "videos/out.mp4")
+        self.assertIn("storyboard", result.stage_durations_ms or {})
+        self.assertIn("compile", result.stage_durations_ms or {})
+        self.assertIsNotNone(result.total_duration_ms)
+        self.assertIsNotNone(result.average_scene_runtime_ms)
         assets_stage.run.assert_not_awaited()
         compile_stage.run.assert_awaited_once()
 

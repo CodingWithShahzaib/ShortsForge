@@ -51,6 +51,8 @@ class CompileStageTests(unittest.IsolatedAsyncioTestCase):
                 "backend.engine.stages.compile_stage._render_scene_visual",
                 AsyncMock(return_value="clip.mp4"),
             ) as visual_mock, patch(
+                "backend.engine.stages.compile_stage.CharacterConsistencyManager",
+            ) as consistency_mock, patch(
                 "backend.engine.stages.compile_stage.ffmpeg.pad_or_trim_audio",
                 AsyncMock(),
             ) as trim_mock, patch(
@@ -84,6 +86,8 @@ class CompileStageTests(unittest.IsolatedAsyncioTestCase):
         audio_mock.assert_awaited_once()
         plan_mock.assert_called_once()
         visual_mock.assert_awaited_once()
+        self.assertIn("consistency_manager", visual_mock.await_args.kwargs)
+        consistency_mock.assert_called_once_with("project-1")
         trim_mock.assert_awaited_once()
         concat_mock.assert_awaited_once()
         subtitles_mock.assert_awaited_once()

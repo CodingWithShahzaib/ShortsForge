@@ -19,6 +19,7 @@ from backend.engine.executors.media_pipeline import (
     _render_scene_visual,
     _save_final_render,
 )
+from backend.services.character_consistency import CharacterConsistencyManager
 from backend.engine.planning import SceneSpec, build_render_plan
 from backend.engine.results import EngineResult
 from backend.models import Scene
@@ -103,6 +104,7 @@ class CompileStage:
         paced_durations = context.render_plan.timeline.paced_durations
         boundary_overlaps = context.render_plan.timeline.boundary_overlaps
 
+        consistency_manager = CharacterConsistencyManager(context.project_id)
         context.visual_paths = await asyncio.gather(*[
             _render_scene_visual(
                 idx=i,
@@ -121,6 +123,7 @@ class CompileStage:
                 regenerate_scene_ids=context.regenerate_scene_ids,
                 force_regenerate_scene_clips=context.force_regenerate_scene_clips,
                 progress=_progress,
+                consistency_manager=consistency_manager,
             )
             for i in range(len(context.scenes))
         ])

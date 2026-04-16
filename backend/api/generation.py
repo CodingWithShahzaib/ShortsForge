@@ -385,6 +385,24 @@ async def generate_video(req: GenerateVideoRequest, db: AsyncSession = Depends(g
                 "image_prompt": s.image_prompt,
                 "transition": s.transition,
                 "duration": s.duration,
+                "scene_type": s.scene_type,
+                "speaker_id": s.speaker_id,
+                "shot_type": s.shot_type,
+                "is_reaction_shot": s.is_reaction_shot,
+                "character_references": s.character_references,
+                "voice_profile": s.voice_profile,
+                "scene_settings": {
+                    **(s.scene_settings or {}),
+                    **(
+                        {
+                            "speaker_id": s.speaker_id,
+                            "shot_type": s.shot_type,
+                            "is_reaction_shot": s.is_reaction_shot,
+                            "character_references": s.character_references,
+                            "voice_profile": s.voice_profile,
+                        }
+                    ),
+                },
             }
             for s in req.scenes
         ]

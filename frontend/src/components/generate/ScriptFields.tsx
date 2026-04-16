@@ -2,7 +2,7 @@
 
 import { memo, type ReactNode, useMemo } from "react";
 import { useFormContext } from "react-hook-form";
-import { FileText, Play } from "lucide-react";
+import { AlertTriangle, FileText, Play, WandSparkles } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,9 @@ type Props = {
   generateLabel?: string;
   showInlineAction?: boolean;
   footerAction?: ReactNode;
+  scriptFixWarning?: string[];
+  scriptFixLoading?: boolean;
+  onAutoFixScript?: () => void;
 };
 
 export const ScriptFields = memo(function ScriptFields({
@@ -24,6 +27,9 @@ export const ScriptFields = memo(function ScriptFields({
   generateLabel = "Create scenes",
   showInlineAction = true,
   footerAction,
+  scriptFixWarning = [],
+  scriptFixLoading = false,
+  onAutoFixScript,
 }: Props) {
   const {
     register,
@@ -120,6 +126,37 @@ export const ScriptFields = memo(function ScriptFields({
           )
           : null}
       </div>
+      {scriptFixWarning.length > 0 ? (
+        <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Script cleanup recommended
+              </p>
+              <div className="mt-1 space-y-0.5 text-xs text-amber-800/90 dark:text-amber-200/90">
+                {scriptFixWarning.map((line) => (
+                  <p key={line}>{line}</p>
+                ))}
+              </div>
+            </div>
+            {onAutoFixScript ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onAutoFixScript}
+                loading={scriptFixLoading}
+                loadingLabel="Fixing…"
+                className="shrink-0"
+              >
+                <WandSparkles className="h-3.5 w-3.5" />
+                Auto-fix
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 });

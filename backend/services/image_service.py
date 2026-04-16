@@ -44,7 +44,10 @@ from backend.providers.image import (
 logger = logging.getLogger(__name__)
 
 FALLBACK_CHAIN = ["together", "replicate", "pollinations", "openai_image", "fal", "runware"]
-DEFAULT_TEXT_NEGATIVE_PROMPT = "text, words, letters, signature, watermark, title, logo"
+DEFAULT_TEXT_NEGATIVE_PROMPT = (
+    "text, words, letters, signature, watermark, title, logo, "
+    "no captions, no subtitles, no speech bubble, no text bubble, no typography"
+)
 NATIVE_NEGATIVE_PROMPT_PROVIDERS = {"replicate", "fal", "runware"}
 
 

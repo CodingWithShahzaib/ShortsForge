@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,9 @@ class EngineResult:
     inter_scene_pause_ms: int | None = None
     transition_overlap_ms: int | None = None
     project_version: int | None = None
+    stage_durations_ms: dict[str, int] | None = None
+    total_duration_ms: int | None = None
+    average_scene_runtime_ms: float | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> "EngineResult":
@@ -43,6 +47,24 @@ class EngineResult:
             project_version=(
                 int(data["project_version"])
                 if data.get("project_version") is not None
+                else None
+            ),
+            stage_durations_ms=(
+                {
+                    str(key): int(value)
+                    for key, value in dict(data.get("stage_durations_ms") or {}).items()
+                }
+                if isinstance(data.get("stage_durations_ms"), Mapping)
+                else None
+            ),
+            total_duration_ms=(
+                int(data["total_duration_ms"])
+                if data.get("total_duration_ms") is not None
+                else None
+            ),
+            average_scene_runtime_ms=(
+                float(data["average_scene_runtime_ms"])
+                if data.get("average_scene_runtime_ms") is not None
                 else None
             ),
         )

@@ -463,7 +463,7 @@ export const ViralIdeasSection = memo(function ViralIdeasSection({
         <Button
           type="button"
           variant="animated"
-          onClick={loadIdeas}
+          onClick={() => void loadIdeas()}
           disabled={loading}
           className="h-9 w-full shrink-0 gap-1.5 px-3 text-sm sm:w-auto sm:min-w-40"
         >

@@ -6,12 +6,16 @@ from unittest.mock import AsyncMock, patch
 from backend.services.script_service import (
     _coerce_dynamic_scene_count,
     _derive_narration_chunks,
+    _normalize_script_text,
     _ensure_scene_count_exact,
+    _split_sentences_safe,
+    _rebalance_scene_count,
     analyze_narration_quality,
     analyze_hook_quality,
     apply_ai_scene_bridges,
     clean_tts_text,
     normalize_scene_narration,
+    normalize_script_text_with_report,
     repair_storyboard_scene_narration,
 )
 
@@ -53,6 +57,99 @@ class SceneNarrationGuardTests(unittest.TestCase):
         self.assertIn("B2.", chunks[1])
         self.assertTrue(chunks[2].startswith("C1."))
         self.assertIn("C2.", chunks[2])
+
+    def test_script_chunks_expand_low_diversity_sentences_before_repeating(self) -> None:
+        script = (
+            "Explore the Islamabad Accord, where Pakistan successfully mediated a two-week ceasefire between Iran "
+            "and the U.S. in just 48 hours. "
+            "Highlight the significance of this diplomatic achievement and its potential to reshape Middle Eastern relations."
+        )
+        chunks = _derive_narration_chunks(script, 6)
+        self.assertEqual(len(chunks), 6)
+        self.assertGreaterEqual(len({chunk for chunk in chunks if chunk.strip()}), 4)
+        self.assertNotEqual(chunks[0], chunks[1])
+
+    def test_split_sentences_safe_keeps_us_abbreviation_intact(self) -> None:
+        text = "Explore the accord between Iran and the U.S. In just 48 hours."
+        sentences = _split_sentences_safe(text)
+        self.assertEqual(sentences[0], "Explore the accord between Iran and the U.S.")
+        self.assertEqual(sentences[1], "In just 48 hours.")
+
+    def test_split_sentences_safe_keeps_spaced_us_abbreviation_intact(self) -> None:
+        text = "Explore the accord between Iran and the U. S. In just 48 hours."
+        sentences = _split_sentences_safe(text)
+        self.assertEqual(sentences[0], "Explore the accord between Iran and the U.S.")
+        self.assertEqual(sentences[1], "In just 48 hours.")
+
+    def test_normalize_script_text_collapses_llm_echo_repetition(self) -> None:
+        text = (
+            "Explore the Islamabad Accord, where Pakistan successfully mediated a two-week ceasefire "
+            "between Iran and the U. S. in just 48 hours. "
+            "Explore the Islamabad Accord, where Pakistan successfully mediated a two-week ceasefire "
+            "between Iran and the U. S. in just 48 hours. "
+            "Highlight the significance of this diplomatic achievement and its potential to reshape "
+            "Middle Eastern relations. "
+            "Highlight the significance of this diplomatic achievement and its potential to reshape "
+            "Middle Eastern relations."
+        )
+        normalized = _normalize_script_text(text)
+        self.assertEqual(
+            normalized,
+            (
+                "Explore the Islamabad Accord, where Pakistan successfully mediated a two-week ceasefire "
+                "between Iran and the U.S. in just 48 hours. "
+                "Highlight the significance of this diplomatic achievement and its potential to reshape "
+                "Middle Eastern relations."
+            ),
+        )
+
+    def test_normalize_script_text_with_report_flags_changes(self) -> None:
+        text = (
+            "Explore the accord between Iran and the U. S. in just 48 hours. "
+            "Explore the accord between Iran and the U. S. in just 48 hours."
+        )
+        normalized, report = normalize_script_text_with_report(text)
+        self.assertTrue(report["changed"])
+        self.assertIn("U.S.", normalized)
+        self.assertGreaterEqual(report["duplicate_sentences_removed"], 1)
+        self.assertTrue(report["initialism_spacing_fixed"])
+        self.assertTrue(report["issues"])
+
+    def test_repair_replaces_micro_fragment_scene(self) -> None:
+        scenes = [
+            {"narration": "Explore the accord between Iran and the U."},
+            {"narration": "S."},
+        ]
+        repaired, issues = repair_storyboard_scene_narration(
+            scenes,
+            script="Explore the accord between Iran and the U.S. In just 48 hours.",
+        )
+        self.assertNotEqual(repaired[1]["narration"], "S.")
+        self.assertTrue(
+            any("micro-fragment" in issue for issue in issues),
+        )
+
+    def test_rebalance_scene_count_returns_exact_target(self) -> None:
+        scenes = [
+            {"narration": "One long sentence that should split into multiple scenes and then rebalance back."},
+            {"narration": "Two."},
+            {"narration": "Three."},
+        ]
+        out = _rebalance_scene_count(scenes, target_count=2, min_duration=2, max_duration=4)
+        self.assertEqual(len(out), 2)
+        self.assertTrue(all((scene.get("narration") or "").strip() for scene in out))
+
+    def test_repair_replaces_adjacent_duplicate_with_fallback(self) -> None:
+        scenes = [
+            {"narration": "In just 48 hours."},
+            {"narration": "In just 48 hours."},
+        ]
+        repaired, _ = repair_storyboard_scene_narration(
+            scenes,
+            script="In just 48 hours. The truce held for two weeks.",
+        )
+        self.assertEqual(repaired[0]["narration"], "In just 48 hours.")
+        self.assertEqual(repaired[1]["narration"], "The truce held for two weeks.")
 
     def test_scene_count_is_padded_to_requested_size(self) -> None:
         scenes = [{"narration": "One"}, {"narration": "Two"}]
@@ -138,7 +235,10 @@ class SceneNarrationGuardTests(unittest.TestCase):
             "A sharp answer slides back across the board.",
         )
         self.assertTrue(
-            any("replaced repeated narration" in issue for issue in issues),
+            any(
+                ("replaced repeated narration" in issue) or ("replaced adjacent duplicate narration" in issue)
+                for issue in issues
+            ),
         )
 
     def test_repair_only_compares_last_three_scenes(self) -> None:

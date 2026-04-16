@@ -18,6 +18,7 @@ def _normalize_tts_response_format(value: Any) -> str:
 class ResolvedGenerationSettings:
     story_type: str = "general"
     story_template: str = "default"
+    story_brief: dict[str, Any] | None = None
     custom_script: str | None = None
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
@@ -97,6 +98,11 @@ class ResolvedGenerationSettings:
         return cls(
             story_type=str(data.get("story_type") or "general"),
             story_template=str(data.get("story_template") or "default"),
+            story_brief=(
+                dict(data.get("story_brief"))
+                if isinstance(data.get("story_brief"), Mapping)
+                else None
+            ),
             custom_script=data.get("custom_script"),
             llm_provider=str(data.get("llm_provider") or app_settings.default_llm_provider or "openai"),
             llm_model=str(data.get("llm_model") or app_settings.default_llm_model or "gpt-4o-mini"),

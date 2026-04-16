@@ -8,6 +8,15 @@ import re
 from typing import Any
 
 from backend.services.ai_client import chat_completion
+from backend.services.story_structure import (
+    STORY_TYPE_INPUTS,
+    assign_scene_roles,
+    build_story_quality_report,
+    build_story_structure_prompt,
+    normalize_story_type_value,
+    resolve_story_profile,
+)
+from backend.services.visual_audio_profiles import resolve_visual_audio_profile
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +48,7 @@ def _extract_json_substring(raw: str) -> tuple[str | None, int, int]:
                         return raw[i : j + 1], i, j + 1
     return None, -1, -1
 
-STORY_TYPES = [
-    "scary", "mystery", "bedtime", "philosophy", "life_pro_tips",
-    "fun_facts", "motivational", "science", "history", "general",
-]
+STORY_TYPES = list(STORY_TYPE_INPUTS)
 
 STORY_TEMPLATES_META: list[dict[str, str]] = [
     {
@@ -111,10 +117,15 @@ STORY_TEMPLATE_IDS: tuple[str, ...] = tuple(m["id"] for m in STORY_TEMPLATES_MET
 
 STORY_HOOK_TEMPLATES: dict[str, str] = {
     "scary": "Start with an unsettling question or hidden danger nobody sees coming.",
+    "horror": "Start with an unsettling question or hidden danger nobody sees coming.",
     "mystery": "Open with an unexplained event that demands answers.",
     "motivational": "Begin with a relatable struggle followed by an unexpected turnaround.",
     "science": "Lead with a counterintuitive fact that challenges common belief.",
     "history": "Connect a forgotten past event to something happening right now.",
+    "news": "Lead with the update, stake, or contradiction people need to know right now.",
+    "educational": "Open with the surprising lesson or myth the viewer is about to understand.",
+    "top_list": "Promise multiple escalating points and make the first one surprising.",
+    "reddit_story": "Open with the moment everything changed in the story.",
     "corporate_expose": "Reveal what's hidden in plain sight that affects the viewer directly.",
     "urgent_warning": "State the stakes in one line—what could be lost if ignored.",
 }
@@ -248,8 +259,354 @@ SENTENCE_BREAK_PREFIXES = (
     "Meanwhile",
 )
 
+_ABBREVIATION_PLACEHOLDER = "__ABBR_DOT__"
+_ABBREVIATIONS = (
+    "U.S.",
+    "U.K.",
+    "e.g.",
+    "i.e.",
+    "Mr.",
+    "Mrs.",
+    "Ms.",
+    "Dr.",
+)
+
+
+def _protect_abbreviations(text: str) -> str:
+    def _mask_token(token: str) -> str:
+        compact = re.sub(r"\s+", "", token)
+        if compact.endswith("."):
+            return compact[:-1].replace(".", _ABBREVIATION_PLACEHOLDER) + "."
+        return compact.replace(".", _ABBREVIATION_PLACEHOLDER)
+
+    protected = text
+    for abbr in _ABBREVIATIONS:
+        protected = protected.replace(abbr, _mask_token(abbr))
+    protected = re.sub(
+        r"\b(?:[A-Za-z]" + re.escape(".") + r"){2,}",
+        lambda m: _mask_token(m.group(0)),
+        protected,
+    )
+    return protected
+
+
+def _restore_abbreviations(text: str) -> str:
+    return text.replace(_ABBREVIATION_PLACEHOLDER, ".")
+
+
+def _split_sentences_safe(text: str) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    cleaned = re.sub(
+        r"\b(?:[A-Za-z]\.\s+){1,}[A-Za-z]\.",
+        lambda m: re.sub(r"\s+", "", m.group(0)),
+        cleaned,
+    )
+    protected = _protect_abbreviations(cleaned)
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])", protected)
+        if part.strip()
+    ]
+    restored = [_restore_abbreviations(part) for part in parts]
+    return restored or [cleaned]
+
+
+def _normalize_script_text(script: str) -> str:
+    """
+    Normalize raw script text before scene chunking.
+
+    This collapses pathological sentence repetition (common in occasional LLM echoes)
+    while preserving first-seen ordering and standard rhetorical repetition.
+    """
+    cleaned = re.sub(r"\s+", " ", (script or "").strip())
+    if not cleaned:
+        return ""
+    # Join spaced initialisms like "U. S." so sentence splitting doesn't cut mid-abbreviation.
+    collapsed_initialisms = re.sub(
+        r"\b([A-Za-z])\.\s+([A-Za-z])\.",
+        r"\1.\2.",
+        cleaned,
+    )
+    while collapsed_initialisms != cleaned:
+        cleaned = collapsed_initialisms
+        collapsed_initialisms = re.sub(
+            r"\b([A-Za-z])\.\s+([A-Za-z])\.",
+            r"\1.\2.",
+            cleaned,
+        )
+
+    sentences = _split_sentences_safe(cleaned)
+    if not sentences:
+        return cleaned
+
+    kept: list[str] = []
+    seen: dict[str, int] = {}
+    for sentence in sentences:
+        current = sentence.strip()
+        if not current:
+            continue
+        normalized = _normalize_similarity_text(current)
+        # Keep very short emphatic callbacks at most twice; longer lines once.
+        max_occurrences = 2 if _count_words(current) <= 4 else 1
+        count = seen.get(normalized, 0)
+        if count >= max_occurrences:
+            continue
+        seen[normalized] = count + 1
+        kept.append(current)
+
+    return " ".join(kept).strip() or cleaned
+
+
+def normalize_script_text_with_report(script: str | None) -> tuple[str, dict[str, Any]]:
+    raw = (script or "").strip()
+    normalized = _normalize_script_text(raw)
+    raw_sentences = [line for line in _split_sentences_safe(raw) if line.strip()]
+    normalized_sentences = [line for line in _split_sentences_safe(normalized) if line.strip()]
+    duplicate_sentences_removed = max(0, len(raw_sentences) - len(normalized_sentences))
+    initialism_spacing_fixed = bool(
+        re.search(r"\b(?:[A-Za-z]\.\s+){1,}[A-Za-z]\.", raw) and raw != normalized
+    )
+    changed = normalized != raw
+    issues: list[str] = []
+    if duplicate_sentences_removed > 0:
+        issues.append(
+            f"Removed {duplicate_sentences_removed} repeated sentence"
+            f"{'' if duplicate_sentences_removed == 1 else 's'}."
+        )
+    if initialism_spacing_fixed:
+        issues.append("Normalized spaced initialisms (e.g. U. S. -> U.S.).")
+    if changed and not issues:
+        issues.append("Applied script normalization for cleaner scene narration splits.")
+    report = {
+        "changed": changed,
+        "issues": issues,
+        "duplicate_sentences_removed": duplicate_sentences_removed,
+        "initialism_spacing_fixed": initialism_spacing_fixed,
+        "original_word_count": _count_words(raw),
+        "normalized_word_count": _count_words(normalized),
+    }
+    return normalized, report
+
+
+def _script_unique_sentence_count(script: str) -> int:
+    normalized = _normalize_script_text(script)
+    sentences = [line.strip() for line in _split_sentences_safe(normalized) if line.strip()]
+    return len({
+        _normalize_similarity_text(sentence)
+        for sentence in sentences
+        if _normalize_similarity_text(sentence)
+    })
+
+
+def _script_has_low_diversity(script: str, *, scene_count: int) -> bool:
+    unique_sentence_count = _script_unique_sentence_count(script)
+    if unique_sentence_count <= 2:
+        return True
+    minimum_distinct_beats = max(3, min(6, math.ceil(max(1, scene_count) / 4)))
+    return unique_sentence_count < minimum_distinct_beats
+
+
+async def _repair_generated_script_diversity(
+    script: str,
+    *,
+    story_type: str,
+    scene_count: int,
+    llm_provider: str | None,
+    llm_model: str | None,
+) -> str:
+    if not _script_has_low_diversity(script, scene_count=scene_count):
+        return script
+    try:
+        repaired = await rewrite_script(
+            text=script,
+            instruction=(
+                "Rewrite this narration so the opening hook appears only once, each later sentence adds new "
+                "information, and the story clearly progresses through context, development, implication, "
+                "and ending. Remove repeated sentence stems, keep the topic and factual claims intact, and "
+                "make the close feel distinct from the hook."
+            ),
+            story_type=story_type,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            temperature=0.45,
+        )
+    except Exception:
+        return script
+    return repaired.strip() or script
+
+
+def _split_text_into_two_parts(text: str) -> list[str]:
+    cleaned = clean_tts_text(text)
+    if not cleaned:
+        return [""]
+    punctuation_breaks = [match.end() for match in re.finditer(r"[,;:]\s+", cleaned)]
+    if punctuation_breaks:
+        midpoint = len(cleaned) / 2
+        split_at = min(punctuation_breaks, key=lambda value: abs(value - midpoint))
+        left = clean_tts_text(cleaned[:split_at].strip(" ,;:"))
+        right = clean_tts_text(cleaned[split_at:].strip(" ,;:"))
+        if _count_words(left) >= 4 and _count_words(right) >= 4:
+            return [left, right]
+
+    words = cleaned.split()
+    if len(words) <= 6:
+        return [cleaned]
+    midpoint = max(3, len(words) // 2)
+    left = clean_tts_text(" ".join(words[:midpoint]))
+    right = clean_tts_text(" ".join(words[midpoint:]))
+    if left and right:
+        return [left, right]
+    return [cleaned]
+
+
+def _expand_chunks_to_target(chunks: list[str], target: int) -> list[str]:
+    expanded = [chunk.strip() for chunk in chunks if chunk.strip()]
+    safe_target = max(1, int(target) if target else 1)
+    while len(expanded) < safe_target:
+        split_idx = max(range(len(expanded)), key=lambda idx: _count_words(expanded[idx]), default=-1)
+        if split_idx < 0:
+            break
+        parts = _split_text_into_two_parts(expanded[split_idx])
+        if len(parts) < 2 or parts[0] == expanded[split_idx] or parts[1] == expanded[split_idx]:
+            break
+        expanded[split_idx:split_idx + 1] = parts[:2]
+    return expanded
+
+
+def _scene_role_prefers_distinct_progression(role: str) -> bool:
+    return role in {
+        "hook",
+        "context",
+        "development",
+        "implication",
+        "call_to_action",
+        "takeaway",
+        "resolution",
+        "close",
+        "payoff",
+        "summary",
+    }
+
+
+def _select_distinct_fallback_chunk(
+    *,
+    scene_index: int,
+    scene_role: str,
+    fallback_chunks: list[str],
+    recent_narration: list[str],
+    current_text: str,
+    used_indexes: set[int],
+    similarity_threshold: float,
+) -> tuple[str, int]:
+    if not fallback_chunks:
+        return current_text, scene_index
+    preferred_indexes = list(range(scene_index, len(fallback_chunks))) + list(range(0, scene_index))
+    best_text = fallback_chunks[min(scene_index, len(fallback_chunks) - 1)]
+    best_idx = min(scene_index, len(fallback_chunks) - 1)
+    best_score = (
+        _max_recent_similarity(best_text, recent_narration)
+        + _narration_similarity(best_text, current_text)
+        + (0.35 if best_idx in used_indexes else 0.0)
+    )
+    for candidate_idx in preferred_indexes:
+        candidate = clean_tts_text(fallback_chunks[candidate_idx])
+        if not candidate:
+            continue
+        similarity_score = (
+            _max_recent_similarity(candidate, recent_narration)
+            + _narration_similarity(candidate, current_text)
+            + (0.35 if candidate_idx in used_indexes else 0.0)
+        )
+        if _scene_role_prefers_distinct_progression(scene_role) and candidate_idx == 0 and scene_index > 0:
+            similarity_score += 0.4
+        if similarity_score < best_score:
+            best_text = candidate
+            best_idx = candidate_idx
+            best_score = similarity_score
+        if similarity_score < similarity_threshold:
+            break
+    return best_text or current_text, best_idx
+
+
+def _is_micro_fragment(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+    if len(cleaned) <= 2:
+        return True
+    words = re.findall(r"\b[\w'-]+\b", cleaned)
+    if len(words) == 1 and len(words[0]) <= 2:
+        return True
+    return False
+
+
+def _rebalance_scene_count(
+    scenes: list[dict[str, Any]],
+    *,
+    target_count: int,
+    min_duration: int,
+    max_duration: int,
+) -> list[dict[str, Any]]:
+    target = max(1, int(target_count) if target_count else 1)
+    balanced = [dict(scene or {}) for scene in scenes]
+    if not balanced:
+        return []
+
+    def _scene_text(scene: dict[str, Any]) -> str:
+        return (
+            (scene.get("narration") or "").strip()
+            or (scene.get("script") or "").strip()
+            or (scene.get("subtitle") or "").strip()
+        )
+
+    while len(balanced) > target and len(balanced) > 1:
+        merge_idx = min(
+            range(len(balanced) - 1),
+            key=lambda idx: (_count_words(_scene_text(balanced[idx])) + _count_words(_scene_text(balanced[idx + 1]))),
+        )
+        left = dict(balanced[merge_idx])
+        right = dict(balanced[merge_idx + 1])
+        merged_text = " ".join(part for part in (_scene_text(left), _scene_text(right)) if part).strip()
+        merged_duration = _estimate_scene_duration_seconds(merged_text)
+        left["narration"] = merged_text
+        left["subtitle"] = merged_text
+        left["script"] = merged_text
+        left["duration"] = max(min_duration, min(max_duration, merged_duration))
+        balanced[merge_idx] = left
+        del balanced[merge_idx + 1]
+
+    while len(balanced) < target:
+        split_idx = max(range(len(balanced)), key=lambda idx: _count_words(_scene_text(balanced[idx])))
+        expanded = _split_long_scene(dict(balanced[split_idx]), min_duration=min_duration, max_duration=max_duration)
+        if len(expanded) < 2:
+            clone = dict(balanced[split_idx])
+            text = _scene_text(clone)
+            midpoint = max(1, len(text) // 2)
+            left_text = text[:midpoint].strip() or text
+            right_text = text[midpoint:].strip() or text
+            clone["narration"] = right_text
+            clone["subtitle"] = right_text
+            clone["script"] = right_text
+            clone["duration"] = max(min_duration, min(max_duration, _estimate_scene_duration_seconds(right_text)))
+            balanced[split_idx]["narration"] = left_text
+            balanced[split_idx]["subtitle"] = left_text
+            balanced[split_idx]["script"] = left_text
+            balanced[split_idx]["duration"] = max(min_duration, min(max_duration, _estimate_scene_duration_seconds(left_text)))
+            expanded = [balanced[split_idx], clone]
+        balanced[split_idx:split_idx + 1] = expanded[:2]
+
+    return balanced[:target]
+
 STORY_TYPE_PACING_RULES: dict[str, dict[str, Any]] = {
     "scary": {
+        "avg_words_min": 5,
+        "avg_words_max": 11,
+        "hook_style": "mystery and immediate danger",
+        "pacing_note": "Use shorter, tense sentences with frequent clean stops for suspense.",
+    },
+    "horror": {
         "avg_words_min": 5,
         "avg_words_max": 11,
         "hook_style": "mystery and immediate danger",
@@ -308,6 +665,30 @@ STORY_TYPE_PACING_RULES: dict[str, dict[str, Any]] = {
         "avg_words_max": 14,
         "hook_style": "clear relevance and curiosity",
         "pacing_note": "Keep narration compact, visual, and easy for TTS to breathe through.",
+    },
+    "news": {
+        "avg_words_min": 6,
+        "avg_words_max": 13,
+        "hook_style": "timeliness and clear stakes",
+        "pacing_note": "Lead with the update, then move quickly through context, proof, and what it means now.",
+    },
+    "educational": {
+        "avg_words_min": 7,
+        "avg_words_max": 15,
+        "hook_style": "surprise and understanding",
+        "pacing_note": "Keep each line clear, proof-oriented, and easy to visualize.",
+    },
+    "top_list": {
+        "avg_words_min": 5,
+        "avg_words_max": 12,
+        "hook_style": "stacked novelty and escalation",
+        "pacing_note": "Keep each beat short and distinct so the list keeps climbing.",
+    },
+    "reddit_story": {
+        "avg_words_min": 6,
+        "avg_words_max": 14,
+        "hook_style": "personal stakes and immediate conflict",
+        "pacing_note": "Let the story escalate through clear turns, not repeated setup lines.",
     },
 }
 
@@ -441,6 +822,7 @@ STORY_TEMPLATE_SCRIPT_GUIDES: dict[str, str] = {
         "Structure: (1) Hook with a contradiction, suspicious detail, or unanswered question. "
         "(2) Walk through the clues or facts one by one. (3) Show how they connect into a bigger pattern or explanation. "
         "(4) End with the clearest conclusion or open question that remains. "
+        "Make each clue beat distinct and cumulative; do not restate the hook in the middle. "
         "Tone: observant, precise, evidence-first. About {word_count} words (±10%). Category: {story_type}."
     ),
     "rise_fall_rebound": (
@@ -604,7 +986,7 @@ def _chunk_sentences_contiguous(text: str, target: int) -> list[list[str]]:
     cleaned = (text or "").strip()
     if not cleaned:
         return [[f"Scene {i + 1} narration."] for i in range(safe_target)]
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+    sentences = _split_sentences_safe(cleaned)
     if not sentences:
         sentences = [cleaned]
 
@@ -621,14 +1003,20 @@ def _chunk_sentences_contiguous(text: str, target: int) -> list[list[str]]:
 def _derive_narration_chunks(script: str, scene_count: int) -> list[str]:
     """Split script text into non-empty chunks for scene narration fallback."""
     target = max(1, int(scene_count) if scene_count else 1)
-    cleaned = (script or "").strip()
+    cleaned = _normalize_script_text(script or "")
     if not cleaned:
         return [f"Scene {i + 1} narration." for i in range(target)]
-    buckets = _chunk_sentences_contiguous(cleaned, target)
-    chunks = [" ".join(chunk).strip() for chunk in buckets]
+    sentences = _split_sentences_safe(cleaned)
+    if target > len(sentences):
+        chunks = _expand_chunks_to_target([sentence.strip() for sentence in sentences if sentence.strip()], target)
+    else:
+        buckets = _chunk_sentences_contiguous(cleaned, target)
+        chunks = _expand_chunks_to_target([" ".join(chunk).strip() for chunk in buckets], target)
+    if len(chunks) < target and chunks:
+        chunks.extend([chunks[-1]] * (target - len(chunks)))
 
     fallback = cleaned
-    return [chunk or fallback for chunk in chunks]
+    return [(chunk or fallback).strip() for chunk in chunks[:target]]
 
 
 def _normalize_similarity_text(text: str) -> str:
@@ -729,6 +1117,8 @@ def repair_storyboard_scene_narration(
     scenes: list[dict[str, Any]],
     *,
     script: str | None = None,
+    story_type: str | None = None,
+    story_template: str | None = None,
     lookback: int = NARRATION_DUPLICATE_LOOKBACK,
     similarity_threshold: float = NARRATION_DUPLICATE_SIMILARITY,
     skip_indexes: set[int] | None = None,
@@ -741,9 +1131,15 @@ def repair_storyboard_scene_narration(
     repaired: list[dict[str, Any]] = []
     recent_narration: list[str] = []
     issues: list[str] = []
+    used_fallback_indexes: set[int] = set()
+    scene_roles = assign_scene_roles(
+        len(scenes),
+        resolve_story_profile(story_type, story_template),
+    )
 
     for i, raw in enumerate(scenes):
         scene = dict(raw or {})
+        scene_role = scene_roles[i]["role"] if i < len(scene_roles) else ""
         original = (
             (scene.get("narration") or "").strip()
             or (scene.get("subtitle") or "").strip()
@@ -757,13 +1153,52 @@ def repair_storyboard_scene_narration(
             if cleaned and cleaned != original:
                 issues.append(f"Scene {i + 1}: cleaned narration text for TTS clarity.")
             replacement = cleaned or original
+
+            if _is_micro_fragment(replacement):
+                fallback, fallback_idx = _select_distinct_fallback_chunk(
+                    scene_index=i,
+                    scene_role=scene_role,
+                    fallback_chunks=fallback_chunks,
+                    recent_narration=recent_narration,
+                    current_text=replacement,
+                    used_indexes=used_fallback_indexes,
+                    similarity_threshold=similarity_threshold,
+                )
+                if fallback and not _is_micro_fragment(fallback):
+                    replacement = fallback
+                    used_fallback_indexes.add(fallback_idx)
+                    issues.append(f"Scene {i + 1}: replaced micro-fragment narration from script fallback.")
+
+            if recent_narration and _normalize_similarity_text(replacement) == _normalize_similarity_text(recent_narration[-1]):
+                fallback, fallback_idx = _select_distinct_fallback_chunk(
+                    scene_index=i,
+                    scene_role=scene_role,
+                    fallback_chunks=fallback_chunks,
+                    recent_narration=recent_narration,
+                    current_text=replacement,
+                    used_indexes=used_fallback_indexes,
+                    similarity_threshold=similarity_threshold,
+                )
+                if fallback and _normalize_similarity_text(fallback) != _normalize_similarity_text(replacement):
+                    replacement = fallback
+                    used_fallback_indexes.add(fallback_idx)
+                    issues.append(f"Scene {i + 1}: replaced adjacent duplicate narration with script-aligned fallback.")
+
             recent_similarity = _max_recent_similarity(
                 replacement,
                 recent_narration,
                 lookback=lookback,
             )
             if recent_similarity >= similarity_threshold:
-                fallback = clean_tts_text(fallback_chunks[i])
+                fallback, fallback_idx = _select_distinct_fallback_chunk(
+                    scene_index=i,
+                    scene_role=scene_role,
+                    fallback_chunks=fallback_chunks,
+                    recent_narration=recent_narration,
+                    current_text=replacement,
+                    used_indexes=used_fallback_indexes,
+                    similarity_threshold=similarity_threshold,
+                )
                 fallback_similarity = _max_recent_similarity(
                     fallback,
                     recent_narration,
@@ -775,11 +1210,28 @@ def repair_storyboard_scene_narration(
                     and fallback_similarity < similarity_threshold
                 ):
                     replacement = fallback
+                    used_fallback_indexes.add(fallback_idx)
                     issues.append(
                         f"Scene {i + 1}: replaced repeated narration with script-aligned fallback."
                     )
                 else:
                     issues.append(f"Scene {i + 1}: repeated narration detected across nearby scenes.")
+
+            if _is_micro_fragment(replacement):
+                issues.append(f"Scene {i + 1}: micro-fragment narration detected across nearby scenes.")
+
+        if _is_micro_fragment(replacement):
+            fallback, fallback_idx = _select_distinct_fallback_chunk(
+                scene_index=i,
+                scene_role=scene_role,
+                fallback_chunks=fallback_chunks,
+                recent_narration=recent_narration,
+                current_text=replacement,
+                used_indexes=used_fallback_indexes,
+                similarity_threshold=similarity_threshold,
+            )
+            replacement = fallback or replacement
+            used_fallback_indexes.add(fallback_idx)
 
         subtitle = (scene.get("subtitle") or "").strip()
         script_text = (scene.get("script") or "").strip()
@@ -883,7 +1335,7 @@ def _split_long_scene(scene: dict[str, Any], *, min_duration: int, max_duration:
     if estimated <= max_duration:
         scene["duration"] = max(min_duration, min(max_duration, estimated))
         return [scene]
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", narration) if s.strip()]
+    sentences = _split_sentences_safe(narration)
     if len(sentences) < 2:
         midpoint = max(1, len(narration) // 2)
         sentences = [narration[:midpoint].strip(), narration[midpoint:].strip()]
@@ -936,12 +1388,12 @@ def _first_sentence(text: str) -> str:
     cleaned = (text or "").strip()
     if not cleaned:
         return ""
-    parts = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)
+    parts = _split_sentences_safe(cleaned)
     return parts[0].strip() if parts else cleaned
 
 
 def _story_type_pacing_rule(story_type: str | None) -> dict[str, Any]:
-    key = str(story_type or "general").strip().lower()
+    key = normalize_story_type_value(story_type)
     return STORY_TYPE_PACING_RULES.get(key, STORY_TYPE_PACING_RULES["general"])
 
 
@@ -1008,7 +1460,7 @@ async def analyze_hook_quality(
 
 
 def _estimate_pacing_score(text: str, story_type: str = "general") -> int:
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if part.strip()]
+    sentences = _split_sentences_safe((text or "").strip())
     if not sentences:
         return 0
     word_counts = [_count_words(sentence) for sentence in sentences]
@@ -1330,59 +1782,55 @@ def _style_padding_blocks(
     return blocks
 
 
+def analyze_story_structure_report(
+    *,
+    story_type: str | None,
+    story_template: str | None,
+    scenes: list[dict[str, Any]] | None,
+    script: str | None = None,
+    story_brief: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_scenes = [dict(scene) for scene in (scenes or []) if isinstance(scene, dict)]
+    return build_story_quality_report(
+        story_type=story_type,
+        story_template=story_template,
+        scenes=normalized_scenes,
+        script=script,
+        story_brief=story_brief,
+    )
+
 
 def validate_storyboard_quality(storyboard: dict) -> list[str]:
-    """Check for common quality issues."""
-    issues = []
-    scenes = storyboard.get("scenes", []) if isinstance(storyboard, dict) else []
-    continuity = (storyboard.get("visual_continuity") or "").strip().lower()
-
-    all_narration = " ".join((s.get("narration") or "") for s in scenes).lower()
-    # Q2: Extended shot variation synonyms
-    WIDE_SYNOMYNS = {"wide", "establishing", "full body", "full-body", "long shot", "master"}
-    CLOSE_SYNONYMS = {"close", "closeup", "close-up", "extreme close", "ecu", "face"}
-    MEDIUM_SYNONYMS = {"medium", "mid shot", "mid-shot", "waist", "cowboy"}
-    shot_markers: list[str] = []
-    for i, scene in enumerate(scenes):
-        prompt = (scene.get("image_prompt") or "").strip()
-        narration = (scene.get("narration") or "").strip()
-        duration = scene.get("duration") or scene.get("duration_seconds") or 5
-        if len(prompt) < 50:
-            issues.append(f"Scene {i + 1}: image_prompt too short ({len(prompt)} chars)")
-        if narration and not any(word in narration.lower() for word in ["you", "we", "this", "the"]):
-            issues.append(f"Scene {i + 1}: narration lacks engagement words")
-        if len(narration) > 100 and float(duration) < 5:
-            issues.append(f"Scene {i + 1}: narration too long for duration")
-        prompt_l = prompt.lower()
-        if any(x in prompt_l for x in WIDE_SYNOMYNS):
-            shot_markers.append("wide")
-        elif any(x in prompt_l for x in CLOSE_SYNONYMS):
-            shot_markers.append("close")
-        elif any(x in prompt_l for x in MEDIUM_SYNONYMS):
-            shot_markers.append("medium")
-
-    if continuity and continuity not in all_narration:
-        issues.append("Visual continuity note not reflected in narration (check prompts).")
-    if continuity:
-        prompts_text = " ".join((s.get("image_prompt") or "") for s in scenes).lower()
-        if continuity not in prompts_text:
-            issues.append("Visual continuity note not reflected in image prompts.")
-    if shot_markers:
-        unique = set(shot_markers)
-        if len(unique) < 2:
-            issues.append("Limited shot variation detected; add wide/medium/close variety.")
-
-    if scenes and not any(
-        any(phrase in (s.get("narration") or "").lower() for phrase in ("why this matters", "matters to you", "this matters"))
-        for s in scenes
-    ):
-        issues.append("Missing explicit 'why this matters' line in narration.")
-    if scenes and not any(
-        any(phrase in (s.get("narration") or "").lower() for phrase in ("takeaway", "lesson", "here's the point", "bottom line", "in short"))
-        for s in scenes
-    ):
-        issues.append("Missing clear takeaway line in narration.")
-
+    """Check for story-level quality issues using the universal structure report."""
+    if not isinstance(storyboard, dict):
+        return []
+    report = analyze_story_structure_report(
+        story_type=storyboard.get("story_type"),
+        story_template=storyboard.get("story_template"),
+        scenes=storyboard.get("scenes"),
+        script=storyboard.get("script"),
+        story_brief=storyboard.get("story_brief"),
+    )
+    issues: list[str] = []
+    for issue in report.get("issues", []):
+        scene_indexes = issue.get("scene_indexes") if isinstance(issue, dict) else None
+        scene_prefix = ""
+        if isinstance(scene_indexes, list) and scene_indexes:
+            if len(scene_indexes) == 1:
+                scene_prefix = f"Scene {scene_indexes[0] + 1}: "
+            else:
+                scene_prefix = (
+                    "Scenes "
+                    + ", ".join(
+                        str(int(index) + 1)
+                        for index in scene_indexes[:4]
+                        if isinstance(index, int)
+                    )
+                    + ": "
+                )
+        message = str(issue.get("message") or "").strip()
+        if message:
+            issues.append(f"{scene_prefix}{message}")
     return issues
 
 
@@ -1435,10 +1883,20 @@ async def generate_script(
     temperature: float = 0.8,
     story_template: str = "default",
     research_brief: str = "",
+    story_brief: dict[str, Any] | None = None,
 ) -> str:
     """Generate a narration script. Pass research_brief for richer, specific outputs."""
     if story_template not in STORY_TEMPLATE_IDS:
         story_template = "default"
+    preferred_story_type = normalize_story_type_value(story_type)
+    profile = resolve_story_profile(preferred_story_type, story_template)
+    story_structure_note = build_story_structure_prompt(
+        story_type=preferred_story_type,
+        story_template=story_template,
+        scene_count=5,
+        dynamic_scenes=False,
+        story_brief=story_brief,
+    )
 
     # Q1: Inject concept brief if provided
     brief_block = ""
@@ -1449,7 +1907,7 @@ async def generate_script(
         )
 
     hook_template = STORY_HOOK_TEMPLATES.get(
-        story_type, "Open with a curiosity gap that feels immediately relevant to the viewer."
+        preferred_story_type, "Open with a curiosity gap that feels immediately relevant to the viewer."
     )
     # Inform the model of approximate spoken duration to prevent under/over-writing
     spoken_seconds = round(word_count / 2.6)
@@ -1464,11 +1922,16 @@ async def generate_script(
         "CRITICAL REQUIREMENTS:\n"
         "- OPENING HOOK: First sentence must create curiosity gap, shock, or immediate relevance "
         "(use 'you', 'what if', 'nobody tells you' where natural)\n"
+        "- UNIQUENESS: Do not repeat the opening sentence, title phrasing, or the same sentence stem across the script. "
+        "A key phrase should appear once unless one deliberate callback is essential.\n"
+        "- PROGRESSION: Every 2-4 sentences must introduce a new fact, clue, consequence, contrast, or implication.\n"
         "- REALISM: Include specific numbers, names, dates, or verifiable details (not vague claims)\n"
         "- PACING: Vary sentence length (3–8 words for impact, 12–18 for explanation)\n"
         "- EMOTIONAL ARC: Build tension → revelation → resolution across the script\n"
         "- CONCRETE IMAGERY: Use sensory details that can be visualized\n"
         "- DEPTH: Add concrete context, causes, consequences, and at least one specific example\n"
+        "- ENDING: The final 10-15% must pivot to a distinct payoff, implication, or closing question instead of restating the hook.\n"
+        f"- PROFILE: Use the {profile.label} profile. {profile.focus_note}\n"
         f"- HOOK TEMPLATE: {hook_template}\n"
         f"- The script will be spoken at ~2.6 words/second; {word_count} words = {duration_hint} of narration.\n"
     )
@@ -1476,32 +1939,44 @@ async def generate_script(
     if story_template == "default":
         system_prompt = (
             f"You are a professional short-form video scriptwriter. "
-            f"Write a compelling, SUBSTANTIAL {story_type} script for a faceless video narration. "
+            f"Write a compelling, SUBSTANTIAL {preferred_story_type} script for a faceless video narration. "
             f"{critical_requirements}"
             f"{brief_block}"
+            f"{story_structure_note}"
             f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
             f"Expand on the concept with detail, examples, and engaging content. "
             f"Write ONLY the narration text - no scene directions, no brackets, no stage directions. "
             f"Make it engaging, with a strong hook in the first sentence. "
-            f"Use short, punchy sentences suitable for voice-over narration."
+            f"Use short, punchy sentences suitable for voice-over narration. "
+            "Do not loop the same hook line or paraphrase the title repeatedly."
         )
         user_content = f"Create a script about: {concept}"
     else:
         guide = STORY_TEMPLATE_SCRIPT_GUIDES.get(story_template)
         if not guide:
             return await generate_script(
-                concept, story_type, word_count, llm_provider, llm_model, temperature, "default"
+                concept,
+                story_type,
+                word_count,
+                llm_provider,
+                llm_model,
+                temperature,
+                "default",
+                research_brief,
+                story_brief,
             )
         system_prompt = (
             f"You are a professional short-form video scriptwriter. "
-            f"Genre/tone category: {story_type}. "
+            f"Genre/tone category: {preferred_story_type}. "
             f"{critical_requirements}"
             f"{brief_block}"
+            f"{story_structure_note}"
             f"CRITICAL: The script MUST be at least {word_count} words. Do NOT write a brief or short script. "
             f"Write ONLY speakable narration: no beat labels (no HOOK:, PATTERN:, etc.), no markdown headings, "
             f"no scene numbers, no stage directions, no brackets. "
             f"Use short, punchy sentences suitable for voice-over. "
-            f"STRUCTURE AND STYLE:\n{guide.format(word_count=word_count, story_type=story_type)}"
+            "Do not repeat the opening sentence or recycle the same sentence stem across multiple beats. "
+            f"STRUCTURE AND STYLE:\n{guide.format(word_count=word_count, story_type=preferred_story_type)}"
         )
         user_content = (
             f"Create a script about:\n{concept}\n\n"
@@ -1686,6 +2161,7 @@ async def generate_story_and_storyboard(
     llm_model: str | None = None,
     temperature: float = 0.7,
     story_template: str = "default",
+    story_brief: dict[str, Any] | None = None,
     visual_continuity: str | None = None,
     with_quality_gate: bool = True,
     scene_duration_min: int = 2,
@@ -1694,6 +2170,9 @@ async def generate_story_and_storyboard(
     """Generate a full storyboard with title, script, and per-scene breakdown."""
     if story_template not in STORY_TEMPLATE_IDS:
         story_template = "default"
+    preferred_story_type = normalize_story_type_value(story_type)
+    profile = resolve_story_profile(preferred_story_type, story_template)
+    visual_audio_profile = resolve_visual_audio_profile(preferred_story_type, story_template)
     paced_min_duration, paced_max_duration = resolve_scene_pacing_bounds(
         scene_narration_style,
         min_duration=scene_duration_min,
@@ -1702,23 +2181,36 @@ async def generate_story_and_storyboard(
 
     # Q1: Run concept expansion brief for thin concepts (short seed phrases)
     if not script and concept:
+        script_was_generated = True
         research_brief = ""
         if len((concept or "").strip()) < 120:
             research_brief = await expand_concept_to_brief(
-                concept, story_type or "general", llm_provider, llm_model
+                concept, preferred_story_type or "general", llm_provider, llm_model
             )
         script = await generate_script(
             concept,
-            story_type,
+            preferred_story_type,
             word_count or 400,
             llm_provider,
             llm_model,
             temperature,
             story_template,
             research_brief=research_brief,
+            story_brief=story_brief,
         )
     elif not script:
         raise ValueError("Either concept or script must be provided")
+    else:
+        script_was_generated = False
+    if script_was_generated:
+        script = await _repair_generated_script_diversity(
+            script or "",
+            story_type=preferred_story_type,
+            scene_count=scene_count,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+        )
+    script, script_fix_report = normalize_script_text_with_report(script or "")
 
     caption_note = ""
     if generate_subtitles:
@@ -1727,7 +2219,14 @@ async def generate_story_and_storyboard(
             "so keep narration clear and well-punctuated for readability.\n"
         )
     narration_pacing_note = _scene_narration_style_note(scene_narration_style)
-    genre_pacing_note = _story_type_pacing_rule(story_type)["pacing_note"]
+    genre_pacing_note = _story_type_pacing_rule(preferred_story_type)["pacing_note"]
+    structure_note = build_story_structure_prompt(
+        story_type=preferred_story_type,
+        story_template=story_template,
+        scene_count=scene_count,
+        dynamic_scenes=dynamic_scenes,
+        story_brief=story_brief,
+    )
 
     continuity_note = ""
     if visual_continuity:
@@ -1748,10 +2247,13 @@ async def generate_story_and_storyboard(
         f"You are a video storyboard planner for faceless short-form videos. "
         f"{scene_prompt_instruction}"
         f"{caption_note}"
+        f"{structure_note}"
         f"MEANINGFUL NARRATIVE REQUIREMENTS:\n"
+        f"- Scene 1 may use the opening hook, but later scenes must advance to new information instead of repeating it.\n"
         f"- Ensure one scene explicitly answers why this matters to the viewer.\n"
         f"- End with a clear takeaway or forward-looking line (no CTA).\n"
         f"- Keep narration detailed and concrete in every scene; avoid generic filler lines.\n"
+        f"- Every scene must have a distinct narrative job; do not recycle the same narration stem across consecutive scenes.\n"
         f"- Preserve chronology: scene narration must follow the script order without jumping ahead.\n"
         f"- Aim for scenes that usually land around {paced_min_duration}-{paced_max_duration} seconds of spoken narration before any cut.\n"
         f"- Story-type pacing note: {genre_pacing_note}\n"
@@ -1759,10 +2261,14 @@ async def generate_story_and_storyboard(
         f"{narration_pacing_note}"
         f"SHOT VARIATION:\n"
         f"- Alternate wide/medium/close framing across scenes to avoid repetition.\n"
+        f"- Default movement posture: {visual_audio_profile['camera_movement']}.\n"
+        f"- Preferred inserts for this profile: {', '.join(visual_audio_profile['insert_types'])}.\n"
         f"{continuity_note}"
         f"CRITICAL IMAGE PROMPT REQUIREMENTS:\n"
         f"- Each image_prompt must directly visualize the narration's key subject/action\n"
         f"- Include: subject, environment, lighting, mood, camera angle, color palette\n"
+        f"- Preferred lighting posture: {visual_audio_profile['lighting']}\n"
+        f"- Preferred color posture: {visual_audio_profile['color_grade']}\n"
         f"- Match emotional tone of narration (tense=dark/shadows, hopeful=bright/warm)\n"
         f"- Use {image_style} style consistently but vary composition per scene\n"
         f"- Respect requested framing from frontend settings: {resolution}\n"
@@ -1845,6 +2351,12 @@ async def generate_story_and_storyboard(
         )
     )
     storyboard["script"] = script
+    if script_fix_report.get("changed"):
+        storyboard["script_fix_report"] = script_fix_report
+    storyboard["story_type"] = preferred_story_type
+    storyboard["story_template"] = story_template
+    if story_brief:
+        storyboard["story_brief"] = dict(story_brief)
     if visual_continuity:
         storyboard["visual_continuity"] = visual_continuity
     normalized_scenes = normalize_scene_narration(
@@ -1854,13 +2366,23 @@ async def generate_story_and_storyboard(
     normalized_scenes, narration_issues = repair_storyboard_scene_narration(
         normalized_scenes,
         script=script,
+        story_type=preferred_story_type,
+        story_template=story_template,
     )
     normalized_scenes = enforce_scene_pacing(
         normalized_scenes,
         min_duration=paced_min_duration,
         max_duration=paced_max_duration,
     )
+    if not dynamic_scenes:
+        normalized_scenes = _rebalance_scene_count(
+            normalized_scenes,
+            target_count=scene_count,
+            min_duration=paced_min_duration,
+            max_duration=paced_max_duration,
+        )
     normalized_scenes = apply_ai_scene_bridges(normalized_scenes)
+    scene_roles = assign_scene_roles(len(normalized_scenes), profile)
     storyboard["scenes"] = normalized_scenes
     # Subtitle field in DB/UI matches spoken line (full narration — used for captions on re-export)
     for i, sc in enumerate(normalized_scenes):
@@ -1883,15 +2405,37 @@ async def generate_story_and_storyboard(
             min_words=MIN_IMAGE_PROMPT_WORDS,
         )
         sc["scene_emotion"] = scene_emotion
+        sc["scene_role"] = scene_roles[i]["role"] if i < len(scene_roles) else "beat"
+        sc["beat_role"] = sc["scene_role"]
+        sc["story_profile"] = profile.id
+        sc["camera_movement"] = visual_audio_profile["camera_movement"]
+        sc["visual_insert_types"] = list(visual_audio_profile["insert_types"])
+        sc["audio_tension_curve"] = visual_audio_profile["tension_curve"]
+        sc["recommended_transition_style"] = visual_audio_profile["transition_style"]
     hook_analysis = {"weak": False, "reason": "", "suggestions": []}
     if normalized_scenes:
         hook_analysis = await analyze_hook_quality(
             script_text=script,
-            concept=concept or storyboard.get("title") or story_type,
-            story_type=story_type,
+            concept=concept or storyboard.get("title") or preferred_story_type,
+            story_type=preferred_story_type,
             llm_provider=llm_provider,
             llm_model=llm_model,
         )
+    story_quality_report = analyze_story_structure_report(
+        story_type=preferred_story_type,
+        story_template=story_template,
+        scenes=normalized_scenes,
+        script=script,
+        story_brief=story_brief,
+    )
+    storyboard["story_profile"] = {
+        "id": profile.id,
+        "label": profile.label,
+        "description": profile.description,
+    }
+    storyboard["visual_audio_profile"] = visual_audio_profile
+    storyboard["story_quality_report"] = story_quality_report
+    storyboard["quality_report"] = story_quality_report
     if hook_analysis["suggestions"]:
         storyboard["hook_suggestions"] = hook_analysis["suggestions"]
     if with_quality_gate:
@@ -1951,6 +2495,7 @@ Return valid JSON only:
 async def generate_video_production_script(
     concept: str,
     story_type: str = "general",
+    story_template: str = "default",
     scene_count: int = 5,
     dynamic_scenes: bool = False,
     image_style: str = "realistic",
@@ -1960,19 +2505,30 @@ async def generate_video_production_script(
     llm_model: str | None = None,
     temperature: float = 0.7,
     visual_continuity: str | None = None,
+    story_brief: dict[str, Any] | None = None,
     scene_narration_style: str = "balanced",
     min_image_prompt_words: int = MIN_IMAGE_PROMPT_WORDS,
     scene_duration_min: int = 2,
     scene_duration_max: int = 4,
 ) -> dict:
     """Generate a professional video production script with timestamps, camera angles, lighting, quality per scene."""
+    preferred_story_type = normalize_story_type_value(story_type)
+    profile = resolve_story_profile(preferred_story_type, story_template)
+    visual_audio_profile = resolve_visual_audio_profile(preferred_story_type, story_template)
     paced_min_duration, paced_max_duration = resolve_scene_pacing_bounds(
         scene_narration_style,
         min_duration=scene_duration_min,
         max_duration=scene_duration_max,
     )
     narration_pacing_note = _scene_narration_style_note(scene_narration_style)
-    genre_pacing_note = _story_type_pacing_rule(story_type)["pacing_note"]
+    genre_pacing_note = _story_type_pacing_rule(preferred_story_type)["pacing_note"]
+    structure_note = build_story_structure_prompt(
+        story_type=preferred_story_type,
+        story_template=story_template,
+        scene_count=scene_count,
+        dynamic_scenes=dynamic_scenes,
+        story_brief=story_brief,
+    )
     continuity_note = ""
     if visual_continuity:
         continuity_note = f"\nVisual continuity: {visual_continuity}. Keep this consistent across scenes (palette/motif/mood)."
@@ -1988,13 +2544,20 @@ async def generate_video_production_script(
     user_prompt = f"""{scene_instruction}
 
 Concept: {concept}
-Story type: {story_type}{continuity_note}
+Story type: {preferred_story_type}{continuity_note}
+
+{structure_note}
 
 Each scene should usually land around {paced_min_duration}-{paced_max_duration} seconds of spoken content.
 {narration_pacing_note.strip()}
 Story pacing note: {genre_pacing_note}
+Story profile: {profile.label}. {profile.focus_note}
+Do not repeat the opening line across multiple scenes. Every scene must advance the story with a distinct fact, clue, consequence, implication, or viewer takeaway.
 **image_prompt** must be a single strong still-image description per scene.
 Use frontend visual settings exactly: style={image_style}, resolution={resolution}, transition={transition}.
+Preferred lighting posture: {visual_audio_profile['lighting']}
+Preferred movement posture: {visual_audio_profile['camera_movement']}
+Preferred inserts: {", ".join(visual_audio_profile["insert_types"])}
 Each image_prompt must contain at least {max(120, int(min_image_prompt_words))} words.
 Include one scene that explicitly says why this matters to the viewer, and end with a clear takeaway line.
 Alternate wide/medium/close framing across scenes. If a scene needs a transition from the previous beat, include it naturally in script or add an optional bridge_line. Avoid depicting real public figures; prefer anonymous or fictional stand-ins. Return valid JSON only."""
@@ -2055,13 +2618,23 @@ Alternate wide/medium/close framing across scenes. If a scene needs a transition
     scenes, narration_issues = repair_storyboard_scene_narration(
         scenes,
         script=concept,
+        story_type=preferred_story_type,
+        story_template=story_template,
     )
     scenes = enforce_scene_pacing(
         scenes,
         min_duration=paced_min_duration,
         max_duration=paced_max_duration,
     )
+    if not dynamic_scenes:
+        scenes = _rebalance_scene_count(
+            scenes,
+            target_count=scene_count,
+            min_duration=paced_min_duration,
+            max_duration=paced_max_duration,
+        )
     scenes = apply_ai_scene_bridges(scenes)
+    scene_roles = assign_scene_roles(len(scenes), profile)
     # Ensure scene_number and all fields exist
     for i, scene in enumerate(scenes):
         scene["scene_number"] = scene.get("scene_number", i + 1)
@@ -2101,6 +2674,12 @@ Alternate wide/medium/close framing across scenes. If a scene needs a transition
             min_words=min_image_prompt_words,
         )
         scene["scene_emotion"] = scene_emotion
+        scene["scene_role"] = scene_roles[i]["role"] if i < len(scene_roles) else "beat"
+        scene["beat_role"] = scene["scene_role"]
+        scene["story_profile"] = profile.id
+        scene["camera_movement"] = scene.get("camera_movement") or visual_audio_profile["camera_movement"]
+        scene["audio_tension_curve"] = visual_audio_profile["tension_curve"]
+        scene["visual_insert_types"] = list(visual_audio_profile["insert_types"])
         scene.pop("sora_prompt", None)
 
     result["scenes"] = scenes
@@ -2109,16 +2688,35 @@ Alternate wide/medium/close framing across scenes. If a scene needs a transition
         for scene in scenes
         if (scene.get("script") or scene.get("narration") or "").strip()
     )
+    result["story_type"] = preferred_story_type
+    result["story_template"] = story_template
+    if story_brief:
+        result["story_brief"] = dict(story_brief)
     if visual_continuity:
         result["visual_continuity"] = visual_continuity
+    story_quality_report = analyze_story_structure_report(
+        story_type=preferred_story_type,
+        story_template=story_template,
+        scenes=scenes,
+        script=result.get("script") or concept,
+        story_brief=story_brief,
+    )
+    result["story_profile"] = {
+        "id": profile.id,
+        "label": profile.label,
+        "description": profile.description,
+    }
+    result["visual_audio_profile"] = visual_audio_profile
+    result["story_quality_report"] = story_quality_report
+    result["quality_report"] = story_quality_report
     issues = list(narration_issues)
-    issues.extend(validate_storyboard_quality({"scenes": scenes, "visual_continuity": visual_continuity}))
+    issues.extend(validate_storyboard_quality(result))
     hook_analysis = {"weak": False, "reason": "", "suggestions": []}
     if scenes:
         hook_analysis = await analyze_hook_quality(
             script_text=result.get("script") or concept,
             concept=concept,
-            story_type=story_type,
+            story_type=preferred_story_type,
             llm_provider=llm_provider,
             llm_model=llm_model,
         )

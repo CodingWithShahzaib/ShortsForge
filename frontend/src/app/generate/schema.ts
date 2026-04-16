@@ -36,6 +36,57 @@ export const DIALOGUE_STYLE_PRESET_IDS = [
   "watercolor",
 ] as const;
 export const DIALOGUE_SHOT_TYPE_IDS = ["medium", "closeup", "two-shot", "reaction"] as const;
+export const STORY_BRIEF_HOOK_TYPE_IDS = ["question", "statement", "visual", "shocking_fact"] as const;
+export const STORY_BRIEF_ENDING_TYPE_IDS = ["cliffhanger", "resolution", "call_to_action", "twist"] as const;
+export const STORY_BRIEF_PACING_PROFILE_IDS = ["fast", "balanced", "slow_build"] as const;
+export const STORY_BRIEF_VISUAL_VARIETY_IDS = ["high", "medium", "low"] as const;
+export const STORY_BRIEF_SHOW_TELL_IDS = ["show", "balanced", "tell"] as const;
+
+const horrorStoryBriefSchema = z.object({
+  scare_frequency: z.enum(["low", "medium", "high"]).default("medium"),
+  tension_curve: z.enum(["steady", "peaked", "escalating"]).default("escalating"),
+});
+
+const newsStoryBriefSchema = z.object({
+  fact_density: z.enum(["light", "balanced", "dense"]).default("balanced"),
+  source_prominence: z.enum(["minimal", "standard", "high"]).default("standard"),
+});
+
+const motivationalStoryBriefSchema = z.object({
+  emotional_tone: z.enum(["gentle", "energetic", "intense"]).default("energetic"),
+  takeaway_clarity: z.enum(["subtle", "balanced", "explicit"]).default("explicit"),
+});
+
+const mysteryStoryBriefSchema = z.object({
+  clue_density: z.enum(["light", "balanced", "dense"]).default("balanced"),
+  twist_style: z.enum(["subtle", "sharp", "late"]).default("sharp"),
+});
+
+export const storyBriefSchema = z.object({
+  hook_type: z.enum(STORY_BRIEF_HOOK_TYPE_IDS).default("question"),
+  ending_type: z.enum(STORY_BRIEF_ENDING_TYPE_IDS).default("resolution"),
+  pacing_profile: z.enum(STORY_BRIEF_PACING_PROFILE_IDS).default("balanced"),
+  visual_variety: z.enum(STORY_BRIEF_VISUAL_VARIETY_IDS).default("medium"),
+  show_vs_tell_priority: z.enum(STORY_BRIEF_SHOW_TELL_IDS).default("balanced"),
+  horror: horrorStoryBriefSchema.default({
+    scare_frequency: "medium",
+    tension_curve: "escalating",
+  }),
+  news: newsStoryBriefSchema.default({
+    fact_density: "balanced",
+    source_prominence: "standard",
+  }),
+  motivational: motivationalStoryBriefSchema.default({
+    emotional_tone: "energetic",
+    takeaway_clarity: "explicit",
+  }),
+  mystery: mysteryStoryBriefSchema.default({
+    clue_density: "balanced",
+    twist_style: "sharp",
+  }),
+});
+
+export const DEFAULT_STORY_BRIEF = storyBriefSchema.parse({});
 
 const characterSchema = z.object({
   id: z.string().min(1),
@@ -53,6 +104,7 @@ export const generateVideoFormSchema = z.object({
   generation_mode: z.enum(GENERATION_MODE_IDS).default("standard"),
   story_type: z.string(),
   story_template: z.enum(STORY_TEMPLATE_IDS).default("default"),
+  story_brief: storyBriefSchema.default(DEFAULT_STORY_BRIEF),
   llm_provider: z.string(),
   llm_model: z.union([z.string(), z.null()]).optional(),
   image_provider: z.string(),
@@ -138,6 +190,13 @@ export function buildGenerateDefaultValues(defaults: SettingsDefaultsSlice): Gen
     generation_mode: "standard",
     story_type: "general",
     story_template: "default",
+    story_brief: {
+      ...DEFAULT_STORY_BRIEF,
+      horror: { ...DEFAULT_STORY_BRIEF.horror },
+      news: { ...DEFAULT_STORY_BRIEF.news },
+      motivational: { ...DEFAULT_STORY_BRIEF.motivational },
+      mystery: { ...DEFAULT_STORY_BRIEF.mystery },
+    },
     llm_provider: defaults.llm_provider,
     llm_model: defaults.llm_model ?? null,
     image_provider: defaults.image_provider,

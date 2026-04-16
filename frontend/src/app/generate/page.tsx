@@ -8,7 +8,6 @@ import { useForm, FormProvider, useWatch, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod";
 import { notify } from "@/lib/notify";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LinearProgress } from "@/components/ui/progress-linear";
 import { ArrowLeft, Bookmark, CheckCircle2, Clapperboard, Layers, Sparkles, Volume2 } from "lucide-react";
@@ -25,6 +24,7 @@ import { ContentSourceTabs, type ContentSource } from "@/components/generate/Con
 import { ConceptFields } from "@/components/generate/ConceptFields";
 import { ScriptFields } from "@/components/generate/ScriptFields";
 import { StorySettingsCard } from "@/components/generate/StorySettingsCard";
+import { StoryBriefCard } from "@/components/generate/StoryBriefCard";
 import { VisualsCard } from "@/components/generate/VisualsCard";
 import { AudioCard } from "@/components/generate/AudioCard";
 import { DialogueControlsCard } from "@/components/generate/DialogueControlsCard";
@@ -113,6 +113,7 @@ export default function GeneratePage() {
   const [generating, setGenerating] = useState(false);
   const [pipelineMode, setPipelineMode] = useState<PipelineMode>("manual");
   const [previewingVoice, setPreviewingVoice] = useState(false);
+  const [scriptAutoFixing, setScriptAutoFixing] = useState(false);
   const [generatingCharacterId, setGeneratingCharacterId] = useState<string | null>(null);
   const [refineDialogOpen, setRefineDialogOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState<WizardStep>("mode");
@@ -583,6 +584,58 @@ export default function GeneratePage() {
     generationChecks.ttsOk &&
     generationChecks.voiceOk &&
     generationChecks.dialogueOk;
+
+  const scriptFixWarning = useMemo(() => {
+    const text = (customScriptWatch || "").trim();
+    if (!text) return [] as string[];
+    const warnings: string[] = [];
+    const spacedInitialism = /\b(?:[A-Za-z]\.\s+){1,}[A-Za-z]\./.test(text);
+    if (spacedInitialism) {
+      warnings.push("Detected spaced initialisms like 'U. S.' that can cause awkward scene splits.");
+    }
+    const sentences = text
+      .split(/(?<=[.!?])\s+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const normalizedCounts = new Map<string, number>();
+    for (const sentence of sentences) {
+      const key = sentence.toLowerCase().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim();
+      if (!key) continue;
+      normalizedCounts.set(key, (normalizedCounts.get(key) ?? 0) + 1);
+    }
+    const repeatedSentenceCount = Array.from(normalizedCounts.values()).filter((count) => count > 1).length;
+    if (repeatedSentenceCount > 0) {
+      warnings.push("Detected repeated sentence blocks that can cause duplicated narration across scenes.");
+    }
+    const tinyFragmentCount = sentences.filter((sentence) => {
+      const words = sentence.match(/\b[\w'-]+\b/g) ?? [];
+      return words.length <= 1 && sentence.length <= 4;
+    }).length;
+    if (tinyFragmentCount > 0) {
+      warnings.push("Detected tiny fragments that may become broken one-word scene narration.");
+    }
+    return warnings;
+  }, [customScriptWatch]);
+
+  const handleAutoFixScript = useCallback(async () => {
+    const currentText = (form.getValues("custom_script") || "").trim();
+    if (!currentText) return;
+    setScriptAutoFixing(true);
+    try {
+      const result = await api.normalizeScript(currentText);
+      if (result.report.changed) {
+        form.setValue("custom_script", result.text, { shouldDirty: true, shouldValidate: true });
+        const detail = result.report.issues.length > 0 ? ` ${result.report.issues.join(" ")}` : "";
+        notify.success(`Script auto-fix applied.${detail}`);
+      } else {
+        notify.message("No cleanup changes were needed for this script.");
+      }
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : "Failed to auto-fix script.");
+    } finally {
+      setScriptAutoFixing(false);
+    }
+  }, [form]);
   
   // NOTE: We no longer force Kokoro here so other providers (like ElevenLabs) can function natively.
 
@@ -926,6 +979,9 @@ export default function GeneratePage() {
                       onGenerate={triggerGenerate}
                       generateLabel={generateCtaLabel}
                       showInlineAction={false}
+                      scriptFixWarning={scriptFixWarning}
+                      scriptFixLoading={scriptAutoFixing}
+                      onAutoFixScript={handleAutoFixScript}
                       footerAction={(
                         <Button
                           type="button"
@@ -975,6 +1031,9 @@ export default function GeneratePage() {
                         onGenerate={triggerGenerate}
                         generateLabel={generateCtaLabel}
                         showInlineAction={false}
+                        scriptFixWarning={scriptFixWarning}
+                        scriptFixLoading={scriptAutoFixing}
+                        onAutoFixScript={handleAutoFixScript}
                         footerAction={(
                           <Button
                             type="button"
@@ -1046,6 +1105,18 @@ export default function GeneratePage() {
                     </div>
 
                     <DialogueControlsCard />
+                  </CardContent>
+                </Card>
+
+                <Card className="section-neon section-neon--content border-border/50 bg-card/75 shadow-sm backdrop-blur-sm" size="2">
+                  <CardHeader className="space-y-1 p-4 pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                      <Sparkles className="h-4 w-4" />
+                      Story quality targets
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-0">
+                    <StoryBriefCard />
                   </CardContent>
                 </Card>
 
@@ -1169,6 +1240,18 @@ export default function GeneratePage() {
                   storyTypes={storyTypes}
                   llmProviders={providers.llm}
                 />
+              </CardContent>
+            </Card>
+
+            <Card className="section-neon section-neon--content border-border/50 bg-card/75 shadow-sm backdrop-blur-sm" size="2">
+              <CardHeader className="space-y-1 p-4 pb-3">
+                <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                  <Sparkles className="h-4 w-4" />
+                  Story quality targets
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <StoryBriefCard />
               </CardContent>
             </Card>
 

@@ -7,7 +7,8 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { TemplatePreset } from "@/lib/types";
+import { describeStoryBrief, resolveStoryProfileLabel } from "@/lib/story-quality";
+import type { StoryBrief, TemplatePreset } from "@/lib/types";
 
 type Props = {
   templates: TemplatePreset[];
@@ -41,6 +42,18 @@ export function GenerateTemplatesCard({
   loading,
 }: Props) {
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || null;
+  const selectedSettings = selectedTemplate?.settings && typeof selectedTemplate.settings === "object"
+    ? selectedTemplate.settings as Record<string, unknown>
+    : null;
+  const selectedProfile = resolveStoryProfileLabel(
+    (selectedSettings?.story_type as string | undefined) || selectedTemplate?.story_type,
+    selectedSettings?.story_template as string | undefined
+  );
+  const selectedBriefSummary = describeStoryBrief(
+    selectedSettings?.story_brief && typeof selectedSettings.story_brief === "object"
+      ? selectedSettings.story_brief as StoryBrief
+      : undefined
+  );
 
   return (
     <div className="grid h-full gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
@@ -81,6 +94,14 @@ export function GenerateTemplatesCard({
               <p className="mt-2 text-[11px] text-muted-foreground">
                 {selectedTemplate.builtin ? "Built-in template" : "Custom template"} • {selectedTemplate.story_type} • {selectedTemplate.scene_count} scenes
               </p>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                <span className="rounded-full border border-border/60 bg-muted/35 px-2 py-1 text-foreground/90">
+                  {selectedProfile}
+                </span>
+                <span className="rounded-full border border-border/60 bg-muted/35 px-2 py-1 text-muted-foreground">
+                  {selectedBriefSummary}
+                </span>
+              </div>
             </div>
           ) : null}
         </div>

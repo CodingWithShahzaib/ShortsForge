@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator
 from backend.config import get_settings
 from backend.providers.tts.kokoro_provider import normalize_kokoro_voice_id
 from backend.services.ai_client import chat_completion
+from backend.services.story_structure import normalize_story_type_value
 from backend.services.script_service import (
     STORY_TEMPLATE_IDS,
     STORY_TYPES,
@@ -128,10 +129,8 @@ def _clamp_float(v: Any, lo: float, hi: float, default: float) -> float:
 
 
 def _normalize_story_type(v: Any) -> str:
-    s = str(v or "").strip().lower().replace(" ", "_").replace("-", "_")
-    if s in STORY_TYPES:
-        return s
-    return "general"
+    normalized = normalize_story_type_value(v)
+    return normalized if normalized in STORY_TYPES else "general"
 
 
 def _normalize_story_template(v: Any) -> str:
@@ -212,6 +211,9 @@ def normalize_viral_idea_settings(
     starter_script = sanitize_speaker_tagged_dialogue(str(raw.get("starter_script") or "").strip())
     if starter_script:
         out["starter_script"] = starter_script[:12000]
+    story_brief = raw.get("story_brief")
+    if isinstance(story_brief, dict):
+        out["story_brief"] = story_brief
     return out
 
 

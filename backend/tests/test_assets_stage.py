@@ -36,6 +36,7 @@ class AssetsStageTests(unittest.IsolatedAsyncioTestCase):
                 "backend.engine.stages.assets_stage._prepare_scene_assets",
                 AsyncMock(return_value=("audio.mp3", 4.0)),
             ) as prepare_mock:
+
                 result = await stage.run(context)
 
         self.assertTrue(result.prepared)
@@ -45,6 +46,8 @@ class AssetsStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.durations, [4.0])
         self.assertEqual(context.visual_paths, [""])
         prepare_mock.assert_awaited_once()
+        self.assertIn("consistency_manager", prepare_mock.await_args.kwargs)
+
 
 
 if __name__ == "__main__":

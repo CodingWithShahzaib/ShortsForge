@@ -25,6 +25,7 @@ from backend.schemas.generation import (
     GenerateImageRequest,
     GenerateAudioRequest,
     BatchGenerateRequest,
+    StoryBrief,
 )
 from backend.schemas.characters import (
     CharacterConfig,
@@ -47,11 +48,18 @@ from backend.schemas.video_settings import (
     VideoStyleSettings,
 )
 from backend.schemas.script_quality import (
+    NormalizeScriptRequest,
+    NormalizeScriptResponse,
+    ScriptFixReport,
     ScriptAnalysisRequest,
     ScriptImproveRequest,
     ScriptImproveResponse,
     ScriptQualityIssue,
     ScriptQualityMetrics,
+    StoryQualityReport,
+    StoryQualitySceneRole,
+    StoryStructureAnalysisRequest,
+    StoryStructureSceneInput,
 )
 
 __all__ = [
@@ -61,12 +69,15 @@ __all__ = [
     "GenerateVideoRequest", "DialogueVideoRequest", "DialogueSceneInput", "GenerateScriptRequest", "GenerateStoryboardRequest", "StoryTemplateField", "GenerateVideoProductionScriptRequest",
     "RewriteScriptRequest", "RefineScriptCharactersRequest", "RefineScriptCharactersResponse", "VideoProductionScene", "GenerateImageRequest",
     "GenerateAudioRequest", "BatchGenerateRequest",
+    "StoryBrief",
     "CharacterConfig", "CharacterReferenceGenerateRequest", "ProjectCharacters",
     "AppSettings", "ProviderStatus",
     "AudioSettings", "ProjectVideoSettingsCreate", "ProjectVideoSettingsOut",
     "ProjectVideoSettingsUpdate", "SafeZoneConfig", "SafeZoneResponse",
     "SceneAssetOverrideCreate", "SceneAssetOverrideOut", "SceneAssetOverrideUpdate",
     "SceneRegenerateRequest", "SubtitleSettings", "VideoStyleSettings",
+    "NormalizeScriptRequest", "NormalizeScriptResponse", "ScriptFixReport",
     "ScriptAnalysisRequest", "ScriptImproveRequest", "ScriptImproveResponse",
     "ScriptQualityIssue", "ScriptQualityMetrics",
+    "StoryQualityReport", "StoryQualitySceneRole", "StoryStructureAnalysisRequest", "StoryStructureSceneInput",
 ]
